@@ -1,4 +1,4 @@
 - insert:
-    - id: dsh-asset-ledger
-      name: dsh-asset-ledger
+    - id: dsh-wealth
+      name: dsh-wealth
       config: {}

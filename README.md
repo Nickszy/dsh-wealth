@@ -1,4 +1,4 @@
-# dsh-asset-ledger（资产账本）
+# dsh-wealth（资产账本）
 
 DeepSeek Harness（DSH）桌面端插件：多账户、多资产、多币种的持仓与交易流水管理。
 
@@ -6,18 +6,18 @@ DeepSeek Harness（DSH）桌面端插件：多账户、多资产、多币种的�
 在 DSH 桌面端插件页「添加插件」输入名称即可（npm 包名）：
 
 ```
-dsh-asset-ledger
+dsh-wealth
 ```
 
 或命令行（profile 里）：
 
 ```
-dsh plugin --profile desktop add dsh-asset-ledger
+dsh plugin --profile desktop add dsh-wealth
 ```
 
 安装后重启客户端，左侧导航出现「资产」。
 
-> npm: <https://www.npmjs.com/package/dsh-asset-ledger> · GitHub: <https://github.com/Nickszy/dsh-asset-ledger>
+> npm: <https://www.npmjs.com/package/dsh-wealth> · GitHub: <https://github.com/Nickszy/dsh-wealth>
 
 ## 功能
 - 左侧导航「资产」入口，点开是完整资产页

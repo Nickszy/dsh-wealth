@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-  id: 'dsh-asset-ledger',
+  id: 'dsh-wealth',
   factory(require) {
     const React = require('react')
     const h = React.createElement
@@ -318,7 +318,7 @@ window.__ModuleLoader__.load({
 
     // ---------- sidebar panel takeover (same pattern as market-clock) ----------
     let ctx = null
-    const PANEL = 'dsh-asset-ledger'
+    const PANEL = 'dsh-wealth'
     let shellDispose = null
     let panelSession = null
 

@@ -6,7 +6,7 @@
  */
 import { load, save, applyOp, summarize, OpError } from './store.mjs'
 
-export const name = 'dsh-asset-ledger'
+export const name = 'dsh-wealth'
 export const inject = ['webServer']
 
 function readBody(req, limit = 5_000_000) {
