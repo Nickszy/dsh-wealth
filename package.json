@@ -13,6 +13,9 @@
   "files": ["index.js", "client.js", "store.mjs", "cli.mjs", "cordis.patch.yml", "icon.svg", "README.md", "LICENSE"],
   "keywords": ["dsh", "dsh-plugin", "deepseek-harness", "portfolio", "ledger", "assets", "投资", "持仓", "记账"],
   "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/Nickszy/dsh-asset-ledger.git" },
+  "homepage": "https://github.com/Nickszy/dsh-asset-ledger#readme",
+  "bugs": { "url": "https://github.com/Nickszy/dsh-asset-ledger/issues" },
   "dsh": {
     "bundle": { "patch": "./cordis.patch.yml" },
     "client": {
