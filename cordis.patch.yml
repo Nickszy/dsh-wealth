@@ -1,0 +1,4 @@
+- insert:
+    - id: dsh-asset-ledger
+      name: dsh-asset-ledger
+      config: {}
