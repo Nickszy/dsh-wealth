@@ -374,6 +374,13 @@ export function apply(ctx, config = {}) {
           Object.assign(result, await syncHistory(body.accountId, { full: body.full === true }))
           send(res, 200, { ok: true, ...result }); return
         }
+        // 银证转账深扫：首次全历史可能要几分钟；之后每次同步自动增量收尾。
+        if (path === 'api/transfers/scan') {
+          if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
+          const body = JSON.parse(await readBody(req))
+          if (!body.accountId) throw new OpError('bad-request','缺少 accountId')
+          send(res, 200, { ok: true, ...(await sync.scanThsTransfers(body.accountId, { maxRequests: body.maxRequests })) }); return
+        }
         if (path === 'api/history/capabilities') {
           if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
           send(res,200,{ok:true,...history.capabilities()});return

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { listThsAccounts, fetchStandaloneThsSnapshot, fetchThsHistory, fetchThsAssetChange, createThsVTokenRefresher } from './ths-client.mjs'
+import { listThsAccounts, fetchStandaloneThsSnapshot, fetchThsHistory, fetchThsAssetChange, scanThsTransfers, createThsVTokenRefresher } from './ths-client.mjs'
 
 const source = { portfolioId: 'chosen' }, secrets = { cookie: 'userid=123; v=fixture' }
 const rows = [{ fund_key: 'other', manualname: 'Other' }, { fund_key: 'chosen', manualname: 'Selected', brokername: 'Broker' }]
@@ -350,4 +350,61 @@ test('fund snapshot does not attach fund money_in as bank transfers', async () =
   const result = await fetchStandaloneThsSnapshot({ portfolioId: '100108832246', thsBookType: 'ijj' }, secrets, undefined, d)
   assert.equal(result.sourceTotals.transferIn, undefined)
   assert.equal(result.sourceTotals.transferOut, undefined)
+})
+
+// ---- 银证转账二分回扫（scanThsTransfers）----
+function scanDeps(events) {
+  const calls = []
+  const sum = (a, b, direction) => events.filter(e => e.date.replaceAll('-', '') >= a && e.date.replaceAll('-', '') <= b && e.direction === direction).reduce((s, e) => s + e.amount, 0)
+  return { calls, fetch: async (url, init) => {
+    calls.push({ url, body: new URLSearchParams(init.body) })
+    if (url.endsWith('account_list')) return { ok: true, status: 200, json: async () => ({ error_code: '0', ex_data: { common: rows } }) }
+    if (url.endsWith('asset_change')) {
+      const body = new URLSearchParams(init.body), a = body.get('start_date'), b = body.get('end_date')
+      return { ok: true, status: 200, json: async () => ({ error_code: '0', ex_data: { id: '4', stock: { money_in: String(sum(a, b, 'in')), money_out: String(sum(a, b, 'out')) } } }) }
+    }
+    throw new Error('unexpected ' + url)
+  } }
+}
+const scanEvents = [
+  { date: '2026-01-05', direction: 'in', amount: 10000 },
+  { date: '2026-03-10', direction: 'in', amount: 5000 },
+  { date: '2026-06-02', direction: 'out', amount: 3000 },
+]
+test('transfer scan bisects totals down to exact days, newest first', async () => {
+  const d = scanDeps(scanEvents)
+  const out = await scanThsTransfers(source, secrets, { from: '2026-01-01', to: '2026-12-31', delayMs: 0, maxRequests: 200 }, undefined, d)
+  assert.equal(out.complete, true)
+  assert.equal(out.coveredFrom, '2026-01-01')
+  assert.deepEqual(out.events, [
+    { date: '2026-06-02', direction: 'out', amount: 3000 },
+    { date: '2026-03-10', direction: 'in', amount: 5000 },
+    { date: '2026-01-05', direction: 'in', amount: 10000 },
+  ])
+  assert.deepEqual(out.totals, { moneyIn: 15000, moneyOut: 3000 })
+  // 二分对 365 天、3 笔转账远小于逐日轮询。
+  assert.ok(out.requests < 40, 'requests=' + out.requests)
+  assert.ok(d.calls.filter(c => c.url.endsWith('asset_change')).every(c => c.body.get('fund_key') === 'chosen' && c.body.get('id') === '4'))
+})
+test('transfer scan resumes from persisted events without re-requesting covered ranges', async () => {
+  const d = scanDeps(scanEvents)
+  const out = await scanThsTransfers(source, secrets, { from: '2026-01-01', to: '2026-12-31', delayMs: 0, maxRequests: 200, found: [{ date: '2026-06-02', direction: 'out', amount: 3000 }, { date: '2026-03-10', direction: 'in', amount: 5000 }] }, undefined, d)
+  assert.deepEqual(out.events, [{ date: '2026-01-05', direction: 'in', amount: 10000 }])
+  assert.equal(out.complete, true)
+  assert.ok(out.requests < 15, 'requests=' + out.requests)
+})
+test('transfer scan honours the request budget and reports where it stopped', async () => {
+  const d = scanDeps(scanEvents)
+  // 5 个请求不足以把 365 天定位到具体某天：不产生事件、游标不动、如实报预算告警。
+  const out = await scanThsTransfers(source, secrets, { from: '2026-01-01', to: '2026-12-31', delayMs: 0, maxRequests: 5 }, undefined, d)
+  assert.equal(out.complete, false)
+  assert.equal(out.events.length, 0)
+  assert.equal(out.coveredFrom, null)
+  assert.ok(out.warnings.some(w => w.startsWith('TRANSFER_SCAN_BUDGET')))
+})
+test('transfer scan rejects fund books before any request', async () => {
+  await assert.rejects(
+    scanThsTransfers({ portfolioId: '100108832246', thsBookType: 'ijj' }, secrets, { delayMs: 0 }, undefined, fundDeps()),
+    /基金账本/,
+  )
 })

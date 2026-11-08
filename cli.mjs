@@ -15,6 +15,9 @@ import { buildDigest } from './digest.mjs'
 import { inferredTransfers } from './timeline.mjs'
 import { normalizeSymbol, identityKey, resolveSecurity } from './symbols.mjs'
 import { computePerformance } from './performance.mjs'
+import { scanThsTransfers } from './ths-client.mjs'
+import { sourceStore } from './sync.mjs'
+import { createCredentialStore } from './credentials.mjs'
 
 function out(obj, code = 0) {
   process.stdout.write(JSON.stringify(obj, null, 2) + '\n')
@@ -36,6 +39,7 @@ function help() {
       'node cli.mjs bills-import <accountId> <csv> [apply=1]  # preview (default) or import WeChat/Alipay bill CSV',
       'node cli.mjs digest [days]                  # daily summary: net worth, upcoming bills, data notes (default 7)',
       'node cli.mjs inferred-flows [accountId]     # lower-bound estimate of unrecorded external transfers',
+      'node cli.mjs transfer-scan <account> [apply=1] [--from=YYYY-MM-DD] [--max=600]  # THS bank-transfer backfill, bisected to exact days',
       'node cli.mjs forecast [days]                # recurring flows + projected out/in for next N days (default 30)',
       'node cli.mjs performance [accountId] [days] # backfilled daily NAV from flows + historical prices (default 1095)',
       'node cli.mjs export [file]                  # write the whole ledger JSON to a file',
@@ -182,6 +186,29 @@ else if (arg[0] === 'state') {
   }
 } else if (arg[0] === 'inferred-flows') {
   out({ ok: true, ...inferredTransfers(load(), { accountIds: arg[1] ? [arg[1]] : [] }) })
+} else if (arg[0] === 'transfer-scan') {
+  // 银证转账按日回扫：asset_change 区间总额二分定位到日；默认预览，apply=1 归档进账本。
+  const target = arg[1]
+  const apply = arg.includes('apply=1') || arg.includes('--apply')
+  const fromArg = (arg.find(a => a.startsWith('--from=')) || '').split('=')[1]
+  const maxArg = Number((arg.find(a => a.startsWith('--max=')) || '').split('=')[1]) || 600
+  if (!target) { out({ ok: false, error: { code: 'bad-request', message: '用法: node cli.mjs transfer-scan <accountId|portfolioId> [--from=YYYY-MM-DD] [--max=600] [apply=1]' } }, 2); process.exit() }
+  const db = load()
+  const account = db.accounts.find(a => a.id === target || a.name === target)
+  const source = sourceStore().read().find(s => s.connector === 'ths' && String(s.thsBookType || 'common') === 'common' && (s.accountId === account?.id || s.portfolioId === target))
+  if (!source) { out({ ok: false, error: { code: 'not-found', message: '没有找到绑定的同花顺股票账本来源: ' + target } }, 1); process.exit() }
+  const cookie = createCredentialStore().get(source.authId || source.id).cookie
+  if (!cookie) { out({ ok: false, error: { code: 'bad-request', message: '该授权缺少同花顺 Cookie，请先在插件里重新授权' } }, 1); process.exit() }
+  const from = fromArg || account?.transferScan?.coveredFrom || '2000-01-01'
+  const found = (db.historyEvents || []).filter(e => e.accountId === source.accountId && e.source === 'ths-asset-change').map(e => ({ date: e.date, direction: e.kind === 'deposit' ? 'in' : 'out', amount: Math.abs(e.cashAmount) }))
+  const scan = await scanThsTransfers({ portfolioId: source.portfolioId, thsBookType: String(source.thsBookType || 'common') }, { cookie }, { from, maxRequests: maxArg, found })
+  const brief = { ...scan, events: scan.events.slice(0, 50), eventCount: scan.events.length }
+  if (!apply) out({ ok: true, applied: false, ...brief })
+  else {
+    const result = applyOp(db, 'transfers.import', { accountId: source.accountId, rows: scan.events, cursor: { coveredFrom: scan.coveredFrom, complete: scan.complete, scannedAt: new Date().toISOString(), requests: scan.requests } })
+    save(db)
+    out({ ok: true, applied: true, ...brief, imported: result.imported, duplicates: result.duplicates, skipped: result.skipped })
+  }
 } else if (arg[0] === 'digest') {
   const horizonDays = Math.min(30, Math.max(1, Number(arg[1]) || 7))
   out({ ok: true, ...buildDigest(load(), { horizonDays }) })

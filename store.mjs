@@ -512,6 +512,64 @@ export function applyOp(db, op, payload = {}) {
       return { batchId, imported: added.length, duplicates, skipped }
     }
 
+    // 批量归档银证转账（来源：asset_change 按日回扫）。一扫描一批次；同一账户里
+    // 已有同日同方向同金额的记录（手工补录 / 券商导入）一律跳过，避免重复计数。
+    case 'transfers.import': {
+      const p = payload
+      if (!p.accountId) throw new OpError('bad-request', '缺少 accountId')
+      const account = findAccount(db, p.accountId)
+      if (!account) throw new OpError('not-found', '账户不存在: ' + p.accountId)
+      if (!Array.isArray(p.rows) || !p.rows.length) throw new OpError('bad-request', '没有可归档的转账行')
+      if (p.rows.length > 2000) throw new OpError('bad-request', '单次最多归档 2000 行')
+      db.historyEvents ||= []
+      const existingIds = new Set(db.historyEvents.filter((e) => e.accountId === p.accountId && e.externalId).map((e) => e.externalId))
+      const existingDay = new Set(db.historyEvents.filter((e) => e.accountId === p.accountId && (e.kind === 'deposit' || e.kind === 'withdrawal')).map((e) => [e.date, e.kind, e.cashAmount].join('|')))
+      const batchId = uid('HIST'), importedAt = nowISO()
+      const added = []
+      let duplicates = 0, skipped = 0
+      for (const row of p.rows) {
+        const date = String(row?.date || '')
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date))) { skipped++; continue }
+        const direction = row.direction
+        if (direction !== 'in' && direction !== 'out') { skipped++; continue }
+        const amount = numeric(row.amount, 'amount', { positive: true })
+        const kind = direction === 'in' ? 'deposit' : 'withdrawal'
+        const externalId = `ths-ac:${date}:${direction}`
+        if (existingIds.has(externalId) || existingDay.has([date, kind, direction === 'in' ? amount : -amount].join('|'))) { duplicates++; continue }
+        const event = {
+          id: uid('EVT'), accountId: account.id, kind, date,
+          cashAmount: direction === 'in' ? amount : -amount,
+          currency: normCurrency(row.currency, account.currency || db.baseCurrency),
+          note: String(row.note || '同花顺资金流动按日回扫（区间总额定位到日）'), source: 'ths-asset-change',
+          externalId, batchId, importedAt, archiveOnly: true, observedAt: importedAt,
+        }
+        existingIds.add(externalId)
+        existingDay.add([date, kind, event.cashAmount].join('|'))
+        db.historyEvents.push(event)
+        added.push(event)
+      }
+      // 扫描游标：coveredFrom 取更早者（覆盖面只增不减），complete 一旦成立保持成立。
+      const cursor = p.cursor && typeof p.cursor === 'object' ? p.cursor : {}
+      const prev = account.transferScan || {}
+      account.transferScan = {
+        coveredFrom: [prev.coveredFrom, cursor.coveredFrom].filter(Boolean).sort()[0] || cursor.coveredFrom || null,
+        complete: Boolean(prev.complete || cursor.complete),
+        lastScannedAt: cursor.scannedAt || importedAt,
+        lastRequests: Number(cursor.requests) || 0,
+        lastImported: added.length,
+      }
+      if (added.length) {
+        db.historyBatches ||= []
+        db.historyBatches.push({
+          id: batchId, accountId: account.id, importedAt, imported: added.length, duplicates, skipped, outside: 0,
+          method: 'transfer-scan',
+          coverage: { method: 'transfer-scan', complete: Boolean(cursor.complete), note: '同花顺「资金流动」区间总额按二分定位到日；金额与方向为券商口径，不含单笔流水号。' },
+          byKind: added.reduce((acc, e) => { acc[e.kind] = (acc[e.kind] || 0) + 1; return acc }, {}),
+        })
+      }
+      return { batchId, imported: added.length, duplicates, skipped, transferScan: account.transferScan }
+    }
+
     case 'price.set': {
       const p = payload
       const price = numeric(p.price, 'price', { nullable: true })
