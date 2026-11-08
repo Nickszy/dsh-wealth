@@ -293,6 +293,8 @@ window.__ModuleLoader__.load({
       const [dim, setDim] = React.useState('class')
       const [scoped, setScoped] = React.useState(null), [scopeErr, setScopeErr] = React.useState('')
       const [fc, setFc] = React.useState(null), [fcErr, setFcErr] = React.useState('')
+      const [perf, setPerf] = React.useState(null), [perfErr, setPerfErr] = React.useState('')
+      const perfAccount = fixedAccounts && fixedAccounts.length === 1 ? fixedAccounts[0] : null
       const key = (fixedAccounts || sel).join(',')
       React.useEffect(() => {
         if (!key) { setScoped(null); return }
@@ -307,6 +309,14 @@ window.__ModuleLoader__.load({
         fetch('/portfolio/api/forecast?days=30', { headers: { accept: 'application/json' } }).then(r => r.json()).then(d => { if (!live) return; if (d.ok) setFc(d); else setFcErr(d.error?.message || '预计收支读取失败') }).catch(e => { if (live) setFcErr(e.message) })
         return () => { live = false }
       }, [state.ledger.updatedAt])
+      // 历史净值回补：首次需要拉取历史行情，稍慢；之后走服务端缓存。
+      React.useEffect(() => {
+        if (!perfAccount) { setPerf(null); return }
+        let live = true; setPerfErr(''); setPerf(null)
+        fetch('/portfolio/api/performance?accounts=' + encodeURIComponent(perfAccount) + '&days=1095', { headers: { accept: 'application/json' } })
+          .then(r => r.json()).then(d => { if (!live) return; if (d.ok) setPerf(d); else setPerfErr(d.error?.message || '历史净值读取失败') }).catch(e => { if (live) setPerfErr(e.message) })
+        return () => { live = false }
+      }, [perfAccount, state.ledger.updatedAt])
       const a = key ? scoped : state.analysis
       const toggle = id => setSel(old => old.includes(id) ? old.filter(x => x !== id) : [...old, id])
       const picker = fixedAccounts ? null : h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16 }, 'aria-label': '分析范围' },
@@ -341,6 +351,35 @@ window.__ModuleLoader__.load({
           kpi('最大回撤', p.maxDrawdown && p.maxDrawdown.value != null ? pct(p.maxDrawdown.value) : '—', p.maxDrawdown && p.maxDrawdown.peakDate ? (p.maxDrawdown.peakDate + ' → ' + (p.maxDrawdown.troughDate || '—')) : (p.maxDrawdown && p.maxDrawdown.reason) || '', t.red),
           kpi('快照覆盖', (nw.snapshotCount || 0) + ' 天', (nw.spanDays ? '跨度 ' + nw.spanDays + ' 天 · ' : '') + '变动 ' + fmtMoney(nw.change) + ' ' + a.baseCurrency, t.text)),
         h('div', { style: { fontSize: 11, color: t.sub, margin: '-4px 0 16px', lineHeight: 1.6 } }, p.note || ''),
+        perfAccount ? (() => {
+          const rows = perf && perf.series && perf.series.length > 1 ? perf.series : []
+          const step = Math.max(1, Math.ceil(rows.length / 240))
+          const sampled = rows.filter((_, i) => i % step === 0).concat(rows.length && rows.length % step ? [rows[rows.length - 1]] : [])
+          const vals = sampled.map(x => x.totalValueBase)
+          const lo = Math.min(...vals), hi = Math.max(...vals), span = hi - lo || Math.max(hi * .05, 1)
+          const pts = vals.map((v, i) => [(i / Math.max(1, vals.length - 1)) * 560 + 20, 150 - ((v - lo) / span) * 110])
+          const m = perf && perf.metrics
+          return h('section', { style: { ...T.card(t), marginBottom: 14 }, 'aria-label': '历史净值' },
+            h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', marginBottom: 8 } },
+              h('strong', { style: { fontSize: 15 } }, '历史净值走势', h('span', { style: { fontWeight: 400, color: t.sub, fontSize: 11, marginLeft: 7 } }, '按流水 × 历史行情回补')),
+              m ? h('span', { style: { fontSize: 11, color: t.sub } }, perf.from + ' → ' + perf.to + ' · ' + m.days + ' 个交易日') : null),
+            perfErr ? h('div', { role: 'alert', style: { fontSize: 12, color: t.red } }, perfErr) :
+            rows.length ? h('div', null,
+              h('div', { style: { display: 'flex', gap: 18, flexWrap: 'wrap', margin: '2px 0 10px', fontSize: 12 } },
+                h('span', null, '区间涨跌 ', h('strong', { style: { color: (m.change || 0) >= 0 ? t.green : t.red } }, fmtMoney(m.change) + ' ' + perf.baseCurrency + (m.changePct == null ? '' : '（' + (m.changePct > 0 ? '+' : '') + m.changePct + '%）'))),
+                h('span', null, '最大回撤 ', h('strong', { style: { color: t.red } }, m.maxDrawdown && m.maxDrawdown.value != null ? m.maxDrawdown.value + '%' : '—'), m.maxDrawdown && m.maxDrawdown.peakDate ? h('small', { style: { color: t.sub } }, ' ' + m.maxDrawdown.peakDate.slice(5) + ' → ' + String(m.maxDrawdown.troughDate || '').slice(5)) : null),
+                h('span', null, '期末 ', h('strong', null, fmtMoney(m.endValue) + ' ' + perf.baseCurrency))),
+              h('svg', { viewBox: '0 0 600 170', role: 'img', 'aria-label': '历史净值曲线', style: { width: '100%', height: 190, display: 'block' } },
+                [30, 85, 140].map(y => h('line', { key: y, x1: 20, y1: y, x2: 580, y2: y, stroke: t.border, strokeDasharray: '4 5' })),
+                h('polygon', { points: '20,155 ' + pts.map(p => p.join(',')).join(' ') + ' 580,155', fill: t.accent, opacity: .08 }),
+                h('polyline', { points: pts.map(p => p.join(',')).join(' '), fill: 'none', stroke: t.accent, strokeWidth: 2, strokeLinejoin: 'round' }),
+                h('text', { x: 20, y: 168, fill: t.sub, fontSize: 10.5 }, sampled[0].date), h('text', { x: 580, y: 168, textAnchor: 'end', fill: t.sub, fontSize: 10.5 }, sampled[sampled.length - 1].date)),
+              h('div', { style: { fontSize: 10.5, color: t.sub, lineHeight: 1.7, marginTop: 6 } },
+                '口径为每日市值：持仓由流水逆推，价格取历史收盘/净值；出入金与买卖会造成台阶，不等同投资收益率。'
+                + (m && m.cashEstimated ? ' 现金流水不全（券商接口不含银证转账），负现金按推定入金修复，属估算。' : '')
+                + ((perf.warnings || []).length ? ' · ' + perf.warnings.slice(0, 4).join('　') : ''))) :
+            h('div', { style: { fontSize: 12, color: t.sub } }, '正在回补历史行情与流水…（首次可能需要几秒）'))
+        })() : null,
         h('div', { className: 'wealth-split', style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(280px,1fr))', gap: 14, marginBottom: 14 } },
           h('section', { style: T.card(t), 'aria-label': '资金流' },
             h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 } }, h('strong', { style: { fontSize: 15 } }, '资金流总览'), h('span', { style: { fontSize: 10.5, color: t.sub } }, '入金出金为外部现金流')),

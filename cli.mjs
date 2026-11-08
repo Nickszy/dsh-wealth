@@ -6,8 +6,10 @@
 //   node cli.mjs '<op-json>'          e.g. '{"op":"trade.add","accountId":"...","symbol":"600519","side":"buy","qty":100,"price":1600}'
 //   node cli.mjs help
 // Every command prints one JSON object to stdout. Nothing is interactive.
+import { join } from 'node:path'
 import { load, save, applyOp, summarize, OpError, DATA_FILE, DATA_DIR } from './store.mjs'
 import { forecast } from './forecast.mjs'
+import { computePerformance } from './performance.mjs'
 
 function out(obj, code = 0) {
   process.stdout.write(JSON.stringify(obj, null, 2) + '\n')
@@ -26,6 +28,7 @@ function help() {
       'node cli.mjs positions [accountId]          # holdings joined with instruments (+sector/style)',
       'node cli.mjs history [accountId] [limit]    # archived flows (deposit/dividend/fee/life bills)',
       'node cli.mjs forecast [days]                # recurring flows + projected out/in for next N days (default 30)',
+      'node cli.mjs performance [accountId] [days] # backfilled daily NAV from flows + historical prices (default 1095)',
       'node cli.mjs export [file]                  # write the whole ledger JSON to a file',
       'node cli.mjs <op> key=value key=value ...   # run one operation',
       'node cli.mjs \'{"op":"...",...}\'             # or pass one JSON object',
@@ -121,6 +124,12 @@ else if (arg[0] === 'state') {
 } else if (arg[0] === 'forecast') {
   const days = Math.min(365, Math.max(7, Number(arg[1]) || 30))
   out({ ok: true, ...forecast(load(), { days }) })
+} else if (arg[0] === 'performance') {
+  const accountId = arg[1] && !/^\d+$/.test(arg[1]) ? arg[1] : null
+  const days = Math.min(3650, Math.max(30, Number(arg[1] && /^\d+$/.test(arg[1]) ? arg[1] : arg[2]) || 1095))
+  const result = await computePerformance(load(), { accountIds: accountId ? [accountId] : [], days, cachePath: join(DATA_DIR, 'cache', 'klines.json') })
+  // 曲线可能上千点：CLI 输出指标 + 首尾与最大回撤区间，完整序列放在 series。
+  out({ ok: true, ...result })
 } else if (arg[0] === 'export') {
   const db = load()
   const { writeFileSync } = await import('node:fs')

@@ -4,9 +4,11 @@
  * can read and edit it, and so any local script can POST operations.
  * The AI (资产管家 / any agent) edits the same store through cli.mjs.
  */
-import { load, save, applyOp, summarize, OpError } from './store.mjs'
+import { join } from 'node:path'
+import { load, save, applyOp, summarize, OpError, DATA_DIR } from './store.mjs'
 import { refreshQuotes } from './quotes.mjs'
 import { forecast } from './forecast.mjs'
+import { computePerformance } from './performance.mjs'
 import { previewImport } from './importer.mjs'
 import { modelInfo, chatTurn, applyChatOps } from './chat.mjs'
 import { createSyncService } from './sync.mjs'
@@ -153,6 +155,14 @@ export function apply(ctx, config = {}) {
           if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
           const days = Math.min(365, Math.max(7, Number(url.searchParams.get('days')) || 30))
           send(res, 200, { ok: true, ...forecast(load(), { days }) })
+          return
+        }
+        if (path === 'api/performance') {
+          if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
+          const ids = String(url.searchParams.get('accounts') || '').split(',').map((s) => s.trim()).filter(Boolean)
+          const days = Math.min(3650, Math.max(30, Number(url.searchParams.get('days')) || 1095))
+          const result = await computePerformance(load(), { accountIds: ids, days, cachePath: join(DATA_DIR, 'cache', 'klines.json') })
+          send(res, 200, { ok: true, ...result })
           return
         }
         if (path === 'api/sources/login/status') {
