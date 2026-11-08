@@ -250,26 +250,29 @@ test('fund history uses custid-only params for ijj and maps fund ops with weak d
     fundMoneyRow({ op: '1', op_name: '定投', entry_date: '2026-10-19' }),
     fundMoneyRow({ op: '2', op_name: '现金分红', entry_money: '35.6', entry_count: '0', entry_price: '', fee_total: '' }),
     fundMoneyRow({ op: '4', op_name: '赎回', entry_money: '5000', entry_count: '3000', entry_price: '1.6666', entry_date: '2026-11-02' }),
+    fundMoneyRow({ op: '3', op_name: '分红再投', entry_money: '', entry_count: '18.75', entry_price: '1.6', entry_date: '2026-11-01' }),
     fundMoneyRow({ op: '10', op_name: '转入', entry_money: '1000', entry_count: '600', entry_price: '1.666', entry_date: '2026-11-03' }),
     fundMoneyRow({ op: '11', op_name: '转出', entry_money: '1000', entry_count: '600', entry_price: '1.666', entry_date: '2026-11-03' }),
     fundMoneyRow({ op: '100', op_name: '修改持仓', entry_money: '0', entry_count: '10', entry_price: '1.6', entry_date: '2026-11-04' }),
-  ], total: 7, max_page: 1 }
+  ], total: 8, max_page: 1 }
   const d = fundDeps({ history }), out = await fetchThsHistory({ portfolioId: '100108832246', thsBookType: 'ijj' }, secrets, { from: '2026-10-01', to: '2026-11-07' }, undefined, d)
   const form = new URLSearchParams(d.calls.find(c => c.url.endsWith('get_money_history')).init.body)
   assert.equal(form.get('custid'), '100108832246'); assert.equal(form.get('fundid'), ''); assert.equal(form.get('fund_key'), '')
   const rows = out.rows
-  assert.equal(rows.length, 7)
+  assert.equal(rows.length, 8)
   const byDate = Object.fromEntries(rows.map(r => [r.date + '|' + r.kind, r]))
   assert.equal(byDate['2026-10-09|buy'].cashAmount, -1000); assert.equal(byDate['2026-10-09|buy'].fee, 1.5)
   assert.equal(byDate['2026-10-19|buy'].originalType, '定投')
   assert.equal(byDate['2026-10-09|dividend'].cashAmount, 35.6)
   assert.equal(byDate['2026-11-02|sell'].cashAmount, 5000)
+  // 分红再投（op 3）：没有现金进出，份额增加，按入账类标的处理。
+  assert.deepEqual([byDate['2026-11-01|security_in'].cashAmount, byDate['2026-11-01|security_in'].qty], [0, 18.75])
   assert.equal(byDate['2026-11-03|security_in'].cashAmount, 0)
   assert.equal(byDate['2026-11-03|security_out'].cashAmount, 0)
   assert.equal(byDate['2026-11-04|other'].cashAmount, null)
   assert.ok(rows.every(r => r.externalId.startsWith('weak:')))
   const weakKeys = new Set(rows.map(r => r.externalId))
-  assert.equal(weakKeys.size, 7)
+  assert.equal(weakKeys.size, 8)
   assert.match(out.coverage.note, /基金账本/)
   assert.match(out.coverage.note, /费用口径/)
 })

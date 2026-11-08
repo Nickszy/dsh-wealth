@@ -236,11 +236,13 @@ const KIND_BY_OP = new Map([
 ])
 // 现金流方向只由业务类型决定：entry_money 恒为正数金额，不代表方向。
 const CASH_SIGN_BY_OP = new Map([['1', -1], ['5', -1], ['235', -1], ['2', 1], ['35', 1], ['236', 1], ['6', 1], ['95', -1], ['222', 0], ['16', 0]])
-// 基金账本流水（account_type '4' 手动基金 / '5' 爱基金）：0 申购 1 定投 2 现金分红 4 赎回 10 转入 11 转出 100 修改持仓。
+// 基金账本流水（account_type '4' 手动基金 / '5' 爱基金）：0 申购 1 定投 2 现金分红
+// 3 分红再投（红利转份额，现金中性、份额增加）4 赎回 10 转入 11 转出 100 修改持仓。
 // 转入/转出为基金转换的两条腿，现金中性记 0；修改持仓为手动修正，现金未知记 null。
 const FUND_KIND_BY_OP = new Map([
   ['0', { kind: 'buy', sign: -1 }], ['1', { kind: 'buy', sign: -1 }],
-  ['2', { kind: 'dividend', sign: 1 }], ['4', { kind: 'sell', sign: 1 }],
+  ['2', { kind: 'dividend', sign: 1 }], ['3', { kind: 'security_in', sign: 0 }],
+  ['4', { kind: 'sell', sign: 1 }],
   ['10', { kind: 'security_in', sign: 0 }], ['11', { kind: 'security_out', sign: 0 }],
   ['100', { kind: 'other', sign: null }],
 ])
@@ -327,7 +329,7 @@ export async function fetchThsHistory(source, secrets, range, signal, deps = {})
     coverage: {
       complete: false,
       note: bookType === 'common'
-        ? `已读取同花顺投资账本 ${from} 至 ${to} 的资金流水；银证转账等银行侧记录不在该接口内，可用券商导出文件补充。`
+        ? `已读取同花顺投资账本 ${from} 至 ${to} 的资金流水；该接口只含交易与费税（2026-11 实测业务类型全集：买卖、回购、派息、缴税、入账、配股对价），不含银证转账等银行侧记录，可用券商导出文件补充。`
         : `已读取同花顺基金账本 ${from} 至 ${to} 的申购、定投、赎回、分红与转入转出记录；银行侧资金进出不在该接口内。费用口径以流水标注为准。`,
     },
   }
