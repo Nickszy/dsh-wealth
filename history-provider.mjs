@@ -274,6 +274,14 @@ export async function fetchNativeHistory(source, secrets, range, signal, deps = 
     const { fetchFutuMcpHistory } = await import('./futu-mcp.mjs')
     return fetchFutuMcpHistory(source, secrets, { from, to }, signal, deps)
   }
+  if (source?.transport === 'mcp' && source.connector === 'tiger') {
+    const { fetchTigerHistory } = await import('./tiger-mcp.mjs')
+    return fetchTigerHistory(source, secrets, { from, to }, signal, deps)
+  }
+  if (source?.transport === 'native' && source.connector === 'fosun') {
+    const { fetchFosunHistory } = await import('./fosun-client.mjs')
+    return fetchFosunHistory(source, secrets, { from, to }, signal, deps)
+  }
   if (source?.transport !== 'native') fail('Native history requires a native source')
   const now = new Date(deps.now?.() ?? Date.now())
   if (!Number.isFinite(now.getTime())) fail('Invalid current time')

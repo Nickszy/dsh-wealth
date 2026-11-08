@@ -156,6 +156,9 @@ cash_infos（available+frozen+settling，withdraw 为子集不叠加）与同花
 | 同花顺基金账本 | merge_fund fund[] | get_money_history（custid/fundid 二选一） | vid（常空→弱键） | 申购/定投=buy、现金分红=dividend、赎回=sell、转入/转出=security_in/out、修改持仓=other(cash null) |
 | 长桥 MCP | stock_positions+fund_positions+account_balance | history_executions + cash_flow | trade_id | cash_flow 无编号→弱键；business_type 含 dividend/股息→dividend，In/Out+出入金词→deposit/withdrawal |
 | 富途 OpenD | GetPositionList/GetFunds | GetHistoryOrderFillList | fillID | 仅真实账户；订单级费用不分摊 |
+| 且慢（盈米 MCP） | 四笔钱基金持仓 / 资产树 | —（无逐笔流水） | — | 快照型来源；成本缺失按净值暂估并警告；长期 API Key |
+| 老虎远程 MCP | get_assets + get_positions | get_transactions | 交易/成交 id | 衍生品跳过并警告；OAuth 设备码授权，refresh token 自动续期 |
+| 复星证券 OpenAPI | CashSummary + Holdings（分页） | CashFlows | flowId | ECDH 握手 + 请求签名 + AES-GCM；未知业务保留原文归 other |
 | IB | Gateway positions | 文件（CSV/TSV） | — | Flex 未接入；不把汇总行当逐笔 |
 | 账单文件 | — | XLSX/CSV/TSV 交易记录 sheet | 按文件 | 汇总表忽略；币种需显式选择 |
 

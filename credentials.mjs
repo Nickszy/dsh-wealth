@@ -3,7 +3,16 @@ import { randomBytes, createCipheriv, createDecipheriv } from 'node:crypto'
 import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
 import { DATA_DIR, OpError } from './store.mjs'
-const FIELDS = { ths:['cookie'],futu:['websocketKey','mcpToken','refreshToken','clientId'],longbridge:['appKey','appSecret','accessToken','mcpToken'],ib:[],custom:[] }
+const FIELDS = {
+  ths:['cookie'],
+  futu:['websocketKey','mcpToken','refreshToken','clientId'],
+  longbridge:['appKey','appSecret','accessToken','mcpToken'],
+  qieman:['apiKey','bearerToken'],
+  tiger:['accessToken','refreshToken','clientId'],
+  fosun:['apiKey','privateKey','serverPublicKey'],
+  ib:[],
+  custom:[],
+}
 const bad = message => new OpError('bad-request', message)
 export function validateCredentials(connector, input = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw bad('认证信息须为对象')
@@ -44,6 +53,15 @@ export function createCredentialStore(dir = DATA_DIR) {
     get(id){return structuredClone(read()[id]||{})},
     set(id,connector,input){const valid=validateCredentials(connector,input),all=read();all[id]={...(all[id]||{}),...valid};write(all)},
     remove(id){const all=read();if(Object.hasOwn(all,id)){delete all[id];write(all)}},
-    configured(id,connector){const value=read()[id]||{};return connector==='ths'?!!value.cookie:connector==='longbridge'?['appKey','appSecret','accessToken'].every(k=>!!value[k])||!!value.mcpToken:connector==='futu'?!!value.websocketKey||!!value.mcpToken:false},
+    configured(id,connector){
+      const value=read()[id]||{}
+      if(connector==='ths')return !!value.cookie
+      if(connector==='longbridge')return ['appKey','appSecret','accessToken'].every(k=>!!value[k])||!!value.mcpToken
+      if(connector==='futu')return !!value.websocketKey||!!value.mcpToken
+      if(connector==='qieman')return !!value.apiKey||!!value.bearerToken
+      if(connector==='tiger')return !!value.accessToken
+      if(connector==='fosun')return ['apiKey','privateKey','serverPublicKey'].every(k=>!!value[k])
+      return false
+    },
   }
 }

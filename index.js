@@ -16,6 +16,7 @@ import { inferredTransfers } from './timeline.mjs'
 import { previewImport } from './importer.mjs'
 import { modelInfo, chatTurn, applyChatOps } from './chat.mjs'
 import { createSyncService } from './sync.mjs'
+import { startTigerDeviceAuth, pollTigerDeviceToken } from './tiger-mcp.mjs'
 import { createCredentialStore } from './credentials.mjs'
 import { createThsLogin } from './ths-login.mjs'
 import { createFutuLogin } from './futu-login.mjs'
@@ -114,6 +115,49 @@ export function apply(ctx, config = {}) {
     return { status, message:current.message, ...(current.authorizeUrl ? {authorizeUrl:current.authorizeUrl} : {}) }
   }
   ctx.effect(() => () => futuLoginSlot?.dispose(), 'dsh-wealth: own Futu MCP login lifecycle')
+  // Tiger's remote MCP uses the OAuth 2.1 device flow: no redirect listener, the
+  // user enters a short code in the browser. The refresh token is long-lived.
+  let tigerLogin = null
+  const tigerStatus = () => tigerLogin ? {
+    status: tigerLogin.status,
+    message: tigerLogin.message,
+    ...(tigerLogin.device ? {
+      userCode: tigerLogin.device.userCode,
+      verificationUri: tigerLogin.device.verificationUri,
+      verificationUriComplete: tigerLogin.device.verificationUriComplete,
+      expiresAt: tigerLogin.expiresAt,
+    } : {}),
+  } : { status: 'idle', message: '' }
+  const pollTiger = async () => {
+    if (!tigerLogin || tigerLogin.status !== 'waiting') return
+    if (Date.now() > tigerLogin.expiresAt) {
+      tigerLogin.status = 'error'
+      tigerLogin.message = '老虎授权码已过期，请重新发起授权'
+      return
+    }
+    if (Date.now() < tigerLogin.nextPollAt) return
+    try {
+      const result = await pollTigerDeviceToken(tigerLogin.device)
+      if (result.status === 'ready') {
+        const owner = tigerLogin.authId ? 'pending-tiger-mcp:' + tigerLogin.authId : 'pending-tiger-mcp'
+        const fields = { accessToken: result.token.accessToken }
+        if (result.token.refreshToken) fields.refreshToken = result.token.refreshToken
+        if (result.token.clientId) fields.clientId = result.token.clientId
+        vault.set(owner, 'tiger', fields)
+        tigerLogin.status = 'ready'
+        tigerLogin.message = '老虎授权已保存，可以读取账户'
+      } else if (result.status === 'slow_down') {
+        tigerLogin.interval = result.interval || tigerLogin.interval + 5
+        tigerLogin.nextPollAt = Date.now() + tigerLogin.interval * 1000
+        tigerLogin.message = '请在浏览器完成授权（轮询已放慢）'
+      } else {
+        tigerLogin.nextPollAt = Date.now() + tigerLogin.interval * 1000
+      }
+    } catch (error) {
+      tigerLogin.status = 'error'
+      tigerLogin.message = String(error?.message || error)
+    }
+  }
   ctx.effect(() => {
     // 持仓按来源间隔刷新；历史流水每 6 小时增量补一次（从上次水位回看 30 天，去重归档）。
     const historyDue = () => {
@@ -236,6 +280,24 @@ export function apply(ctx, config = {}) {
         if (path === 'api/sources' || path === 'api/sources/ths/portfolios') {
           if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
           send(res, 200, { ok: true, ...(path === 'api/sources' ? sync.list() : await sync.listThsPortfolios()) }); return
+        }
+        if (path === 'api/sources/tiger/oauth/start') {
+          if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
+          const body = JSON.parse(await readBody(req).catch(() => '{}') || '{}')
+          const target = body.authId ? sync.list().authorizations.find(a => a.id === body.authId && a.connector === 'tiger') : null
+          const device = await startTigerDeviceAuth()
+          tigerLogin = {
+            device, authId: target ? target.id : null,
+            status: 'waiting', message: '请在浏览器输入设备码并完成老虎授权',
+            interval: device.interval, nextPollAt: Date.now() + device.interval * 1000,
+            expiresAt: Date.now() + device.expiresIn * 1000,
+          }
+          send(res, 200, { ok: true, ...tigerStatus() }); return
+        }
+        if (path === 'api/sources/tiger/oauth/status') {
+          if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
+          await pollTiger()
+          send(res, 200, { ok: true, ...tigerStatus() }); return
         }
         if (path === 'api/sources/futu/mcp/status') {
           if (req.method !== 'GET') { res.writeHead(405); res.end(); return }

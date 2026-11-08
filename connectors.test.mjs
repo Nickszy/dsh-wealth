@@ -4,7 +4,7 @@ import {getConnectorStatus,normalizeSnapshot} from './connectors.mjs'
 const canonical = () => ({ holdings: [{ symbol: '000001', name: '股票', market: 'CN', assetClass: 'stock', currency: 'CNY', qty: 100, avgCost: 10, manualPrice: 11, externalId: 'p1' }], complete: true, warnings: [], queriedAt: '2026-11-06T12:00:00Z', uploadedAt: null, quoteDate: '2026-11-06' })
 
 
-test('standalone connector catalogue needs no other plugin service',()=>{const rows=getConnectorStatus({get(){throw Error('must not access plugins')}});assert.deepEqual(rows.filter(x=>x.transport==='native').map(x=>x.id),['ths','futu','longbridge','ib']);assert.ok(rows.every(x=>x.available))})
+test('standalone connector catalogue needs no other plugin service',()=>{const rows=getConnectorStatus({get(){throw Error('must not access plugins')}});assert.deepEqual(rows.filter(x=>x.transport==='native').map(x=>x.id),['ths','futu','longbridge','fosun','ib']);assert.ok(rows.every(x=>x.available))})
 test('unknown prices remain null and are never fabricated as zero',()=>{const raw=canonical();raw.holdings[0].manualPrice=null;assert.equal(normalizeSnapshot(raw).holdings[0].manualPrice,null)})
 test('normalizer strips unknown fields recursively, returns detached data, accepts numeric decimals', () => {
   const raw = canonical(); raw.secret = 'remove'; raw.holdings[0].accountId = 'remove'; raw.holdings[0].qty = '100.5'; raw.sourceTotals = { cash: '10', secret: 'remove' }

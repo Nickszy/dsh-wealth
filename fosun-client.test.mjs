@@ -1,0 +1,151 @@
+// 复星 OpenAPI adapter tests: full ECDH+ECDSA+HMAC+AES-GCM protocol over a fake
+// gateway, so both cryptography directions are exercised without any network.
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import {
+  createCipheriv, createDecipheriv, createHash, createHmac, createPublicKey,
+  diffieHellman, generateKeyPairSync, hkdfSync, randomBytes, sign,
+} from 'node:crypto'
+import { listFosunAccounts, fetchFosunSnapshot, fetchFosunHistory } from './fosun-client.mjs'
+
+const GATEWAY = 'https://gateway.example.com'
+
+function pemPair() {
+  const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'secp384r1' })
+  return {
+    privatePem: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
+    publicPem: publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+    privateKey,
+  }
+}
+const identity = pemPair()
+const serverIdentity = pemPair()
+
+const SECRETS = { apiKey: '{{SECRET_t3opcnij}}', privateKey: identity.privatePem, serverPublicKey: identity.publicPem }
+
+function jwkPoint(jwk) {
+  return Buffer.concat([Buffer.from([0x04]), Buffer.from(jwk.x, 'base64url'), Buffer.from(jwk.y, 'base64url')])
+}
+
+function pointToJwk(point) {
+  const body = point[0] === 0x04 ? point.subarray(1) : point
+  return { kty: 'EC', crv: 'P-384', x: body.subarray(0, 48).toString('base64url'), y: body.subarray(48).toString('base64url') }
+}
+
+function encryptBody(key, payload, aad) {
+  const iv = randomBytes(12)
+  const cipher = createCipheriv('aes-256-gcm', key, iv)
+  cipher.setAAD(aad)
+  const ciphertext = Buffer.concat([cipher.update(Buffer.from(JSON.stringify(payload), 'utf8')), cipher.final()])
+  return { encrypted: true, iv: iv.toString('base64'), content: ciphertext.toString('base64'), tag: cipher.getAuthTag().toString('base64') }
+}
+
+function decryptBody(key, body, aad) {
+  const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(body.iv, 'base64'))
+  decipher.setAAD(aad)
+  decipher.setAuthTag(Buffer.from(body.tag, 'base64'))
+  return JSON.parse(Buffer.concat([decipher.update(Buffer.from(body.content, 'base64')), decipher.final()]).toString('utf8'))
+}
+
+/** Emulates the gateway: handshake then signed+encrypted POST endpoints. */
+function gatewayDeps(responder) {
+  const calls = []
+  const state = { encKey: null, macKey: null, sessionId: null }
+  return {
+    calls, state, timeoutMs: 5000,
+    fetch: async (url, init) => {
+      const path = new URL(url).pathname
+      calls.push({ path, headers: init.headers, body: init.body })
+      const replyJson = (payload, headers = {}) => ({ ok: true, status: 200, headers: { get: h => h === 'content-type' ? 'application/json' : (headers[h] ?? null) }, text: async () => JSON.stringify(payload) })
+      if (path === '/api/v1/auth/SessionCreate') {
+        const request = JSON.parse(init.body)
+        const clientNonce = init.headers['X-Nonce']
+        const temp = generateKeyPairSync('ec', { namedCurve: 'secp384r1' })
+        const serverPoint = jwkPoint(temp.publicKey.export({ format: 'jwk' }))
+        const serverNonce = randomBytes(32).toString('base64')
+        const signature = sign('sha256', Buffer.concat([serverPoint, Buffer.from(serverNonce, 'base64')]), identity.privateKey).toString('base64')
+        const shared = diffieHellman({ privateKey: temp.privateKey, publicKey: createPublicKey({ key: pointToJwk(Buffer.from(request.clientTempPublicKey, 'base64')), format: 'jwk' }) })
+        const derived = Buffer.from(hkdfSync('sha256', shared, Buffer.concat([Buffer.from(clientNonce, 'base64'), Buffer.from(serverNonce, 'base64')]), Buffer.from('session-derivation'), 64))
+        state.macKey = derived.subarray(0, 32)
+        state.encKey = derived.subarray(32)
+        state.sessionId = 'sess-fs-1'
+        return replyJson({ encrypted: false, content: { code: 0, message: 'ok', data: { sessionId: state.sessionId, serverTempPublicKey: serverPoint.toString('base64'), expiresAt: Date.now() + 300000 } } }, { 'x-signature': signature, 'x-nonce': serverNonce })
+      }
+      const sessionId = init.headers['X-session']
+      assert.equal(sessionId, state.sessionId)
+      const timestamp = init.headers['X-Timestamp'], nonce = init.headers['X-Nonce']
+      const aad = Buffer.from(`X-session:${sessionId}|X-timestamp:${timestamp}|X-nonce:${nonce}`, 'utf8')
+      const bodyJson = JSON.parse(init.body)
+      assert.equal(bodyJson.encrypted, true)
+      decryptBody(state.encKey, bodyJson, aad)
+      const expected = createHmac('sha256', state.macKey)
+        .update(`POST\n${path}\n\n${timestamp}\n${nonce}\n${createHash('sha256').update(init.body).digest('hex')}`, 'utf8')
+        .digest('base64')
+      assert.equal(init.headers['X-Signature'], expected, 'request signature must verify')
+      const data = responder(path, { code: 0, message: 'ok', data: responder.data })
+      return replyJson(encryptBody(state.encKey, data, aad))
+    },
+  }
+}
+
+test('复星 handshake authenticates the server and accounts parse', async () => {
+  const deps = gatewayDeps(() => ({ code: 0, message: 'ok', data: { accounts: [
+    { subAccountId: 'S1', accountName: '环球账户', currency: 'HKD', broker: 'FOSUN' },
+    { subAccountId: 'S2', accountName: '美股账户', currency: 'USD' },
+  ] } }))
+  const result = await listFosunAccounts({ gatewayUrl: GATEWAY }, SECRETS, undefined, deps)
+  assert.deepEqual(result.accounts.map(a => a.id), ['S1', 'S2'])
+  assert.equal(result.accounts[0].currency, 'HKD')
+  assert.equal(deps.calls[0].path, '/api/v1/auth/SessionCreate')
+  assert.equal(deps.calls[0].headers['X-API-Key'], '{{SECRET_t3opcnij}}')
+  assert.equal(deps.calls.filter(c => c.path === '/api/v1/auth/SessionCreate').length, 1)
+})
+
+test('复星 snapshot maps holdings, cash and totals', async () => {
+  const deps = gatewayDeps((path) => {
+    if (path === '/api/v1/portfolio/CashSummary') return { code: 0, data: { currency: 'HKD', cash: '8888.88', totalAsset: '20000', holdingProfit: '1200.5' } }
+    if (path === '/api/v1/portfolio/Holdings') return { code: 0, data: { holdings: [
+      { symbol: '00700', stockName: '腾讯控股', market: 'HK', quantity: '100', averageCost: '350', marketPrice: '365', currency: 'HKD' },
+      { symbol: 'AAPL', stockName: 'Apple', market: 'US', quantity: '10', averageCost: '180', marketPrice: '185', currency: 'USD' },
+    ] } }
+    throw new Error('unexpected ' + path)
+  })
+  const snapshot = await fetchFosunSnapshot({ gatewayUrl: GATEWAY, brokerAccountId: 'S1' }, SECRETS, undefined, deps)
+  const symbols = snapshot.holdings.map(h => h.symbol)
+  assert.deepEqual(symbols, ['00700', 'AAPL', 'CASH:HKD'])
+  const tencent = snapshot.holdings[0]
+  assert.deepEqual([tencent.market, tencent.currency, tencent.avgCost, tencent.manualPrice], ['HK', 'HKD', 350, 365])
+  assert.equal(snapshot.sourceTotals.totalAsset, 20000)
+  assert.equal(snapshot.sourceTotals.cash, 8888.88)
+  assert.equal(snapshot.complete, true)
+})
+
+test('复星 history classifies cash flows and keeps original labels', async () => {
+  const deps = gatewayDeps((path) => {
+    assert.equal(path, '/api/v1/trade/CashFlows')
+    return { code: 0, data: { flows: [
+      { flowId: 'F1', businessTypeName: '入金', amount: '10000', currency: 'HKD', tradeDate: '2026-11-02' },
+      { flowId: 'F2', businessTypeName: '出金', amount: '500', currency: 'HKD', tradeDate: '2026-11-03' },
+      { flowId: 'F3', businessTypeName: '股息收入', amount: '120', currency: 'HKD', tradeDate: '2026-11-04' },
+      { flowId: 'F4', businessTypeName: '买入', stockCode: '00700', stockName: '腾讯控股', market: 'HK', amount: '3650', quantity: '10', price: '365', currency: 'HKD', tradeDate: '2026-11-05' },
+      { flowId: 'F5', businessTypeName: '卖出', stockCode: 'AAPL', market: 'US', amount: '1850', quantity: '10', price: '185', currency: 'USD', tradeDate: '2026-11-06' },
+      { flowId: 'F6', businessTypeName: '神秘活动', amount: '66', currency: 'HKD', tradeDate: '2026-11-06' },
+    ] } }
+  })
+  const result = await fetchFosunHistory({ gatewayUrl: GATEWAY, brokerAccountId: 'S1' }, SECRETS, { from: '2026-11-01', to: '2026-11-07' }, undefined, deps)
+  const kinds = result.rows.map(r => r.kind)
+  assert.deepEqual(kinds, ['deposit', 'withdrawal', 'dividend', 'buy', 'sell', 'other'])
+  assert.equal(result.rows[0].cashAmount, 10000)
+  const sell = result.rows.find(r => r.symbol === 'AAPL')
+  assert.equal(sell.cashAmount, 1850)
+  const other = result.rows.at(-1)
+  assert.equal(other.originalType, '神秘活动')
+  assert.equal(other.cashAmount, 66)
+})
+
+test('复星 rejects a mismatched server public key', async () => {
+  const other = pemPair()
+  const bad = { ...SECRETS, serverPublicKey: other.publicPem }
+  const deps = gatewayDeps(() => ({ code: 0, data: { accounts: [] } }))
+  await assert.rejects(() => listFosunAccounts({ gatewayUrl: GATEWAY }, bad, undefined, deps), /签名校验失败/)
+})
