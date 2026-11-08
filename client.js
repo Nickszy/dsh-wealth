@@ -84,6 +84,14 @@ window.__ModuleLoader__.load({
       '授权并读取账户': 'Authorize & read account', '读取/更新账户': 'Fetch / refresh accounts',
       '保存预算': 'Save budget', '预算进度': 'Budget progress',
       '预计支出': 'Projected spending', '预计收入': 'Projected income', '未来 30 天': 'Next 30 days',
+      // ---- 首页重构（ui/home-redesign）----
+      '资产轨迹': 'Net worth trail', '记录今日快照': 'Snapshot today', '资产配置': 'Allocation',
+      '按类别': 'By class', '总资产': 'Total assets', '每日估值快照': 'Daily value snapshots',
+      '第一份快照，已经就位': 'Your first snapshot is in place', '你的资产故事，从这里开始': 'Your asset story starts here',
+      '至少两个日期的快照后显示趋势': 'Trend appears after two dated snapshots',
+      '曲线包含出入金、交易与汇率影响，不代表投资收益率。': 'The curve includes deposits, trades and FX moves — it is not an investment return.',
+      '导入持仓后显示分布': 'Import positions to see the breakdown',
+      '资产轨迹历史快照': 'Net worth trail snapshots', '资产占比环形图': 'Allocation donut chart',
       '推定入金（下限估算）': 'Inferred deposits (lower bound)', '分红 / 利息': 'Dividends / interest',
       '费用 / 税费': 'Fees / taxes', '配置与集中度': 'Allocation & concentration', '行业': 'Sector', '风格': 'Style',
       '暂无持仓分类': 'No classifications yet', '按年份汇总': 'Yearly summary', '资产构成': 'Composition',
@@ -210,7 +218,7 @@ window.__ModuleLoader__.load({
 .wealth-shell .wealth-account-row{display:grid;grid-template-columns:42px minmax(100px,1fr) minmax(100px,1fr) auto;gap:13px;align-items:center;padding:13px 8px;border-bottom:1px solid var(--wealth-border);border-radius:12px}
 .wealth-shell .wealth-account-row:last-child{border-bottom:0}
 .wealth-shell .wealth-account-row:hover{background:var(--wealth-hover)}
-.wealth-shell .wealth-acct-row{display:grid;grid-template-columns:38px minmax(90px,1.4fr) minmax(70px,1fr) auto 18px;gap:10px;align-items:center;padding:10px 10px;border-radius:14px;cursor:pointer;min-width:0}
+.wealth-shell .wealth-acct-row{display:grid;grid-template-columns:38px minmax(90px,1.4fr) minmax(70px,1fr) auto;gap:10px;align-items:center;padding:10px 10px;border-radius:14px;cursor:pointer;min-width:0}
 .wealth-shell .wealth-acct-row:hover{background:var(--wealth-hover)}
 .wealth-shell .wealth-acct-row.is-open{background:var(--wealth-soft)}
 .wealth-shell .wealth-account-badge{width:38px;height:38px;border-radius:12px;display:grid;place-items:center;font-weight:750;font-size:15px;background:var(--wealth-soft);color:var(--wealth-accent);flex:none}
@@ -256,10 +264,10 @@ window.__ModuleLoader__.load({
 .wealth-shell .wealth-kpis{display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr;gap:14px;margin-bottom:16px}
 .wealth-shell .wealth-chart-row{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(270px,1fr);gap:16px;margin-bottom:16px;align-items:stretch}
 @container(max-width:1100px){.wealth-kpis{grid-template-columns:1fr 1fr}.wealth-chart-row{grid-template-columns:1fr}.wealth-acct-layout{grid-template-columns:1fr}.wealth-summary{position:static}}
-@container(max-width:760px){.wealth-acct-row .wealth-alloc{display:none}.wealth-acct-row{grid-template-columns:36px minmax(90px,1fr) auto 16px}}
+@container(max-width:760px){.wealth-acct-row .wealth-alloc{display:none}.wealth-acct-row{grid-template-columns:36px minmax(90px,1fr) auto}}
 @container(max-width:620px){.wealth-kpis{grid-template-columns:1fr}}
 @container(max-width:1200px){.wealth-shell .wealth-acct-layout{grid-template-columns:1fr}.wealth-shell .wealth-summary{position:static}.wealth-shell .wealth-chat{width:270px}.wealth-shell .wealth-charts{grid-template-columns:1fr}.wealth-shell .wealth-charts>section:last-child{border-top:1px solid var(--wealth-border)!important;padding-top:16px!important}}
-@container(max-width:900px){.wealth-shell .wealth-rail{width:66px;padding:16px 8px}.wealth-shell .wealth-brand>div,.wealth-shell .wealth-nav-label{display:none}.wealth-shell .wealth-brand{justify-content:center;padding:0 0 12px}.wealth-shell .wealth-nav{justify-content:center;padding:10px 6px}.wealth-shell .wealth-body{flex-wrap:wrap}.wealth-shell .wealth-main{flex:0 0 100%;width:100%;padding:20px 16px}.wealth-shell .wealth-chat{width:100%;position:relative;top:0;height:520px;min-height:0;border-left:0;border-top:1px solid}.wealth-shell .wealth-topbar{padding:8px 12px;gap:10px}.wealth-shell .wealth-topbar .wealth-wordmark{display:none}.wealth-shell .wealth-modal{padding:18px 16px}.wealth-shell .wealth-acct-row{grid-template-columns:36px minmax(90px,1fr) auto 20px}.wealth-shell .wealth-acct-row .wealth-alloc{display:none}.wealth-shell .wealth-nested{padding-left:12px}.wealth-shell .wealth-title{font-size:22px}}
+@container(max-width:900px){.wealth-shell .wealth-rail{width:66px;padding:16px 8px}.wealth-shell .wealth-brand>div,.wealth-shell .wealth-nav-label{display:none}.wealth-shell .wealth-brand{justify-content:center;padding:0 0 12px}.wealth-shell .wealth-nav{justify-content:center;padding:10px 6px}.wealth-shell .wealth-body{flex-wrap:wrap}.wealth-shell .wealth-main{flex:0 0 100%;width:100%;padding:20px 16px}.wealth-shell .wealth-chat{width:100%;position:relative;top:0;height:520px;min-height:0;border-left:0;border-top:1px solid}.wealth-shell .wealth-topbar{padding:8px 12px;gap:10px}.wealth-shell .wealth-topbar .wealth-wordmark{display:none}.wealth-shell .wealth-modal{padding:18px 16px}.wealth-shell .wealth-acct-row{grid-template-columns:36px minmax(90px,1fr) auto}.wealth-shell .wealth-acct-row .wealth-alloc{display:none}.wealth-shell .wealth-nested{padding-left:12px}.wealth-shell .wealth-title{font-size:22px}}
 @media(prefers-reduced-motion:reduce){.wealth-shell *{transition:none!important;animation:none!important}}
 `
 
