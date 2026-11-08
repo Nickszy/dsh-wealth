@@ -8,6 +8,7 @@ import { join } from 'node:path'
 import { load, save, applyOp, summarize, OpError, DATA_DIR } from './store.mjs'
 import { refreshQuotes } from './quotes.mjs'
 import { forecast } from './forecast.mjs'
+import { billSummary } from './bills.mjs'
 import { computePerformance } from './performance.mjs'
 import { previewImport } from './importer.mjs'
 import { modelInfo, chatTurn, applyChatOps } from './chat.mjs'
@@ -155,6 +156,12 @@ export function apply(ctx, config = {}) {
           if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
           const days = Math.min(365, Math.max(7, Number(url.searchParams.get('days')) || 30))
           send(res, 200, { ok: true, ...forecast(load(), { days }) })
+          return
+        }
+        if (path === 'api/bills') {
+          if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
+          const months = Math.min(60, Math.max(1, Number(url.searchParams.get('months')) || 12))
+          send(res, 200, { ok: true, ...billSummary(load(), { months }) })
           return
         }
         if (path === 'api/performance') {

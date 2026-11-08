@@ -287,6 +287,25 @@ test('negative diluted avgCost is valid, valued, and survives later trades and s
   assert.equal(summarize(broken).excludedHoldings[0].reason, 'invalid-valuation')
 })
 
+test('history events carry validated life-bill categories and can be recategorized', () => {
+  const db = fixture()
+  const { event } = applyOp(db, 'historyEvent.add', { accountId: 'a', kind: 'withdrawal', date: '2026-11-03', cashAmount: -86, category: 'food', note: '午餐' })
+  assert.equal(event.category, 'food')
+  bad(db, 'historyEvent.add', { accountId: 'a', kind: 'withdrawal', date: '2026-11-03', cashAmount: -1, category: 'grocery' })
+  const updated = applyOp(db, 'historyEvent.update', { id: event.id, category: 'transport' })
+  assert.equal(updated.event.category, 'transport')
+  assert.equal(db.historyEvents[0].category, 'transport')
+  applyOp(db, 'historyEvent.update', { id: event.id, note: '地铁' })
+  assert.equal(db.historyEvents[0].note, '地铁')
+  assert.equal(db.historyEvents[0].category, 'transport')
+  applyOp(db, 'historyEvent.update', { id: event.id, category: null })
+  assert.equal(db.historyEvents[0].category, undefined)
+  assert.throws(() => applyOp(db, 'historyEvent.update', { id: 'missing', category: 'food' }), (e) => e.code === 'not-found')
+  bad(db, 'historyEvent.update', { id: event.id, category: 'grocery' })
+  save(db)
+  assert.equal(load().historyEvents.length, 1)
+})
+
 test('quotePrice fills valuation below manualPrice and suppresses cost-estimate warnings', () => {
   const db = fixture()
   const h = holding(db, { symbol: 'QQQ', manualPrice: null })

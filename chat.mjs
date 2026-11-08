@@ -4,7 +4,7 @@ import { applyOp, OpError, summarize } from './store.mjs'
 const SAFE_OPS = new Set([
   'account.upsert', 'account.remove', 'holding.upsert', 'holding.remove', 'instrument.upsert',
   'price.set', 'fx.set', 'base.set', 'import.holdings', 'import.trades', 'trade.add', 'trade.remove',
-  'historyEvent.add',
+  'historyEvent.add', 'historyEvent.update',
 ])
 const badRequest = (message) => new OpError('bad-request', message)
 const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -76,7 +76,8 @@ const OP_DOC = `可用 ops（对象字段为 op 加直接 payload，不要再包
 - base.set {currency}：更换报告本位币，账本自动依照已有汇率重算换算表；目标币种汇率缺失时先询问，不猜测。
 - trade.add {accountId,instrumentId 或 symbol/market/name/assetClass/currency,side:buy|sell,qty,price,fee?,currency?,date:YYYY-MM-DD,source?,externalId?,applyHoldings?:boolean}：明确新增的买卖，默认影响持仓；导入历史流水须 applyHoldings:false。
 - trade.remove {id}：删除一条买卖记录；持仓数量不会自动回算，需在 reply 提醒用户核对持仓。
-- historyEvent.add {accountId,kind,date:YYYY-MM-DD,cashAmount,currency?,fee?,qty?,price?,symbol?|instrumentId?,note?,externalId?}：归档一条不改变当前持仓的流水。kind 为 deposit(入金)|withdrawal(出金)|dividend(分红)|interest(利息)|fee(费用)|tax(税费)|security_in(证券转入)|security_out(证券转出)|ipo|other。出入金、分红、利息、费税必须给 cashAmount（账户视角带符号，入金为正、出金为负）；生活账单的收支也用 deposit/withdrawal 记在银行或现金账户，note 写明用途。相同 externalId 自动去重。
+- historyEvent.add {accountId,kind,date:YYYY-MM-DD,cashAmount,currency?,fee?,qty?,price?,symbol?|instrumentId?,category?,note?,externalId?}：归档一条不改变当前持仓的流水。kind 为 deposit(入金)|withdrawal(出金)|dividend(分红)|interest(利息)|fee(费用)|tax(税费)|security_in(证券转入)|security_out(证券转出)|ipo|other。出入金、分红、利息、费税必须给 cashAmount（账户视角带符号，入金为正、出金为负）；生活账单的收支也用 deposit/withdrawal 记在银行或现金账户，note 写明用途。category 是生活账单分类：food(餐饮)|transport(交通)|housing(居住)|shopping(购物)|entertainment(娱乐)|health(医疗)|education(教育)|social(人情往来)|telecom(通讯)|other(其他)，仅生活收支填写，投资相关流水不要填；拿不准时留空并在 reply 里询问。相同 externalId 自动去重。
+- historyEvent.update {id,category?,note?}：修改已归档流水的分类或备注（category 传 null 清除归类）。用于给既往流水补分类，或纠正错分；不要改日期和金额。
 - import.holdings {rows:[holding.upsert 的字段对象,...]}：持仓快照，绝对数量与单位成本。
 - import.trades {rows:[trade.add 的字段对象,...],applyHoldings:false}：历史流水默认仅记录，不叠加已导入持仓；只有用户明确要求回放交易时才设 true。
 最多 50 个 ops。执行命令、保存、访问网络等操作不可用。现有对象只能使用账本里的真实 id。新建账户生成 id 后才能在后续对话引用，勿猜测新 id；跨账户或代码存在歧义先询问。`

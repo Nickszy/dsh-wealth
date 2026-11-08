@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync, copyFil
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
-import { isFlowKind, KIND_NAMES, normalizeStyle } from './model.mjs'
+import { isFlowKind, KIND_NAMES, normalizeStyle, isLifeCategory, LIFE_CATEGORIES } from './model.mjs'
 
 export const DATA_DIR = process.env.DSH_PORTFOLIO_DIR || join(homedir(), '.dsh', 'data', 'dsh-portfolio')
 export const DATA_FILE = join(DATA_DIR, 'ledger.json')
@@ -340,11 +340,15 @@ export function applyOp(db, op, payload = {}) {
       if (['buy', 'sell', 'repo_open', 'repo_close'].includes(kind)) throw new OpError('bad-request', '买卖与回购请用 trade.add 记账；historyEvent.add 只归档不影响持仓的流水')
       const date = String(p.date || '')
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date)) || new Date(date).toISOString().slice(0, 10) !== date) throw new OpError('bad-request', 'date 必须为有效 YYYY-MM-DD 日期')
-      const cashAmount = numeric(p.cashAmount === undefined ? null : p.cashAmount, 'cashAmount', { nullable: true })
+      // 账户视角带符号：入金为正、出金为负（文档契约），因此允许负数。
+      const cashAmount = numeric(p.cashAmount === undefined ? null : p.cashAmount, 'cashAmount', { nullable: true, signed: true })
       const fee = p.fee === undefined || p.fee === null ? null : numeric(p.fee, 'fee')
       const qty = p.qty === undefined || p.qty === null ? null : numeric(p.qty, 'qty', { positive: true })
       const price = p.price === undefined || p.price === null ? null : numeric(p.price, 'price')
       const currency = normCurrency(p.currency, account.currency || db.baseCurrency)
+      // 生活账单分类：只接受注册表内的值；null/空串表示不归类。
+      const category = p.category === undefined || p.category === null || p.category === '' ? null : String(p.category).trim()
+      if (category !== null && !isLifeCategory(category)) throw new OpError('bad-request', '未知的生活账单分类: ' + category + '（可用: ' + Object.keys(LIFE_CATEGORIES).join('/') + '）')
       const externalId = p.externalId === undefined || p.externalId === null || p.externalId === '' ? null : String(p.externalId)
       db.historyEvents ||= []
       if (externalId) {
@@ -362,6 +366,7 @@ export function applyOp(db, op, payload = {}) {
         id: uid('EVT'), accountId: p.accountId, kind, date, cashAmount, fee,
         currency, ...(qty != null ? { qty } : {}), ...(price != null ? { price } : {}),
         ...(instrumentId ? { instrumentId } : {}),
+        ...(category ? { category } : {}),
         note: String(p.note || ''), source: String(p.source || 'model'),
         ...(externalId ? { externalId } : {}),
         batchId, importedAt, archiveOnly: true, observedAt: importedAt,
@@ -370,6 +375,25 @@ export function applyOp(db, op, payload = {}) {
       db.historyBatches ||= []
       db.historyBatches.push({ id: batchId, accountId: p.accountId, importedAt, imported: 1, duplicates: 0, outside: 0, method: 'model', coverage: { method: 'model', requestedFrom: date, requestedTo: date, complete: false, note: '手工 / AI 逐条录入，不代表完整流水区间。' }, byKind: { [kind]: 1 } })
       return { event, batchId }
+    }
+
+    // 修正已归档流水的分类与备注：导入的银行/支付账单可以事后归类，AI 也能纠正错分。
+    case 'historyEvent.update': {
+      const p = payload.event || payload
+      const id = String(p.id || '').trim()
+      if (!id) throw new OpError('bad-request', '缺少流水 id')
+      db.historyEvents ||= []
+      const event = db.historyEvents.find((e) => e.id === id)
+      if (!event) throw new OpError('not-found', '流水不存在: ' + id)
+      if (p.category !== undefined) {
+        const category = p.category === null || p.category === '' ? null : String(p.category).trim()
+        if (category !== null && !isLifeCategory(category)) throw new OpError('bad-request', '未知的生活账单分类: ' + category + '（可用: ' + Object.keys(LIFE_CATEGORIES).join('/') + '）')
+        if (category === null) delete event.category
+        else event.category = category
+      }
+      if (p.note !== undefined) event.note = String(p.note || '')
+      event.updatedAt = nowISO()
+      return { event }
     }
 
     case 'price.set': {

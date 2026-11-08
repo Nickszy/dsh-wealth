@@ -294,6 +294,7 @@ window.__ModuleLoader__.load({
       const [scoped, setScoped] = React.useState(null), [scopeErr, setScopeErr] = React.useState('')
       const [fc, setFc] = React.useState(null), [fcErr, setFcErr] = React.useState('')
       const [perf, setPerf] = React.useState(null), [perfErr, setPerfErr] = React.useState('')
+      const [bills, setBills] = React.useState(null), [billsErr, setBillsErr] = React.useState('')
       const perfAccount = fixedAccounts && fixedAccounts.length === 1 ? fixedAccounts[0] : null
       const key = (fixedAccounts || sel).join(',')
       React.useEffect(() => {
@@ -307,6 +308,13 @@ window.__ModuleLoader__.load({
         if (fixedAccounts) return
         let live = true
         fetch('/portfolio/api/forecast?days=30', { headers: { accept: 'application/json' } }).then(r => r.json()).then(d => { if (!live) return; if (d.ok) setFc(d); else setFcErr(d.error?.message || '预计收支读取失败') }).catch(e => { if (live) setFcErr(e.message) })
+        return () => { live = false }
+      }, [state.ledger.updatedAt])
+      // 生活账单汇总：与投资流水同一份归档，只统计已归类的生活收支。
+      React.useEffect(() => {
+        if (fixedAccounts) return
+        let live = true
+        fetch('/portfolio/api/bills?months=12', { headers: { accept: 'application/json' } }).then(r => r.json()).then(d => { if (!live) return; if (d.ok) setBills(d); else setBillsErr(d.error?.message || '生活账单读取失败') }).catch(e => { if (live) setBillsErr(e.message) })
         return () => { live = false }
       }, [state.ledger.updatedAt])
       // 历史净值回补：首次需要拉取历史行情，稍慢；之后走服务端缓存。
@@ -326,6 +334,11 @@ window.__ModuleLoader__.load({
         sel.length ? h('span', { style: { fontSize: 11, color: t.sub } }, '已选 ' + sel.length + ' 个账户合并分析') : null)
       if (!a) return h('div', null, picker, h('div', { className: 'wealth-empty', role: 'status' }, h('span', { className: 'wealth-empty-mark' }, '◔'), scopeErr || '分析层准备中…'))
       const p = a.performance || {}, f = a.flows || {}, q = a.quality || {}, nw = a.netWorth || {}, al = a.allocation || {}
+      // 近 7 天到期提醒：来自周期性流水推算，不触发系统通知，只做界面提示。
+      const soon = fc && fc.generatedFor ? (() => {
+        const end = new Date(Date.parse(fc.generatedFor + 'T00:00:00Z') + 7 * 86400000).toISOString().slice(0, 10)
+        return fc.series.filter(s => (s.dueDates || []).some(d => d >= fc.generatedFor && d <= end))
+      })() : []
       const DIMS = { class: ['byClass', 'concentration', c => assetLabel(c.assetClass)], sector: ['bySector', 'sectorConcentration', c => c.sector], style: ['byStyle', 'styleConcentration', c => ({ growth: '成长', value: '价值', blend: '均衡', other: '其他' })[c.style] || c.style] }
       const [itemsKey, concKey, labelOf] = DIMS[dim] || DIMS.class
       const items = al[itemsKey] || []
@@ -424,9 +437,33 @@ window.__ModuleLoader__.load({
                 h('small', { style: { display: 'block', color: t.sub } }, '下次 ' + s.nextDue)))),
             h('div', { style: { display: 'flex', justifyContent: 'space-between', padding: '8px 0 0', fontSize: 13 } },
               h('strong', null, '净 ' + fmtMoney(fc.projection.netBase, a.baseCurrency)),
-              h('span', { style: { color: t.sub, fontSize: 11 } }, '共 ' + fc.projection.count + ' 笔 · 中位数估算，非保证'))) :
+              h('span', { style: { color: t.sub, fontSize: 11 } }, '共 ' + fc.projection.count + ' 笔 · 中位数估算，非保证')),
+            soon.length ? h('div', { style: { marginTop: 8, fontSize: 11.5, color: t.terra } }, '⏰ 近 7 天：' + soon.map(s => s.label + ' ' + fmtMoney(s.medianAmountBase, a.baseCurrency)).join('　')) : null) :
           h('div', { style: { fontSize: 12, color: t.sub, lineHeight: 1.6 } }, '还没有识别到周期性收支。同一事项（如每月定投、房租、工资）按相同方向记录 3 次以上，就会在这里推算未来 30 天的预计支出与收入。'),
           (fc && (fc.warnings || []).length) ? h('div', { style: { fontSize: 10.5, color: t.sub, marginTop: 8 } }, fc.warnings.map(w => '· ' + w).join('　')) : null) : null,
+        !fixedAccounts ? h('section', { style: { ...T.card(t), marginTop: 14 }, 'aria-label': '生活账单' },
+          h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', marginBottom: 8 } },
+            h('strong', { style: { fontSize: 15 } }, '生活账单', h('span', { style: { fontWeight: 400, color: t.sub, fontSize: 11, marginLeft: 7 } }, '近 12 个月 · 按分类')),
+            bills && bills.totals ? h('span', { style: { fontSize: 10.5, color: t.sub } }, '支出 ' + fmtMoney(bills.totals.out) + ' · 收入 ' + fmtMoney(bills.totals.in) + ' · ' + bills.baseCurrency) : null),
+          billsErr ? h('div', { style: { fontSize: 12, color: t.terra } }, billsErr) :
+          !bills ? h('div', { style: { fontSize: 12, color: t.sub } }, '读取中…') :
+          !bills.categories.length ? h('div', { style: { fontSize: 12, color: t.sub, lineHeight: 1.7 } }, '还没有归类的生活账单。在「流水」里给入金 / 出金选择生活分类（餐饮、居住、交通…），或用资产助手说「把 11 月的房租记为居住」，这里就会按分类汇总。') :
+          h('div', null,
+            h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))', gap: 16 } },
+              h('div', null,
+                h('div', { style: { fontSize: 11, color: t.sub, marginBottom: 6 } }, '近 12 个月分类'),
+                bills.categories.map((c) => h('div', { key: c.category, style: { display: 'flex', justifyContent: 'space-between', gap: 8, padding: '5px 0', borderBottom: '1px solid ' + t.border, fontSize: 12.5 } },
+                  h('span', null, c.label, h('small', { style: { color: t.sub, marginLeft: 6 } }, c.count + ' 笔')),
+                  h('strong', { style: { fontVariantNumeric: 'tabular-nums', color: t.text } }, fmtMoney(c.out) + (c.in ? ' / +' + fmtMoney(c.in) : ''))))),
+              h('div', null,
+                h('div', { style: { fontSize: 11, color: t.sub, marginBottom: 6 } }, '按月'),
+                h('div', { style: { overflowX: 'auto' } }, h('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: 11.5 } },
+                  h('thead', null, h('tr', null, ['月份', '支出', '收入', '净'].map((h2, i) => h('th', { key: h2, style: { textAlign: i ? 'right' : 'left', padding: '4px 6px', color: t.sub, fontWeight: 500, borderBottom: '1px solid ' + t.border } }, h2)))),
+                  h('tbody', null, bills.months.filter((m2) => m2.count).slice(-8).map((m2) => h('tr', { key: m2.month },
+                    h('td', { style: { padding: '4px 6px', color: t.sub } }, m2.month), h('td', { style: { textAlign: 'right', padding: '4px 6px', fontVariantNumeric: 'tabular-nums' } }, fmtMoney(m2.out)),
+                    h('td', { style: { textAlign: 'right', padding: '4px 6px', fontVariantNumeric: 'tabular-nums' } }, fmtMoney(m2.in)), h('td', { style: { textAlign: 'right', padding: '4px 6px', fontVariantNumeric: 'tabular-nums', color: m2.net >= 0 ? t.green : t.red } }, fmtMoney(m2.net))))))))),
+            bills.uncategorized ? h('div', { style: { fontSize: 10.5, color: t.terra, marginTop: 8 } }, '另有 ' + bills.uncategorized + ' 笔入金 / 出金尚未归类，可在「流水」里逐笔补选，或用 AI 助手批量归类。') : null,
+            h('div', { style: { fontSize: 10.5, color: t.sub, marginTop: 8 } }, '生活账单与投资流水共用同一份归档：每笔只记一次，分类只影响汇总口径。'))) : null,
         h('section', { style: { ...T.card(t), marginTop: 14 }, 'aria-label': '数据健康' },
           h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 } }, h('strong', { style: { fontSize: 15 } }, '数据健康'), h('span', { style: { fontSize: 10.5, color: t.sub } }, '决定指标可信度')),
           h('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12, color: t.sub, marginBottom: 8 } },
@@ -1022,17 +1059,27 @@ window.__ModuleLoader__.load({
     }
 
     const HISTORY_KINDS = { buy: '买入', sell: '卖出', dividend: '分红', interest: '利息', deposit: '入金', withdrawal: '出金', tax: '税费', fee: '费用', cash: '现金变动', cash_in: '现金转入', cash_out: '现金转出', transfer: '转账 / 转托管', transfer_in: '转入', transfer_out: '转出', security_in: '证券转入', security_out: '证券转出', repo: '回购', repo_open: '回购开仓', repo_close: '回购到期', repo_interest: '回购利息', ipo: '新股', ipo_subscription: '新股申购', ipo_allotment: '新股配售', ipo_refund: '新股退款', split: '拆股', corporate_action: '公司行动', other: '其他' }
+    // 与 model.mjs LIFE_CATEGORIES 保持一致；用于流水行内归类与报表展示。
+    const LIFE_CATEGORIES = { food: '餐饮', transport: '交通', housing: '居住', shopping: '购物', entertainment: '娱乐', health: '医疗', education: '教育', social: '人情往来', telecom: '通讯', other: '其他' }
     const historyKind = row => HISTORY_KINDS[row.kind] || row.kind || '其他'
     const historyValue = (value, missing = '—') => value === null || value === undefined || value === '' ? missing : String(value)
     const isRepo = row => /repo|回购|逆回购/i.test((row.kind || '') + ' ' + (row.originalType || ''))
     const historyStatus = status => ({ new: '新增', duplicate: '重复 · 跳过', conflict: '冲突 · 待修正', outside: '区间外 · 跳过' })[status] || status || '已归档'
-    function HistoryTable({ t, rows, showStatus, showAccount, showAction }) {
+    function HistoryTable({ t, rows, showStatus, showAccount, showAction, call, busy }) {
       return h('div', { style: { overflowX: 'auto', marginTop: 12 } }, h('table', { style: { width: '100%', borderCollapse: 'collapse', minWidth: 1100 } },
         h('thead', null, h('tr', null, [...(showAccount ? ['账户'] : []), '日期 / 时间', '类型 / 原始类型', '代码 / 名称', '数量', '价格 / 利率', '原始金额', '净现金', '费用', '币种', ...(showStatus ? ['状态'] : []), ...(showAccount || showAction ? ['操作'] : [])].map(label => T.th(label, t)))),
         h('tbody', null, rows.map((row, index) => h('tr', { key: row.id || index },
           showAccount ? T.td(row.accountName || row.accountId, t) : null,
           T.td(h('span', { style: { whiteSpace: 'nowrap' } }, row.date || '—', row.time ? h('small', { style: { display: 'block', color: t.sub } }, row.time) : null), t),
-          T.td(h('span', null, historyKind(row), h('small', { style: { display: 'block', color: t.sub } }, row.originalType || '—')), t),
+          T.td(h('span', null, historyKind(row), h('small', { style: { display: 'block', color: t.sub } }, row.originalType || '—'),
+            call && row.eventId && ['deposit', 'withdrawal'].includes(row.kind) ? h('select', {
+              'aria-label': '生活账单分类', value: row.category || '', disabled: busy,
+              onChange: async (e) => {
+                const r = await call('historyEvent.update', { id: row.eventId, category: e.target.value || null })
+                if (!r.ok) alert(r.error?.message || '分类保存失败')
+              },
+              style: { ...T.input(t), marginTop: 4, padding: '2px 5px', fontSize: 10.5, minHeight: 22, width: 'auto' },
+            }, [['', '生活分类：未归类'], ...Object.entries(LIFE_CATEGORIES)].map(([v, n]) => h('option', { key: v, value: v }, n))) : null), t),
           T.td(h('span', null, row.symbol || '—', h('small', { style: { display: 'block', color: t.sub } }, [row.name, row.market].filter(Boolean).join(' · '))), t),
           T.td(historyValue(row.qty), t), T.td((isRepo(row) ? '利率 ' : '') + historyValue(row.price), t), T.td(historyValue(row.grossAmount), t), T.td(historyValue(row.cashAmount), t), T.td(historyValue(row.fee, '未知'), t), T.td(row.currency || '未知', t),
           showStatus ? T.td(h('span', { style: { color: row.status === 'conflict' ? t.red : row.status === 'new' ? t.accent : t.sub } }, historyStatus(row.status), h('small', { style: { display: 'block', color: t.sub } }, [row.sheet, row.row != null ? '第 ' + row.row + ' 行' : ''].filter(Boolean).join(' · '))), t) : null, showAccount || showAction ? T.td(row.action || '同步归档', t) : null)))))
@@ -1045,7 +1092,7 @@ window.__ModuleLoader__.load({
         const ins = insMap.get(tr.instrumentId), gross = Number(tr.qty) * Number(tr.price)
         const knownFee = tr.fee !== null && tr.fee !== undefined && tr.fee !== ''
         return { ...tr, legacyId: tr.id, id: 'trade:' + tr.id, kind: tr.side, symbol: ins?.symbol || tr.symbol, name: ins?.name || tr.name, market: ins?.market || tr.market, currency: tr.currency || accMap.get(tr.accountId)?.currency, grossAmount: tr.grossAmount ?? gross, cashAmount: tr.cashAmount ?? (knownFee && ['buy', 'sell'].includes(tr.side) ? (tr.side === 'buy' ? -gross : gross) - Number(tr.fee) : null), provenance: [tr.source?.provider || (typeof tr.source === 'string' ? tr.source : ''), tr.source?.externalId].filter(Boolean).join(' · ') || '手工记账' }
-      }), ...(db.historyEvents || []).filter(row => !accountId || row.accountId === accountId).map(row => ({ ...row, id: 'history:' + row.id, provenance: [row.provider || '文件回补', row.batchId ? '批次 ' + row.batchId : '', row.sheet, row.row != null ? '第 ' + row.row + ' 行' : '', row.importedAt ? '导入于 ' + row.importedAt : ''].filter(Boolean).join(' · ') }))]
+      }), ...(db.historyEvents || []).filter(row => !accountId || row.accountId === accountId).map(row => ({ ...row, eventId: row.id, id: 'history:' + row.id, provenance: [row.provider || '文件回补', row.batchId ? '批次 ' + row.batchId : '', row.sheet, row.row != null ? '第 ' + row.row + ' 行' : '', row.importedAt ? '导入于 ' + row.importedAt : ''].filter(Boolean).join(' · ') }))]
         .map(row => ({ ...row, accountName: accMap.get(row.accountId)?.name }))
         .sort((a, b) => (String(b.date || '') + (b.time || '')).localeCompare(String(a.date || '') + (a.time || '')))
     }
@@ -1079,7 +1126,7 @@ window.__ModuleLoader__.load({
             h('input', { value: query, onChange: e => { setQuery(e.target.value); setPage(0) }, placeholder: '搜索代码 / 名称 / 类型', 'aria-label': '搜索流水', style: { ...T.input(t), maxWidth: 260 } }),
             h('select', { value: kind, onChange: e => { setKind(e.target.value); setPage(0) }, 'aria-label': '流水类型', style: { ...T.input(t), maxWidth: 170 } }, h('option', { value: '' }, '全部类型'), kinds.map(k => h('option', { key: k, value: k }, HISTORY_KINDS[k] || k)))),
           h('p', { style: { color: t.sub, fontSize: 12 } }, accountId ? '自动同步的账户点「同步」即补齐全部历史流水；来源接口没有的记录（如银证转账）可在「补录账单」导入。' : '各账户流水由账户「同步」自动更新。金额按原币展示，费用缺失为未知；流水只归档，不改变当前持仓。'),
-          events.length ? h(HistoryTable, { t, rows: events.slice(shownPage * 100, (shownPage + 1) * 100), showAccount: !accountId, showAction: true }) : h('p', { style: { color: t.sub } }, all.length ? '没有符合条件的流水' : '还没有流水'),
+          events.length ? h(HistoryTable, { t, rows: events.slice(shownPage * 100, (shownPage + 1) * 100), showAccount: !accountId, showAction: true, call, busy }) : h('p', { style: { color: t.sub } }, all.length ? '没有符合条件的流水' : '还没有流水'),
           pages > 1 ? h('div', { style: { display: 'flex', gap: 10, alignItems: 'center', marginTop: 12 } }, h('button', { style: T.btn(t, false), disabled: shownPage === 0, onClick: () => setPage(shownPage - 1) }, '上一页'), h('span', { style: { color: t.sub, fontSize: 12 } }, (shownPage + 1) + ' / ' + pages + ' 页 · 每页 100 条'), h('button', { style: T.btn(t, false), disabled: shownPage >= pages - 1, onClick: () => setPage(shownPage + 1) }, '下一页')) : null),
         form ? h(Modal, { t, title: '记一笔交易', onClose: () => setForm(null) },
           h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12 } },

@@ -9,6 +9,7 @@
 import { join } from 'node:path'
 import { load, save, applyOp, summarize, OpError, DATA_FILE, DATA_DIR } from './store.mjs'
 import { forecast } from './forecast.mjs'
+import { billSummary } from './bills.mjs'
 import { computePerformance } from './performance.mjs'
 
 function out(obj, code = 0) {
@@ -27,6 +28,7 @@ function help() {
       'node cli.mjs accounts                       # account list with values (balance sheet view)',
       'node cli.mjs positions [accountId]          # holdings joined with instruments (+sector/style)',
       'node cli.mjs history [accountId] [limit]    # archived flows (deposit/dividend/fee/life bills)',
+      'node cli.mjs bills [months]                 # life-bill summary by category and month (default 12)',
       'node cli.mjs forecast [days]                # recurring flows + projected out/in for next N days (default 30)',
       'node cli.mjs performance [accountId] [days] # backfilled daily NAV from flows + historical prices (default 1095)',
       'node cli.mjs export [file]                  # write the whole ledger JSON to a file',
@@ -121,6 +123,9 @@ else if (arg[0] === 'state') {
   const limit = Number(arg[2]) || 200
   const events = (db.historyEvents || []).filter((e) => !accountId || e.accountId === accountId).slice(-limit)
   out({ ok: true, count: events.length, events })
+} else if (arg[0] === 'bills') {
+  const months = Math.min(60, Math.max(1, Number(arg[1]) || 12))
+  out({ ok: true, ...billSummary(load(), { months }) })
 } else if (arg[0] === 'forecast') {
   const days = Math.min(365, Math.max(7, Number(arg[1]) || 30))
   out({ ok: true, ...forecast(load(), { days }) })

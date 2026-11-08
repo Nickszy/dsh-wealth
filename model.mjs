@@ -66,6 +66,27 @@ const KIND_SET = new Set(KIND_NAMES)
 
 export const CATEGORIES = Object.freeze(['trade', 'cash', 'fee', 'transfer', 'corporate', 'other'])
 
+// 生活账单分类：与投资流水共用 historyEvents，不引入第二套账本。
+// category 为空表示非生活账单（投资出入金、分红、费税等不做生活归类）。
+export const LIFE_CATEGORIES = Object.freeze({
+  food:          '餐饮',
+  transport:     '交通',
+  housing:       '居住',
+  shopping:      '购物',
+  entertainment: '娱乐',
+  health:        '医疗',
+  education:     '教育',
+  social:        '人情往来',
+  telecom:       '通讯',
+  other:         '其他',
+})
+const LIFE_CATEGORY_NAMES = Object.freeze(Object.keys(LIFE_CATEGORIES))
+export function isLifeCategory(value) { return Object.prototype.hasOwnProperty.call(LIFE_CATEGORIES, value) }
+export function lifeCategoryLabel(value) { return isLifeCategory(value) ? LIFE_CATEGORIES[value] : '' }
+export function lifeCategoryList() {
+  return LIFE_CATEGORY_NAMES.map((category) => ({ category, label: LIFE_CATEGORIES[category] }))
+}
+
 export function isFlowKind(kind) { return KIND_SET.has(kind) }
 
 /** Metadata for one kind, or null when the adapter produced an unknown name. */
