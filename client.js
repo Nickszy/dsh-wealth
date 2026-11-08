@@ -191,7 +191,7 @@ window.__ModuleLoader__.load({
 .wealth-shell .wealth-tab:hover{background:var(--wealth-hover);color:var(--wealth-text)}
 .wealth-shell .wealth-tab[aria-current=page]{background:var(--wealth-soft);color:var(--wealth-accent);font-weight:750}
 .wealth-shell .wealth-body{flex:1;min-width:0;display:flex;align-items:stretch;overflow:auto}
-.wealth-shell .wealth-main{flex:1;min-width:0;padding:24px 26px 40px;background:var(--wealth-shell)}
+.wealth-shell .wealth-main{flex:1;min-width:0;padding:24px 26px 40px;background:var(--wealth-shell);container-type:inline-size}
 .wealth-shell .wealth-main>div{max-width:1360px;margin-left:auto;margin-right:auto}
 .wealth-shell .wealth-page-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:20px}
 .wealth-shell .wealth-eyebrow{font-size:10px;letter-spacing:2px;color:var(--wealth-sub);text-transform:uppercase;font-weight:700}
@@ -206,17 +206,17 @@ window.__ModuleLoader__.load({
 .wealth-shell .wealth-charts>section{min-width:0;background:transparent!important;border:0!important;padding:0!important;box-shadow:none!important}
 .wealth-shell .wealth-empty{min-height:180px;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;gap:9px;padding:20px;color:var(--wealth-sub)}
 .wealth-shell .wealth-empty-mark{width:52px;height:52px;border:1px solid var(--wealth-border);border-radius:17px;display:grid;place-items:center;color:var(--wealth-accent);font-size:22px;background:var(--wealth-soft)}
-.wealth-shell .wealth-acct-layout{display:grid;grid-template-columns:minmax(0,1fr) 310px;gap:16px;align-items:start}
+.wealth-shell .wealth-acct-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(250px,300px);gap:16px;align-items:start}
 .wealth-shell .wealth-account-row{display:grid;grid-template-columns:42px minmax(100px,1fr) minmax(100px,1fr) auto;gap:13px;align-items:center;padding:13px 8px;border-bottom:1px solid var(--wealth-border);border-radius:12px}
 .wealth-shell .wealth-account-row:last-child{border-bottom:0}
 .wealth-shell .wealth-account-row:hover{background:var(--wealth-hover)}
-.wealth-shell .wealth-acct-row{display:grid;grid-template-columns:42px minmax(130px,1.5fr) minmax(90px,1fr) auto 22px;gap:12px;align-items:center;padding:11px 12px;border-radius:14px;cursor:pointer}
+.wealth-shell .wealth-acct-row{display:grid;grid-template-columns:38px minmax(90px,1.4fr) minmax(70px,1fr) auto 18px;gap:10px;align-items:center;padding:10px 10px;border-radius:14px;cursor:pointer;min-width:0}
 .wealth-shell .wealth-acct-row:hover{background:var(--wealth-hover)}
 .wealth-shell .wealth-acct-row.is-open{background:var(--wealth-soft)}
 .wealth-shell .wealth-account-badge{width:38px;height:38px;border-radius:12px;display:grid;place-items:center;font-weight:750;font-size:15px;background:var(--wealth-soft);color:var(--wealth-accent);flex:none}
 .wealth-shell .wealth-bar{height:4px;border-radius:5px;background:var(--wealth-border);overflow:hidden;margin-top:7px}
 .wealth-shell .wealth-bar i{display:block;height:100%;background:linear-gradient(90deg,var(--wealth-accent),var(--wealth-accent2));border-radius:5px}
-.wealth-shell .wealth-nested{padding:0 12px 14px 66px}
+.wealth-shell .wealth-nested{padding:0 8px 12px 52px}
 .wealth-shell .wealth-nested-card{background:var(--wealth-soft);border:1px solid var(--wealth-border);border-radius:16px;padding:6px 14px;overflow-x:auto}
 .wealth-shell .wealth-nested-card table{min-width:0;width:100%}
 .wealth-shell .wealth-nested-card th,.wealth-shell .wealth-nested-card td{padding:8px 8px;font-size:12px;white-space:nowrap}
@@ -253,6 +253,11 @@ window.__ModuleLoader__.load({
 .wealth-shell .wealth-nav:hover{background:var(--wealth-hover);color:var(--wealth-text)}
 .wealth-shell .wealth-nav[aria-current=page]{background:var(--wealth-soft);color:var(--wealth-accent);font-weight:750}
 .wealth-shell .wealth-rail-foot{margin-top:12px;padding-top:10px;border-top:1px solid var(--wealth-border);display:flex;flex-direction:column;gap:4px}
+.wealth-shell .wealth-kpis{display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr;gap:14px;margin-bottom:16px}
+.wealth-shell .wealth-chart-row{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(270px,1fr);gap:16px;margin-bottom:16px;align-items:stretch}
+@container(max-width:1100px){.wealth-kpis{grid-template-columns:1fr 1fr}.wealth-chart-row{grid-template-columns:1fr}.wealth-acct-layout{grid-template-columns:1fr}.wealth-summary{position:static}}
+@container(max-width:760px){.wealth-acct-row .wealth-alloc{display:none}.wealth-acct-row{grid-template-columns:36px minmax(90px,1fr) auto 16px}}
+@container(max-width:620px){.wealth-kpis{grid-template-columns:1fr}}
 @container(max-width:1200px){.wealth-shell .wealth-acct-layout{grid-template-columns:1fr}.wealth-shell .wealth-summary{position:static}.wealth-shell .wealth-chat{width:270px}.wealth-shell .wealth-charts{grid-template-columns:1fr}.wealth-shell .wealth-charts>section:last-child{border-top:1px solid var(--wealth-border)!important;padding-top:16px!important}}
 @container(max-width:900px){.wealth-shell .wealth-rail{width:66px;padding:16px 8px}.wealth-shell .wealth-brand>div,.wealth-shell .wealth-nav-label{display:none}.wealth-shell .wealth-brand{justify-content:center;padding:0 0 12px}.wealth-shell .wealth-nav{justify-content:center;padding:10px 6px}.wealth-shell .wealth-body{flex-wrap:wrap}.wealth-shell .wealth-main{flex:0 0 100%;width:100%;padding:20px 16px}.wealth-shell .wealth-chat{width:100%;position:relative;top:0;height:520px;min-height:0;border-left:0;border-top:1px solid}.wealth-shell .wealth-topbar{padding:8px 12px;gap:10px}.wealth-shell .wealth-topbar .wealth-wordmark{display:none}.wealth-shell .wealth-modal{padding:18px 16px}.wealth-shell .wealth-acct-row{grid-template-columns:36px minmax(90px,1fr) auto 20px}.wealth-shell .wealth-acct-row .wealth-alloc{display:none}.wealth-shell .wealth-nested{padding-left:12px}.wealth-shell .wealth-title{font-size:22px}}
 @media(prefers-reduced-motion:reduce){.wealth-shell *{transition:none!important;animation:none!important}}
@@ -303,6 +308,7 @@ window.__ModuleLoader__.load({
       settings: ['M12 8.6a3.4 3.4 0 1 0 0 6.8 3.4 3.4 0 0 0 0-6.8', 'M12 2.5v2.2', 'M12 19.3v2.2', 'M2.5 12h2.2', 'M19.3 12h2.2', 'm5 5 1.6 1.6', 'm17.4 17.4 1.6 1.6', 'm19 5-1.6 1.6', 'm6.6 17.4L5 19'],
       refresh: ['M20 12a8 8 0 1 1-2.34-5.66', 'M20 4v5h-5'],
       chat: ['M21 12a8 8 0 0 1-8 8H6l-3 2V12a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8z'],
+      spark: ['M12 3v3', 'M12 18v3', 'M3 12h3', 'M18 12h3', 'm5.6 5.6 2.1 2.1', 'm16.3 16.3 2.1 2.1', 'm18.4 5.6-2.1 2.1', 'm7.7 16.3-2.1 2.1'],
     }
     function NavIcon({ id, size = 17 }) {
       return h('svg', { width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true }, (NAV_PATHS[id] || []).map((d, i) => h('path', { key: i, d })))
@@ -391,9 +397,35 @@ window.__ModuleLoader__.load({
             state && chatOpen ? h(Chat, { t, state, reload, busy }) : null)))
     }
 
+    function Spark({ t, values, color, height = 46 }) {
+      if (!values || values.length < 2) return null
+      const width = 160
+      const lo = Math.min(...values)
+      const hi = Math.max(...values)
+      const span = hi - lo || 1
+      const pts = values.map((v, i) => [(i / (values.length - 1)) * width, height - 4 - ((v - lo) / span) * (height - 8)])
+      const line = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ')
+      const area = line + ' L' + width + ',' + height + ' L0,' + height + ' Z'
+      const gid = 'zw-kpi-' + String(color).replace('#', '')
+      return h('svg', { viewBox: '0 0 ' + width + ' ' + height, width: '100%', height, preserveAspectRatio: 'none', 'aria-hidden': true, style: { display: 'block' } },
+        h('defs', null, h('linearGradient', { id: gid, x1: 0, y1: 0, x2: 0, y2: 1 },
+          h('stop', { offset: '0%', stopColor: color, stopOpacity: .3 }),
+          h('stop', { offset: '100%', stopColor: color, stopOpacity: 0 }))),
+        h('path', { d: area, fill: 'url(#' + gid + ')' }),
+        h('path', { d: line, fill: 'none', stroke: color, strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }))
+    }
+
     function Overview({ t, state, call, busy, navigate, openAccount }) {
       const s = state.summary, db = state.ledger, cur = s.baseCurrency
       const positiveTotal = s.accounts.reduce((sum, a) => sum + Math.max(0, a.valueBase || 0), 0)
+      const history = (s.history || []).filter(x => x.baseCurrency === cur && Number.isFinite(x.totalValueBase))
+      const histValues = history.map(x => x.totalValueBase)
+      const lastV = histValues.length ? histValues[histValues.length - 1] : s.totalValueBase
+      const prevV = histValues.length > 7 ? histValues[histValues.length - 8] : (histValues.length > 1 ? histValues[0] : null)
+      const trend = prevV != null ? lastV - prevV : null
+      const trendPct = prevV ? trend / prevV : null
+      const groupCount = { cash: 0, credit: 0, invest: 0 }
+      s.accounts.forEach(a => { const acc = db.accounts.find(x => x.id === a.accountId); groupCount[accountGroup(acc && acc.type)] += 1 })
       const [digest, setDigest] = React.useState(null)
       const todayKey = new Date().toISOString().slice(0, 10)
       // 每日提醒：当天首次打开时显示一次，点「知道了」后当天不再出现，次日自动恢复。
@@ -409,28 +441,43 @@ window.__ModuleLoader__.load({
         fetch('/portfolio/api/digest?days=7', { headers: { accept: 'application/json' } }).then(r => r.json()).then(d => { if (live && d.ok) setDigest(d) }).catch(() => {})
         return () => { live = false }
       }, [db.updatedAt])
+      const pill = (up, text) => h('span', { style: { display: 'inline-flex', alignItems: 'center', padding: '3px 9px', borderRadius: 999, fontSize: 11.5, fontWeight: 700, fontVariantNumeric: 'tabular-nums', background: (up ? t.green : t.red) + '18', color: up ? t.green : t.red } }, text)
+      const kpi = (opts) => h('div', { style: { background: t.card, border: '1px solid ' + t.border, borderRadius: 20, padding: '16px 18px', boxShadow: t.shadow, display: 'flex', flexDirection: 'column', gap: 7, minWidth: 0 } },
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+          h('span', { style: { width: 30, height: 30, borderRadius: 10, background: (opts.color || t.accent) + '16', color: opts.color || t.accent, display: 'grid', placeItems: 'center', flex: 'none' } }, h(NavIcon, { id: opts.icon, size: 16 })),
+          h('span', { style: { fontSize: 11.5, color: t.sub, fontWeight: 650, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, opts.label)),
+        h('div', { style: { fontSize: opts.big ? 30 : 23, fontWeight: 780, letterSpacing: -.9, lineHeight: 1.1, fontVariantNumeric: 'tabular-nums', color: opts.valueColor || t.text } }, opts.value),
+        opts.sub ? h('div', { style: { fontSize: 11.5, color: t.sub, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' } }, opts.sub) : null,
+        opts.spark ? h('div', { style: { marginTop: 'auto', paddingTop: 4 } }, opts.spark) : null)
+      const pnlPct = s.totalCostBase > 0 ? s.totalPnlBase / s.totalCostBase : null
+      const digestLines = (digest && digest.lines) || []
       return h('div', null,
-        (s.warnings || []).length ? h('details', { style: { ...T.card(t), marginBottom: 16, color: t.sub, fontSize: 12 } }, h('summary', { style: { cursor: 'pointer' } }, '估值提示 · ' + s.warnings.length + ' 项价格或汇率信息需要核对'), s.warnings.map((w, i) => { const position = db.holdings.find(p => p.id === w.holdingId); const ins = db.instruments.find(x => x.id === position?.instrumentId); return h('div', { key: i, style: { marginTop: 8 } }, (ins ? ins.name + ' · ' : '') + w.message) })) : null,
-        h('section', { className: 'wealth-hero', 'aria-label': '总资产' },
-          h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 } }, h('span', { style: { color: t.sub, fontSize: 12 } }, '总资产 · 全部账户'), h('span', { style: { fontSize: 10, color: t.sub } }, db.updatedAt ? '更新于 ' + new Date(db.updatedAt).toLocaleString('zh-CN') : '等待第一笔记录')),
-          h('div', { className: 'wealth-asset-value' }, fmtMoney(s.totalValueBase), h('small', null, cur)),
-          h('div', { style: { display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginTop: -10, marginBottom: 12, fontSize: 12.5 } },
-            h('span', { style: { padding: '4px 11px', borderRadius: 999, fontWeight: 700, fontVariantNumeric: 'tabular-nums', background: (s.totalPnlBase >= 0 ? t.green : t.red) + '18', color: s.totalPnlBase >= 0 ? t.green : t.red } },
-              (s.totalPnlBase >= 0 ? '▲ ' : '▼ ') + fmtMoney(Math.abs(s.totalPnlBase), cur) + ' · ' + fmtPct(s.totalCostBase > 0 ? s.totalPnlBase / s.totalCostBase : null)),
-            h('span', { style: { color: t.sub } }, '浮动盈亏')),
-          h('div', { className: 'wealth-metrics' },
-            h('div', null, h('span', { style: T.label(t) }, '持仓总成本'), h('strong', null, fmtMoney(s.totalCostBase, cur))),
-            h('div', null, h('span', { style: T.label(t) }, '浮动盈亏'), h('strong', { style: { color: s.totalPnlBase >= 0 ? t.green : t.red } }, fmtMoney(s.totalPnlBase, cur))),
-            h('div', null, h('span', { style: T.label(t) }, '账户 / 持仓'), h('strong', null, db.accounts.length + ' / ' + db.holdings.length))),
-          h(DashboardCharts, { t, state, call, busy })),
-        digest && !digestHidden ? h('section', { style: { ...T.card(t), marginBottom: 16, borderColor: t.accent + '55' }, 'aria-label': '今日提醒', role: 'status' },
-          h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, marginBottom: 6 } },
-            h('strong', { style: { fontSize: 15 } }, '今日提醒', h('span', { style: { fontWeight: 400, color: t.sub, fontSize: 11, marginLeft: 7 } }, digest.date)),
-            h('button', { style: { ...T.btn(t, false), padding: '3px 10px', fontSize: 11 }, onClick: dismissDigest }, '知道了')),
-          digest.lines.map((line, i) => h('div', { key: i, style: { fontSize: 12.5, color: i === 0 ? t.text : t.sub, lineHeight: 1.8, fontVariantNumeric: 'tabular-nums' } }, line)),
-          h('div', { style: { fontSize: 10.5, color: t.sub, marginTop: 6 } }, '每天首次打开显示一次；可让资产助手复述或追问。')) : null,
-        h('section', { style: T.card(t), 'aria-label': '我的账户' },
-          h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 5 } }, h('strong', { style: { fontSize: 15, fontWeight: 600 } }, '我的账户', h('span', { style: { fontWeight: 400, color: t.sub, marginLeft: 7, fontSize: 12 } }, db.accounts.length)), h('button', { style: T.btn(t, false), onClick: () => navigate('accounts') }, '管理账户 ↗')),
+        (s.warnings || []).length ? h('details', { style: { background: t.red + '0d', border: '1px solid ' + t.red + '30', borderRadius: 14, padding: '10px 14px', marginBottom: 14, color: t.sub, fontSize: 12 } },
+          h('summary', { style: { cursor: 'pointer', color: t.red, fontWeight: 650 } }, '估值提示 · ' + s.warnings.length + ' 项价格或汇率信息需要核对'),
+          s.warnings.map((w, i) => { const position = db.holdings.find(p => p.id === w.holdingId); const ins = db.instruments.find(x => x.id === position?.instrumentId); return h('div', { key: i, style: { marginTop: 8 } }, (ins ? ins.name + ' · ' : '') + w.message) })) : null,
+        h('div', { className: 'wealth-kpis' },
+          kpi({ label: '总资产 · ' + cur, icon: 'holdings', value: fmtMoney(s.totalValueBase), big: true,
+            sub: trend != null ? pill(trend >= 0, (trend >= 0 ? '▲ ' : '▼ ') + fmtMoney(Math.abs(trend)) + ' · ' + fmtPct(trendPct) + ' 近 7 天') : pill(s.totalPnlBase >= 0, (s.totalPnlBase >= 0 ? '▲ ' : '▼ ') + fmtPct(pnlPct)),
+            spark: h(Spark, { t, values: histValues, color: t.accent }) }),
+          kpi({ label: '持仓成本', icon: 'analysis', value: fmtMoney(s.totalCostBase), color: t.terra,
+            sub: h('span', null, db.holdings.length + ' 项持仓 · ' + db.accounts.length + ' 个账户') }),
+          kpi({ label: '浮动盈亏', icon: 'overview', value: fmtMoney(s.totalPnlBase), color: s.totalPnlBase >= 0 ? t.green : t.red, valueColor: s.totalPnlBase >= 0 ? t.green : t.red,
+            sub: h('span', null, '成本回报 ' + fmtPct(pnlPct)) }),
+          kpi({ label: '账户 / 持仓', icon: 'accounts', value: db.accounts.length + ' / ' + db.holdings.length, color: t.accent2 || t.accent,
+            sub: h('span', null, groupCount.cash + ' 现金 · ' + groupCount.invest + ' 投资 · ' + groupCount.credit + ' 信用') })),
+        h(DashboardCharts, { t, state, call, busy }),
+        digest && !digestHidden ? h('div', { role: 'status', style: { display: 'flex', alignItems: 'flex-start', gap: 10, background: t.accentSoft || t.soft, border: '1px solid ' + t.accent + '30', borderRadius: 16, padding: '11px 15px', marginBottom: 16 } },
+          h('span', { style: { color: t.accent, flex: 'none', marginTop: 1 } }, h(NavIcon, { id: 'spark', size: 17 })),
+          h('div', { style: { flex: 1, minWidth: 0 } },
+            h('div', { style: { fontSize: 10.5, fontWeight: 750, letterSpacing: .8, color: t.accent, marginBottom: 2 } }, '今日提醒' + (digest.date ? ' · ' + digest.date : '')),
+            digestLines.length ? h('div', { style: { fontSize: 12.5, color: t.text, lineHeight: 1.7 } }, digestLines[0]) : null,
+            digestLines.length > 1 ? h('div', { style: { fontSize: 11.5, color: t.sub, lineHeight: 1.7, marginTop: 2 } }, digestLines.slice(1).join(' · ')) : null),
+          h('button', { style: { ...T.btn(t, false), padding: '3px 9px', fontSize: 11, minHeight: 26 }, onClick: dismissDigest }, '知道了')) : null,
+        h('section', { style: { background: t.card, border: '1px solid ' + t.border, borderRadius: 20, padding: '16px 18px', boxShadow: t.shadow }, 'aria-label': '我的账户' },
+          h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 } },
+            h('strong', { style: { fontSize: 15, fontWeight: 750, flex: 1 } }, '我的账户'),
+            h('span', { style: { fontSize: 11, fontWeight: 700, color: t.accent, background: t.accentSoft || t.soft, borderRadius: 999, padding: '2px 9px' } }, db.accounts.length),
+            h('button', { style: T.btn(t, false), onClick: () => navigate('accounts') }, '管理账户 ↗')),
           !s.accounts.length ? h('div', { className: 'wealth-empty' },
             h('span', { className: 'wealth-empty-mark' }, '▣'),
             h('strong', { style: { fontSize: 16, fontWeight: 500, color: t.text } }, '三步，拥有一个完整的资产管家'),
@@ -443,9 +490,9 @@ window.__ModuleLoader__.load({
             const share = positiveTotal ? Math.max(0, a.valueBase || 0) / positiveTotal * 100 : 0
             return h('div', { key: a.accountId, className: 'wealth-account-row', role: 'button', tabIndex: 0, title: '查看账户详情', style: { cursor: 'pointer' }, onClick: () => openAccount(a.accountId), onKeyDown: e => { if (e.key === 'Enter') openAccount(a.accountId) } },
               h('div', { className: 'wealth-account-badge', style: i % 2 ? { color: t.terra, background: t.panel } : {} }, (account?.name || '账').slice(0, 1)),
-              h('div', null, h('div', { style: { fontSize: 13, fontWeight: 600 } }, account?.name || a.accountId), h('div', { style: { color: t.sub, fontSize: 11, marginTop: 3 } }, (account?.currency || cur) + ' · ' + a.holdings + ' 项持仓')),
+              h('div', null, h('div', { style: { fontSize: 13, fontWeight: 650 } }, account?.name || a.accountId), h('div', { style: { color: t.sub, fontSize: 11, marginTop: 3 } }, (account?.currency || cur) + ' · ' + a.holdings + ' 项持仓')),
               h('div', { className: 'wealth-account-allocation', style: { padding: '0 22px' } }, h('div', { style: { fontSize: 10, color: t.sub } }, '资产占比 ' + share.toFixed(1) + '%'), h('div', { className: 'wealth-bar' }, h('i', { style: { width: share + '%' } }))),
-              h('div', { style: { textAlign: 'right', fontVariantNumeric: 'tabular-nums' } }, h('strong', { style: { fontSize: 14, fontWeight: 600 } }, fmtMoney(a.valueBase, cur)), h('div', { style: { fontSize: 11, marginTop: 3, color: a.pnlBase >= 0 ? t.green : t.red } }, '浮盈 ' + fmtMoney(a.pnlBase, cur))))
+              h('div', { style: { textAlign: 'right', fontVariantNumeric: 'tabular-nums' } }, h('strong', { style: { fontSize: 14, fontWeight: 650 } }, fmtMoney(a.valueBase, cur)), h('div', { style: { fontSize: 11, marginTop: 3, color: a.pnlBase >= 0 ? t.green : t.red } }, '浮盈 ' + fmtMoney(a.pnlBase, cur))))
           })))
     }
     function Analysis({ t, state, navigate, fixedAccounts, onBackfill }) {
@@ -1951,28 +1998,112 @@ window.__ModuleLoader__.load({
       const s = state.summary, cur = s.baseCurrency
       const [group, setGroup] = React.useState('accounts')
       const history = (s.history || []).filter(x => x.baseCurrency === cur && Number.isFinite(x.totalValueBase))
-      const values = history.map(x => x.totalValueBase)
-      const lo = Math.min(...values), hi = Math.max(...values), span = hi - lo || Math.max(hi * .05, 1)
-      const points = values.map((v, i) => [(i / Math.max(1, values.length - 1)) * 560 + 20, 155 - ((v - lo) / span) * 120])
-      const rows = (group === 'accounts' ? s.accounts.map(a => ({ label: state.ledger.accounts.find(x => x.id === a.accountId)?.name || a.accountId, value: a.valueBase })) : (s[group] || []).map(a => ({ label: group === 'currencies' ? a.currency : ({ stock: '股票', fund: '基金', etf: 'ETF', cash: '现金', bond: '债券', crypto: '数字资产', other: '其他' }[a.assetClass] || a.assetClass), value: a.valueBase }))).filter(a => a.value > 0)
-      const total = rows.reduce((sum, a) => sum + Math.max(0, a.value), 0)
+      const rows = (group === 'accounts'
+        ? (s.accounts || []).map(a => ({ label: state.ledger.accounts.find(x => x.id === a.accountId)?.name || a.accountId, value: a.valueBase }))
+        : (s[group] || []).map(a => ({ label: group === 'currencies' ? a.currency : assetLabel(a.assetClass), value: a.valueBase })))
+        .filter(a => a.value > 0)
+        .sort((a, b) => b.value - a.value)
+      const total = rows.reduce((sum, a) => sum + a.value, 0)
       const colors = t.cat || [t.accent, t.terra, t.green]
       let offset = 0
-      const segments = rows.filter(a => a.value > 0).map((a, i) => { const start = offset; offset += a.value / total * 100; return colors[i % colors.length] + ' ' + start + '% ' + offset + '%' })
-      return h('div', { className: 'wealth-charts' },
-        h('section', { style: T.card(t), 'aria-label': '资产趋势' },
-          h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 } }, h('strong', { style: { fontSize: 13, fontWeight: 600 } }, '资产轨迹'), h('button', { style: T.btn(t, false), disabled: busy, onClick: () => call('state') }, '记录今日快照')),
-          history.length > 1 ? h('svg', { viewBox: '0 0 600 200', role: 'img', 'aria-label': history.map(x => (x.date || x.at || '') + ': ' + x.totalValueBase + ' ' + cur).join('；'), style: { width: '100%', height: 240, display: 'block' } },
-            [35, 95, 155].map(y => h('line', { key: y, x1: 20, y1: y, x2: 580, y2: y, stroke: t.border, strokeDasharray: '4 5' })),
-            h('polygon', { points: '20,160 ' + points.map(p => p.join(',')).join(' ') + ' 580,160', fill: t.accent, opacity: .08 }), h('polyline', { points: points.map(p => p.join(',')).join(' '), fill: 'none', stroke: t.accent, strokeWidth: 2.5, strokeLinejoin: 'round', strokeLinecap: 'round' }),
-            points.map((p, i) => h('circle', { key: i, cx: p[0], cy: p[1], r: 3, fill: t.accent }, h('title', null, (history[i].date || history[i].at || '') + ' · ' + fmtMoney(values[i], cur)))),
-            h('text', { x: 20, y: 190, fill: t.sub, fontSize: 11 }, (history[0].date || history[0].at || '').slice(0, 10)), h('text', { x: 580, y: 190, textAnchor: 'end', fill: t.sub, fontSize: 11 }, (history.at(-1).date || history.at(-1).at || '').slice(0, 10))) : h('div', { style: { height: 210, display: 'grid', placeContent: 'center', color: t.sub, fontSize: 13, textAlign: 'center', gap: 8 } }, h('span', { className: 'wealth-empty-mark', style: { margin: '0 auto 6px' } }, '⌁'), h('span', { style: { fontSize: 14, color: t.text } }, history.length ? '第一份快照，已经就位' : '你的资产故事，从这里开始'), h('small', null, '至少两个日期的快照后显示趋势')),
-          h('small', { style: { color: t.sub, fontSize: 11 } }, '每日保存时记录估值快照；曲线包含出入金、交易及汇率影响，不代表投资收益率。')),
-        h('section', { style: T.card(t), 'aria-label': '资产分布' },
-          h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 18 } }, h('strong', { style: { fontSize: 13, fontWeight: 600 } }, '资产配置'), h('select', { 'aria-label': '分布维度', value: group, onChange: e => setGroup(e.target.value), style: { ...T.input(t), width: 115 } }, [['accounts','按账户'],['assetClasses','按资产类别'],['currencies','按币种']].map(([v,l]) => h('option', { key: v, value: v }, l)))),
-          h('div', { style: { display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap' } },
-            h('div', { role: 'img', 'aria-label': '资产占比分布', style: { width: 108, height: 108, borderRadius: '50%', background: segments.length ? 'conic-gradient(' + segments.join(',') + ')' : t.border, display: 'grid', placeItems: 'center', flexShrink: 0 } }, h('div', { style: { width: 80, height: 80, background: t.card, borderRadius: '50%', display: 'grid', placeContent: 'center', textAlign: 'center', fontSize: 12, color: t.sub } }, h('strong', { style: { color: t.text, fontSize: 20 } }, rows.filter(a => a.value > 0).length), '项配置')),
-            h('div', { style: { flex: 1, minWidth: 100 } }, rows.length ? rows.map((a,i) => h('div', { key: i, style: { marginBottom: 10, fontSize: 12 } }, h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 8 } }, h('span', null, a.label), h('strong', null, (total ? Math.max(0,a.value) / total * 100 : 0).toFixed(1) + '%')), h('div', { style: { color: t.sub, marginTop: 3 } }, fmtMoney(a.value, cur)))) : h('span', { style: { color: t.sub, fontSize: 12 } }, '导入持仓后显示分布')))))
+      const segments = rows.map((a, i) => {
+        const from = offset
+        offset += a.value / total * 100
+        return colors[i % colors.length] + ' ' + from.toFixed(2) + '% ' + offset.toFixed(2) + '%'
+      })
+      const vals = history.map(x => x.totalValueBase)
+      const lo = Math.min(...vals)
+      const hi = Math.max(...vals)
+      const span = hi - lo || Math.max(hi * .05, 1)
+      const W = 640, H = 210, PL = 46, PR = 14, PT = 14, PB = 26
+      const iw = W - PL - PR
+      const ih = H - PT - PB
+      const x = (i) => PL + (iw * i) / Math.max(1, history.length - 1)
+      const y = (v) => PT + ih - ((v - lo) / span) * ih
+      const pts = vals.map((v, i) => [x(i), y(v)])
+      const line = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ')
+      const area = line + ' L' + x(vals.length - 1) + ',' + (PT + ih) + ' L' + PL + ',' + (PT + ih) + ' Z'
+      const gid = 'zw-area-' + String(t.accent).replace('#', '')
+      const ticks = [0, .5, 1].map(f => lo + (hi - lo) * f)
+      const marks = [0, Math.floor((history.length - 1) / 2), history.length - 1].filter((v, i, a) => a.indexOf(v) === i)
+      const dateOf = (row) => (row.date || row.at || '').slice(0, 10)
+      const card = { background: t.card, border: '1px solid ' + t.border, borderRadius: 20, padding: '18px 20px', boxShadow: t.shadow, minWidth: 0 }
+
+      const trendHeader = h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, flexWrap: 'wrap' } },
+        h('div', { style: { flex: 1, minWidth: 120 } },
+          h('div', { style: { fontSize: 15, fontWeight: 750 } }, '资产轨迹'),
+          h('div', { style: { fontSize: 11.5, color: t.sub, marginTop: 2 } },
+            history.length > 1 ? history.length + ' 天快照 · ' + dateOf(history[0]) + ' → ' + dateOf(history[history.length - 1]) : '每日估值快照')),
+        h('button', { style: T.btn(t, false), disabled: busy, onClick: () => call('state') }, '记录今日快照'))
+
+      const gridLines = ticks.map((v, i) => h('g', { key: 'g' + i },
+        h('line', { x1: PL, x2: W - PR, y1: y(v), y2: y(v), stroke: t.border, strokeWidth: 1 }),
+        h('text', { x: PL - 8, y: y(v) + 3.5, textAnchor: 'end', fontSize: 10, fill: t.sub }, fmtCompact(v))))
+
+      const dots = pts.map((p, i) => h('circle', {
+        key: 'p' + i, cx: p[0], cy: p[1], r: 2.8, fill: t.accent, opacity: i === pts.length - 1 ? 1 : .55,
+      }, h('title', null, dateOf(history[i]) + ' · ' + fmtMoney(vals[i], cur))))
+
+      const xLabels = marks.map((i) => h('text', {
+        key: 'd' + i, x: x(i), y: H - PB + 18,
+        textAnchor: i === 0 ? 'start' : i === history.length - 1 ? 'end' : 'middle',
+        fontSize: 10, fill: t.sub,
+      }, dateOf(history[i]).slice(5)))
+
+      const trendChart = history.length > 1
+        ? h('svg', { viewBox: '0 0 ' + W + ' ' + H, role: 'img', 'aria-label': '资产轨迹历史快照', style: { width: '100%', height: 'auto', display: 'block' } },
+          h('defs', null, h('linearGradient', { id: gid, x1: 0, y1: 0, x2: 0, y2: 1 },
+            h('stop', { offset: '0%', stopColor: t.accent, stopOpacity: .22 }),
+            h('stop', { offset: '100%', stopColor: t.accent, stopOpacity: 0 }))),
+          gridLines,
+          h('path', { d: area, fill: 'url(#' + gid + ')' }),
+          h('path', { d: line, fill: 'none', stroke: t.accent, strokeWidth: 2.4, strokeLinecap: 'round', strokeLinejoin: 'round' }),
+          dots,
+          xLabels)
+        : h('div', { className: 'wealth-empty', style: { minHeight: 170 } },
+          h('span', { className: 'wealth-empty-mark' }, '⌁'),
+          h('span', { style: { fontSize: 13 } }, history.length ? '第一份快照，已经就位' : '你的资产故事，从这里开始'),
+          h('small', { style: { fontSize: 11 } }, '至少两个日期的快照后显示趋势'))
+
+      const legend = rows.length
+        ? h('div', { style: { flex: 1, minWidth: 150 } }, rows.slice(0, 6).map((a, i) => h('div', {
+          key: i, style: { display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0', borderTop: i ? '1px solid ' + t.border : 'none' },
+        },
+          h('span', { style: { width: 8, height: 8, borderRadius: 999, background: colors[i % colors.length], flex: 'none' } }),
+          h('span', { style: { flex: 1, fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, a.label),
+          h('span', { style: { fontSize: 11.5, fontWeight: 700, fontVariantNumeric: 'tabular-nums' } }, (a.value / total * 100).toFixed(1) + '%'),
+          h('span', { style: { fontSize: 11, color: t.sub, fontVariantNumeric: 'tabular-nums', minWidth: 58, textAlign: 'right' } }, fmtMoney(a.value)))))
+        : h('div', { className: 'wealth-empty', style: { minHeight: 110 } }, '导入持仓后显示分布')
+
+      const donut = rows.length
+        ? h('div', {
+          role: 'img', 'aria-label': '资产占比环形图',
+          style: { width: 132, height: 132, borderRadius: '50%', background: 'conic-gradient(' + segments.join(',') + ')', display: 'grid', placeItems: 'center', flexShrink: 0 },
+        },
+          h('div', { style: { width: 96, height: 96, borderRadius: '50%', background: t.card, display: 'grid', placeContent: 'center', textAlign: 'center' } },
+            h('strong', { style: { fontSize: 17, fontWeight: 780, fontVariantNumeric: 'tabular-nums' } }, fmtCompact(total)),
+            h('span', { style: { fontSize: 10, color: t.sub, marginTop: 1 } }, '总资产')))
+        : null
+
+      const configHeader = h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 } },
+        h('div', { style: { flex: 1 } },
+          h('div', { style: { fontSize: 15, fontWeight: 750 } }, '资产配置'),
+          h('div', { style: { fontSize: 11.5, color: t.sub, marginTop: 2 } }, rows.length + ' 项 · ' + cur)),
+        h('select', {
+          'aria-label': '分布维度', value: group, onChange: e => setGroup(e.target.value),
+          style: { ...T.input(t), width: 104, minHeight: 32, padding: '5px 9px', fontSize: 12 },
+        }, [['accounts', '按账户'], ['assetClasses', '按类别'], ['currencies', '按币种']].map(([v, l]) => h('option', { key: v, value: v }, l))))
+
+      return h('div', { className: 'wealth-chart-row' },
+        h('section', { style: card, 'aria-label': '资产轨迹' },
+          trendHeader,
+          trendChart,
+          h('div', { style: { fontSize: 10.5, color: t.sub, marginTop: 8 } }, '曲线包含出入金、交易与汇率影响，不代表投资收益率。')),
+        h('section', { style: card, 'aria-label': '资产配置' },
+          configHeader,
+          rows.length
+            ? h('div', { style: { display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' } }, donut, legend)
+            : legend))
     }
 
     function Chat({ t, state, reload, busy }) {
