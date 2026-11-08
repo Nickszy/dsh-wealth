@@ -10,8 +10,9 @@ const FIELDS = {
   qieman:['apiKey','bearerToken','refreshToken','clientId'],
   tiger:['accessToken','refreshToken','clientId'],
   fosun:['apiKey','privateKey','serverPublicKey'],
-  // 应用级密钥（不属于任何来源授权）：同花顺金融数据 API。
+  // 应用级密钥（不属于任何来源授权）：同花顺金融数据 API、腾讯自选股 westock-mcp。
   finapi:['token'],
+  westock:['accessToken','refreshToken','clientId','expiresAt'],
   ib:[],
   custom:[],
 }
@@ -64,6 +65,7 @@ export function createCredentialStore(dir = DATA_DIR) {
       if(connector==='tiger')return !!value.accessToken
       if(connector==='fosun')return ['apiKey','privateKey','serverPublicKey'].every(k=>!!value[k])
       if(connector==='finapi')return !!value.token
+      if(connector==='westock')return !!value.accessToken
       return false
     },
   }

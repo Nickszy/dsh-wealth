@@ -145,7 +145,8 @@ export async function fetchThsSeries(target, { from = '2015-01-01', to, token, f
   const rows = []
   for (let cursor = start; cursor <= end;) {
     const chunkEnd = Math.min(end, cursor + TEN_YEARS_MS)
-    const json = await thsRequest(A_SHARE_PRICES, { thscode: sym.thscode, interval: '1d', start: cursor, end: chunkEnd, adjust: 'none' }, options)
+    // forward(前复权) 与东方财富 fqt=1 口径一致，多个来源合并才不会在接缝处跳价。
+    const json = await thsRequest(A_SHARE_PRICES, { thscode: sym.thscode, interval: '1d', start: cursor, end: chunkEnd, adjust: 'forward' }, options)
     rows.push(...parseThsBars(json))
     if (chunkEnd >= end) break
     cursor = chunkEnd + DAY_MS

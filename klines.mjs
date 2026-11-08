@@ -1,11 +1,13 @@
 // 历史日线行情：东方财富公开接口（沪深股票/ETF、港股）与场外基金净值。
-// 配置了同花顺金融数据 API Key 时优先用它（沪深股票 / ETF / 场外基金），失败再回落东财。
-// 无密钥也能工作；磁盘缓存保留全部历史，之后只增量补齐尾部数据。
+// 可选增强来源（按优先级）：腾讯自选股 westock-mcp（微信授权，A/港/美股）→
+// 同花顺金融数据 API（API Key，沪深股票 / ETF / 场外基金）→ 东方财富兜底。
+// 磁盘缓存保留全部历史，之后只增量补齐尾部数据。
 // 解析失败或网络失败只产生警告，绝不返回编造的价格。
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { normalizeSymbol } from './symbols.mjs'
 import { fetchThsSeries } from './ths-data.mjs'
+import { fetchWestockSeries } from './westock-mcp.mjs'
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36'
 const KLINE_URL = 'https://push2his.eastmoney.com/api/qt/stock/kline/get'
@@ -76,8 +78,15 @@ async function getJson(url, headers, fetchImpl, timeoutMs) {
 }
 
 /** 拉取单个标的的日线（不缓存）。from / to 形如 2023-01-01。 */
-export async function fetchKline(target, { from = '2015-01-01', to, fetch: fetchImpl = globalThis.fetch, timeoutMs = 20000, thsToken } = {}) {
+export async function fetchKline(target, { from = '2015-01-01', to, fetch: fetchImpl = globalThis.fetch, timeoutMs = 20000, thsToken, westockToken } = {}) {
   if (!target) return []
+  // 腾讯自选股（westock）：覆盖沪深 / 港 / 美，失败静默回落下一来源。
+  if (westockToken) {
+    try {
+      const rows = await fetchWestockSeries(target, { from, to, accessToken: westockToken, fetch: fetchImpl, timeoutMs })
+      if (rows.length) return rows
+    } catch { /* fall through to the next source */ }
+  }
   // 同花顺金融数据是本机密钥来源，覆盖不到或出错时静默回落东财。
   if (thsToken) {
     try {
@@ -139,7 +148,7 @@ const shiftDay = (date, delta) => {
  * 只有首次拉取或请求更早起始日时才整段重拉。
  * 返回 { prices: Map<targetKey, [[date, price],...]>, warnings, fetched, cached }。
  */
-export async function loadDailyCloses(instruments, { from = '2015-01-01', fetch: fetchImpl = globalThis.fetch, cachePath, now = Date.now, refresh = false, dataToken } = {}) {
+export async function loadDailyCloses(instruments, { from = '2015-01-01', fetch: fetchImpl = globalThis.fetch, cachePath, now = Date.now, refresh = false, dataToken, westockToken } = {}) {
   const today = new Date(now()).toISOString().slice(0, 10)
   const cache = cachePath ? readKlineCache(cachePath) : { version: 1, entries: {} }
   const targets = new Map()
@@ -161,7 +170,7 @@ export async function loadDailyCloses(instruments, { from = '2015-01-01', fetch:
     let closes = null, lastError = null
     for (let attempt = 0; attempt < 2 && closes === null; attempt++) {
       try {
-        closes = await fetchKline(target, { from: tailFrom, to: today, fetch: fetchImpl, timeoutMs: 20000, thsToken: dataToken })
+        closes = await fetchKline(target, { from: tailFrom, to: today, fetch: fetchImpl, timeoutMs: 20000, thsToken: dataToken, westockToken })
       } catch (error) {
         lastError = error
         if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 300))
@@ -172,7 +181,7 @@ export async function loadDailyCloses(instruments, { from = '2015-01-01', fetch:
       const code = String(target.id).replace(/^[01]\./, '')
       if (/^\d{6}$/.test(code)) {
         const fundTarget = { key: 'fund:' + code, kind: 'fund', id: code, symbol: code, market: 'CN', assetClass: 'fund' }
-        try { closes = await fetchKline(fundTarget, { from: tailFrom, to: today, fetch: fetchImpl, timeoutMs: 20000, thsToken: dataToken }) } catch { /* keep empty */ }
+        try { closes = await fetchKline(fundTarget, { from: tailFrom, to: today, fetch: fetchImpl, timeoutMs: 20000, thsToken: dataToken, westockToken }) } catch { /* keep empty */ }
       }
     }
     if (closes === null) {

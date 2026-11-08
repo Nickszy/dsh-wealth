@@ -21,6 +21,7 @@ import { startTigerDeviceAuth, pollTigerDeviceToken } from './tiger-mcp.mjs'
 import { createQiemanLogin } from './qieman-login.mjs'
 import { generateFosunClientKey, fosunTicketCreate, checkFosunApiKey } from './fosun-client.mjs'
 import { checkThsToken, THS_ADMIN_URL } from './ths-data.mjs'
+import { registerWestockClient, createWestockPkce, buildWestockAuthorizeUrl, exchangeWestockCode, refreshWestockToken, westockCallbackCode } from './westock-mcp.mjs'
 import qrcode from 'qrcode-generator'
 import { createCredentialStore } from './credentials.mjs'
 import { createThsLogin } from './ths-login.mjs'
@@ -93,7 +94,21 @@ export function apply(ctx, config = {}) {
   // 应用级行情数据密钥（同花顺金融数据 API）。不属于任何来源授权，存进同一个加密保险库。
   const DATA_TOKEN_ID = 'app:finapi'
   const dataToken = () => String(vault.get(DATA_TOKEN_ID).token || '')
-  const dataSourceStatus = () => ({ thsData: { configured: vault.configured(DATA_TOKEN_ID, 'finapi'), adminUrl: THS_ADMIN_URL } })
+  // 腾讯自选股 westock-mcp：微信/QQ 扫码授权的行情来源，token 过期前自动续期。
+  const WESTOCK_ID = 'app:westock'
+  let westockLoginSlot = null
+  const westockAuth = async () => {
+    const secret = vault.get(WESTOCK_ID)
+    if (!secret.accessToken) return null
+    const expiresAt = Number(secret.expiresAt || 0)
+    if (!expiresAt || Date.now() < expiresAt - 120_000 || !secret.refreshToken) return secret.accessToken
+    try {
+      const token = await refreshWestockToken({ refreshToken: secret.refreshToken, clientId: secret.clientId })
+      vault.set(WESTOCK_ID, 'westock', { accessToken: token.accessToken, refreshToken: token.refreshToken, clientId: secret.clientId, expiresAt: String(token.expiresAt || '') })
+      return token.accessToken
+    } catch { return secret.accessToken }
+  }
+  const dataSourceStatus = () => ({ westock: { configured: vault.configured(WESTOCK_ID, 'westock') }, thsData: { configured: vault.configured(DATA_TOKEN_ID, 'finapi'), adminUrl: THS_ADMIN_URL } })
   let loginTarget = null
   const login = createThsLogin({ onCookie:cookie=>sync.acceptThsLogin(loginTarget,cookie) })
   const loginStatus = () => {
@@ -290,6 +305,40 @@ export function apply(ctx, config = {}) {
           send(res, 200, { ok: true, ...dataSourceStatus() })
           return
         }
+        if (path === 'api/settings/westock/start') {
+          if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
+          const client = await registerWestockClient()
+          const pkce = createWestockPkce()
+          const state = randomUUID().replaceAll('-', '')
+          westockLoginSlot = { clientId: client.clientId, codeVerifier: pkce.codeVerifier, state, createdAt: Date.now() }
+          send(res, 200, { ok: true, authorizeUrl: buildWestockAuthorizeUrl({ clientId: client.clientId, state, codeChallenge: pkce.codeChallenge }) })
+          return
+        }
+        if (path === 'api/settings/westock/finish') {
+          if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
+          const body = JSON.parse(await readBody(req, 64 * 1024))
+          if (!westockLoginSlot) { send(res, 400, { ok: false, error: { code: 'bad-request', message: '请先发起 westock 授权' } }); return }
+          const parsed = westockCallbackCode(body.callbackUrl)
+          if (!parsed.code) { send(res, 400, { ok: false, error: { code: 'bad-request', message: '回调地址里没有 code，请粘贴完整的 workbuddy:// 回调链接' } }); return }
+          if (parsed.state && westockLoginSlot.state && parsed.state !== westockLoginSlot.state) {
+            westockLoginSlot = null
+            send(res, 400, { ok: false, error: { code: 'bad-request', message: '回调校验失败（state 不一致），请重新发起授权' } })
+            return
+          }
+          const clientId = westockLoginSlot.clientId
+          const token = await exchangeWestockCode({ code: parsed.code, clientId, codeVerifier: westockLoginSlot.codeVerifier })
+          westockLoginSlot = null
+          vault.set(WESTOCK_ID, 'westock', { accessToken: token.accessToken, refreshToken: token.refreshToken, clientId, expiresAt: String(token.expiresAt || '') })
+          send(res, 200, { ok: true, ...dataSourceStatus() })
+          return
+        }
+        if (path === 'api/settings/westock/disconnect') {
+          if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
+          vault.remove(WESTOCK_ID)
+          westockLoginSlot = null
+          send(res, 200, { ok: true, ...dataSourceStatus() })
+          return
+        }
         if (path === 'api/analysis') {
           if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
           const ids = String(url.searchParams.get('accounts') || '').split(',').map(s => s.trim()).filter(Boolean)
@@ -345,7 +394,7 @@ export function apply(ctx, config = {}) {
           if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
           const ids = String(url.searchParams.get('accounts') || '').split(',').map((s) => s.trim()).filter(Boolean)
           const days = Math.min(3650, Math.max(30, Number(url.searchParams.get('days')) || 1095))
-          const result = await computePerformance(load(), { accountIds: ids, days, cachePath: join(DATA_DIR, 'cache', 'klines.json'), dataToken: dataToken() })
+          const result = await computePerformance(load(), { accountIds: ids, days, cachePath: join(DATA_DIR, 'cache', 'klines.json'), dataToken: dataToken(), westockToken: await westockAuth() })
           send(res, 200, { ok: true, ...result })
           return
         }

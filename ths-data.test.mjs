@@ -60,7 +60,7 @@ test('stocks split into 10-year windows; ETFs use the 5-year fund endpoint; OTC 
     const url = new URL(call.url)
     assert.equal(url.pathname, '/api/a-share/prices/historical')
     assert.equal(url.searchParams.get('thscode'), '600519.SH')
-    assert.equal(url.searchParams.get('adjust'), 'none')
+    assert.equal(url.searchParams.get('adjust'), 'forward')
     assert.ok(Number(url.searchParams.get('end')) - Number(url.searchParams.get('start')) <= 10 * 366 * 86400000)
     assert.equal(call.headers['x-api-key'], 'tk')
   }

@@ -656,9 +656,39 @@ window.__ModuleLoader__.load({
       React.useEffect(() => { setBaseSel(cur) }, [cur])
       const [fxEdit, setFxEdit] = React.useState({ cur: '', rate: '' })
       const thsData = state.dataSource?.thsData || {}
+      const westock = state.dataSource?.westock || {}
       const [dataToken, setDataToken] = React.useState('')
       const [dataNote, setDataNote] = React.useState(null)
       const [savingData, setSavingData] = React.useState(false)
+      const [wAuthUrl, setWAuthUrl] = React.useState('')
+      const [wCallback, setWCallback] = React.useState('')
+      const [wBusy, setWBusy] = React.useState(false)
+      const [wNote, setWNote] = React.useState(null)
+      const startWestock = async () => {
+        if (wBusy) return
+        setWBusy(true); setWNote(null)
+        try { const r = await post('settings/westock/start', {}); setWAuthUrl(r.authorizeUrl); setWNote({ ok: true, text: '已生成授权链接：在浏览器里用 QQ / 手机号 / 微信扫码登录。' }) }
+        catch (e) { setWNote({ ok: false, text: e.message }) }
+        finally { setWBusy(false) }
+      }
+      const finishWestock = async () => {
+        if (wBusy || !wCallback.trim()) return
+        setWBusy(true); setWNote(null)
+        try {
+          await post('settings/westock/finish', { callbackUrl: wCallback.trim() })
+          setWNote({ ok: true, text: '已连接腾讯自选股，沪深 / 港股行情将优先使用该数据源。' })
+          setWAuthUrl(''); setWCallback('')
+          await reload?.()
+        } catch (e) { setWNote({ ok: false, text: e.message }) }
+        finally { setWBusy(false) }
+      }
+      const disconnectWestock = async () => {
+        if (wBusy) return
+        setWBusy(true); setWNote(null)
+        try { await post('settings/westock/disconnect', {}); setWNote({ ok: true, text: '已断开腾讯自选股，行情回落同花顺数据 / 东方财富。' }); await reload?.() }
+        catch (e) { setWNote({ ok: false, text: e.message }) }
+        finally { setWBusy(false) }
+      }
       const saveDataToken = async (value) => {
         if (savingData) return
         setSavingData(true); setDataNote(null)
@@ -685,6 +715,24 @@ window.__ModuleLoader__.load({
             h('button', { style: T.btn(t, false), disabled: busy, onClick: async () => { await call('fx.set', { currency: fxEdit.cur, rate: Number(fxEdit.rate) }); setFxEdit({ cur: '', rate: '' }) } }, '保存汇率'),
           ),
           h('div', { style: { marginTop: 10, fontSize: 12, color: t.sub } }, '当前汇率：' + Object.entries(db.fx).map(([c, r]) => c + '→' + cur + ' ' + r).join('　')),
+        ),
+        h('div', { style: { ...T.card(t), marginBottom: 14 } },
+          h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, flexWrap: 'wrap', marginBottom: 6 } },
+            h('strong', { style: { fontSize: 14 } }, '腾讯自选股（行情数据源）'),
+            h('span', { style: { fontSize: 11, color: westock.configured ? t.green : t.sub } }, westock.configured ? '● 已连接' : '○ 未连接')),
+          h('p', { style: { color: t.sub, fontSize: 11.5, lineHeight: 1.65, margin: '0 0 10px' } },
+            '授权后沪深 / 港股日线优先走腾讯自选股官方接口（免费，前复权口径），覆盖比东方财富更稳；场外基金净值与未覆盖标的自动回落同花顺数据 / 东方财富。授权只需一次，token 过期自动续期。'),
+          westock.configured
+            ? h('div', { style: { display: 'flex', gap: 10, flexWrap: 'wrap' } }, h('button', { style: T.btn(t, false), disabled: busy || wBusy, onClick: disconnectWestock }, '断开连接'))
+            : h('div', { style: { display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' } },
+                h('button', { style: T.btn(t, true), disabled: busy || wBusy, onClick: startWestock }, wBusy ? '请稍候…' : '① 发起授权'),
+                wAuthUrl ? h('a', { href: wAuthUrl, target: '_blank', rel: 'noreferrer', style: { ...T.btn(t, false), textDecoration: 'none', display: 'inline-flex', alignItems: 'center' } }, '② 打开授权页面 ↗') : null),
+          wAuthUrl ? h('div', { style: { marginTop: 10 } },
+            h('label', { style: T.label(t) }, '③ 登录后浏览器会跳到 workbuddy://… 的地址，把它完整粘贴到这里'),
+            h('div', { style: { display: 'flex', gap: 10, marginTop: 4, flexWrap: 'wrap' } },
+              h('input', { value: wCallback, onChange: (e) => setWCallback(e.target.value), placeholder: 'workbuddy://workbuddy/mcp/connector:dsh-wealth/oauth/callback?code=…&state=…', style: { ...T.input(t), flex: '1 1 260px' } }),
+              h('button', { style: T.btn(t, true), disabled: busy || wBusy || !wCallback.trim(), onClick: finishWestock }, '完成授权'))) : null,
+          wNote ? h('div', { role: wNote.ok ? 'status' : 'alert', style: { marginTop: 8, fontSize: 11.5, color: wNote.ok ? t.green : t.red } }, wNote.text) : null,
         ),
         h('div', { style: { ...T.card(t), marginBottom: 14 } },
           h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, flexWrap: 'wrap', marginBottom: 6 } },

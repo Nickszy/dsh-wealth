@@ -137,6 +137,59 @@ test('with a data token THS is preferred and eastmoney is the fallback', async (
   assert.deepEqual(fallback.prices.get('em:1.600519'), [['2026-11-06', 99]])
 })
 
+test('source priority: westock first, then THS, eastmoney last', async () => {
+  const instruments = [{ id: 'I1', symbol: '600519', market: 'CN', assetClass: 'stock' }]
+  const now = () => Date.parse('2026-11-08T10:00:00Z')
+  const seen = []
+  const eastmoney = async (url) => {
+    seen.push('eastmoney')
+    return { ok: true, status: 200, json: async () => klineJson(['2026-11-06,1']) }
+  }
+  const ths = async (url) => {
+    seen.push('ths')
+    if (String(url).includes('fuyao.aicubes.cn')) return { ok: true, status: 200, json: async () => ({ code: 0, data: { item: [{ date_ms: Date.parse('2026-11-06T00:00:00+08:00'), close_price: 77 }] } }) }
+    return eastmoney(url)
+  }
+  const reply = (payload) => ({ ok: true, status: 200, headers: { get: (h) => h === 'content-type' ? 'application/json' : null }, text: async () => JSON.stringify(payload) })
+  const mcp = (handler) => async (url, init) => {
+    if (!String(url).includes('stockbuddy.qq.com')) return null
+    const body = JSON.parse(init.body)
+    seen.push('westock')
+    if (body.method === 'initialize') return reply({ jsonrpc: '2.0', id: body.id, result: { serverInfo: { name: 'westock', version: '1' } } })
+    if (body.method === 'notifications/initialized') return { ok: true, status: 202, headers: { get: () => null }, text: async () => '' }
+    if (body.method === 'tools/call') return reply(handler(body))
+    return reply({ jsonrpc: '2.0', id: body.id, error: { code: -32601, message: 'unsupported' } })
+  }
+  const dispatch = (...handlers) => async (url, init) => {
+    for (const handler of handlers) {
+      const result = await handler(url, init)
+      if (result) return result
+    }
+    throw new Error('unhandled url ' + url)
+  }
+  // westock 正常 → 不再访问同花顺 / 东财
+  seen.length = 0
+  const westock = await loadDailyCloses(instruments, {
+    from: '2026-11-01', westockToken: 'wt', dataToken: 'tk', now,
+    fetch: dispatch(mcp((body) => ({ jsonrpc: '2.0', id: body.id, result: { content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { nodes: [{ date: '2026-11-06', last: '1453' }] } }) }] } })), ths, eastmoney),
+  })
+  assert.deepEqual(westock.prices.get('em:1.600519'), [['2026-11-06', 1453]])
+  assert.equal(seen.filter(s => s === 'westock').length > 0, true)
+  assert.equal(seen.includes('ths'), false)
+  assert.equal(seen.includes('eastmoney'), false)
+  // westock 挂了 → 同花顺顶上，仍不碰东财
+  seen.length = 0
+  const thsFallback = await loadDailyCloses(instruments, {
+    from: '2026-11-01', westockToken: 'wt', dataToken: 'tk', now,
+    fetch: dispatch(async (url) => { if (String(url).includes('stockbuddy.qq.com')) throw new Error('westock down'); return null }, ths),
+  })
+  assert.deepEqual(thsFallback.prices.get('em:1.600519'), [['2026-11-06', 77]])
+  assert.equal(seen.includes('eastmoney'), false)
+  // 都没配置 → 东财
+  const plain = await loadDailyCloses(instruments, { from: '2026-11-01', now, fetch: eastmoney })
+  assert.deepEqual(plain.prices.get('em:1.600519'), [['2026-11-06', 1]])
+})
+
 test('fund NAV fetches pages until the requested start date is covered', async () => {
   const pages = [
     [{ FSRQ: '2026-11-06', DWJZ: '1.612' }, { FSRQ: '2026-10-01', DWJZ: '1.5' }],
