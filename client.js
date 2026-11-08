@@ -2,7 +2,96 @@ window.__ModuleLoader__.load({
   id: 'dsh-wealth',
   factory(require) {
     const React = require('react')
-    const h = React.createElement
+    // ---------- i18n ----------
+    // 运行时字典：叶子字符串命中文案即翻译（英文界面覆盖核心页面），
+    // 未收录的长句保持原文，避免机器翻译误导。语言切换后整棵树重渲染。
+    const EN = {
+      '其他': 'Other', '币种': 'Currency', '账户': 'Accounts', '资产助手': 'Assistant', '未知': 'Unknown',
+      '浮动盈亏': 'Unrealized P&L', '费用': 'Fees', '读取中…': 'Loading…', '现金': 'Cash', '尚未同步': 'Not synced yet',
+      '数量': 'Qty', '刷新账本': 'Refresh ledger', '资产合计': 'Total assets', '净资产': 'Net worth',
+      '买入': 'Buy', '卖出': 'Sell', '股票': 'Stocks', '基金': 'Funds', '债券': 'Bonds', 'ETF': 'ETF',
+      '富途': 'Futu', '长桥': 'Longbridge', '同花顺': 'THS', '爱基金': 'Aijijin', '保存失败': 'Save failed',
+      '授权账号': 'Authorizations', '已授权': 'Authorized', '补录账单': 'Backfill', '删除': 'Delete',
+      '按资产类别': 'By asset class', '按币种': 'By currency', '补充历史流水': 'Backfill history',
+      '接入方式': 'Connection', '持仓': 'Holdings', '流水': 'Transactions', '分析': 'Analysis',
+      '收起助手': 'Hide assistant', '账户 / 持仓': 'Accounts / positions', '今日提醒': 'Today',
+      '我的账户': 'My accounts', '已导入': 'Imported', '分析范围': 'Analysis scope',
+      '全部账户合并': 'All accounts combined', '已选': 'Selected', '成长': 'Growth', '价值': 'Value',
+      '均衡': 'Blend', '资产类别': 'Asset class', '资产负债表': 'Balance sheet', '年度现金流': 'Yearly cash flow',
+      '年份': 'Year', '入金': 'Deposits', '出金': 'Withdrawals', '分红': 'Dividends', '利息': 'Interest',
+      '税费': 'Taxes', '预计收支': 'Forecast', '生活账单': 'Life bills', '数据健康': 'Data health',
+      '读取失败': 'Load failed', '同花顺投资账本': 'THS Ledger', '文件导入': 'File import',
+      '高级 API / MCP': 'Advanced API / MCP', '操作失败': 'Operation failed', '授权异常': 'Authorization issue',
+      '待重新授权': 'Re-authorization needed', '重新授权': 'Re-authorize', '移除': 'Remove',
+      '手动账户': 'Manual account', '负债合计': 'Total liabilities', '同步中…': 'Syncing…',
+      '请选择账户并填写代码': 'Select an account and enter a symbol', '按行业': 'By sector',
+      '按风格': 'By style', '按市场': 'By market', '按账户': 'By account', '操作': 'Action',
+      '代码': 'Symbol', '市场': 'Market', '数字资产': 'Crypto', '取消': 'Cancel', '状态': 'Status',
+      '文件回补': 'File backfill', '上一页': 'Prev', '下一页': 'Next', '无记录': 'No records',
+      '未指定': 'Unspecified', '导入账户': 'Import account', '同步成功': 'Synced', '同步失败': 'Sync failed',
+      '总览': 'Overview', '设置': 'Settings', '资产总览': 'Portfolio', '资产账本': 'Wealth Ledger',
+      '菜单': 'Menu', '资产导航': 'Asset navigation', '单账户视图': 'Single account',
+      '连接你的资产，建立清晰全貌': 'Connect your assets for a clear picture',
+      '刷新': 'Refresh', '正在整理资产全貌…': 'Loading your portfolio…',
+      '账本保存在本机 · 估值以已录入价格和汇率计算': 'Ledger stays on this machine · valued with your prices and FX rates',
+      '资产助手使用 DSH 默认模型，提问时附带当前账本。': "The assistant uses DSH's default model and includes the current ledger with each question.",
+      '估值提示': 'Valuation notes', '持仓总成本': 'Total cost', '知道了': 'Got it',
+      '每天首次打开显示一次；可让资产助手复述或追问。': 'Shown once per day; ask the assistant to repeat it.',
+      '管理账户 ↗': 'Manage accounts ↗', '三步，拥有一个完整的资产管家': 'Three steps to a complete money hub',
+      '① 连接券商': '① Connect a broker', '② 导入账单': '② Import statements', '③ 问资产助手': '③ Ask the assistant',
+      '　同花顺投资账本 / 富途 / 长桥 / IB，一次登录自动同步账户、持仓与流水': '　THS Ledger / Futu / Longbridge / IB — one login syncs accounts, positions and flows',
+      '　微信 / 支付宝 CSV 自动归类，补齐生活账本': '　WeChat / Alipay CSV auto-categorized into your life ledger',
+      '　让 AI 核对数据、补录流水、生成分析与提醒': '　Let AI check data, backfill flows, and produce analysis and reminders',
+      '开始 · 添加账户': 'Get started · Add account', '查看账户详情': 'View account', '资产占比': 'Allocation',
+      '浮盈': 'Unrealized', '生活账单读取失败': 'Failed to load life bills', '预算保存失败': 'Failed to save budget',
+      '账单解析失败': 'Failed to parse the statement', '请选择入账账户': 'Choose an account',
+      '导入失败': 'Import failed', '分析读取失败': 'Failed to load analysis', '预计收支读取失败': 'Failed to load forecast',
+      '历史净值读取失败': 'Failed to load history', '分析层准备中…': 'Preparing analysis…',
+      '时间加权收益 TWR': 'Time-weighted return', '需要至少两天快照': 'Needs two days of snapshots',
+      '资金加权年化 XIRR': 'Money-weighted XIRR', '个人真实年化回报': 'Your true annualized return',
+      '最大回撤': 'Max drawdown', '历史净值': 'History', '历史净值走势': 'Portfolio value history',
+      '按流水 × 历史行情回补': 'Rebuilt from flows × historical prices',
+      '口径为每日市值：持仓由流水逆推，价格取历史收盘/净值；出入金与买卖会造成台阶，不等同投资收益率。': 'Daily market value: positions replayed from flows, priced at historical closes/NAV. Deposits, withdrawals and trades create steps — this is not an investment return.',
+      '入金（同花顺）': 'Deposits (THS)', '出金（同花顺）': 'Withdrawals (THS)', '账户累计盈亏': 'Lifetime account P&L',
+      '回扫入金/出金明细 ↗': 'Backfill deposit/withdrawal details ↗', '回扫中…（可能需要几分钟）': 'Scanning… (may take minutes)',
+      '推定入金（下限估算）': 'Inferred deposits (lower bound)', '分红 / 利息': 'Dividends / interest',
+      '费用 / 税费': 'Fees / taxes', '配置与集中度': 'Allocation & concentration', '行业': 'Sector', '风格': 'Style',
+      '暂无持仓分类': 'No classifications yet', '按年份汇总': 'Yearly summary', '资产构成': 'Composition',
+      '按账户类别': 'By account group', '资产': 'Assets', '负债': 'Liabilities', '标 的': 'Asset',
+      '标的': 'Asset', '成本': 'Cost', '现价': 'Price', '市值': 'Value', '盈亏': 'P&L', '日期': 'Date',
+      '类型': 'Type', '金额': 'Amount', '分类': 'Category', '备注': 'Note', '来源': 'Source',
+      '新增账户': 'Add account', '编辑账户': 'Edit account', '账户名称': 'Account name',
+      '币种设置': 'Currency', '删除账户': 'Delete account', '保存': 'Save', '关闭': 'Close',
+      '本月': 'This month', '预算': 'Budget', '剩余': 'Left', '超支': 'Over budget', '导入账单': 'Import statement',
+      '选择文件': 'Choose file', '确认导入': 'Confirm import', '分类汇总': 'By category',
+      '最近同步': 'Last sync', '流水已同步至': 'Flows synced to', '同步到最新': 'Sync now',
+      '编辑': 'Edit', '全部账户': 'All accounts', '个股': 'By symbol', '返回': 'Back',
+      '持仓成本': 'Position cost', '持有盈亏（券商）': 'Holding P&L (broker)', '手动维护': 'Maintained manually',
+      '按行业分布': 'By sector', '按风格分布': 'By style', '分布维度': 'Dimension',
+      '月度预算': 'Monthly budget', '今日': 'Today', '提醒': 'Reminder', '设置币种': 'Set currency',
+    }
+    let LANG = 'zh'
+    try { LANG = localStorage.getItem('wealth-lang') === 'en' ? 'en' : 'zh' } catch { /* storage may be blocked */ }
+    const langListeners = new Set()
+    const tr = (s) => {
+      if (LANG !== 'en') return s
+      const hit = EN[s]
+      return hit === undefined ? s : hit
+    }
+    const TR_PROPS = new Set(['title', 'placeholder', 'aria-label', 'alt'])
+    const trNode = (node) => typeof node === 'string' ? tr(node) : Array.isArray(node) ? node.map(trNode) : node
+    const trProps = (props) => {
+      if (!props || typeof props !== 'object' || Array.isArray(props)) return props
+      let out = null
+      for (const key of Object.keys(props)) {
+        if (TR_PROPS.has(key) && typeof props[key] === 'string') {
+          const value = tr(props[key])
+          if (value !== props[key]) { out ||= { ...props }; out[key] = value }
+        }
+      }
+      return out || props
+    }
+    const h = (type, props, ...children) => React.createElement(type, trProps(props), ...children.map(trNode))
 
     // ---------- palette ----------
     function useIsDark() {
@@ -199,6 +288,18 @@ window.__ModuleLoader__.load({
       const [state, setState] = React.useState(null)
       const [err, setErr] = React.useState('')
       const [busy, setBusy] = React.useState(false)
+      // 语言切换：模块级 LANG + 订阅，切换后整棵树按新语言重渲染。
+      const [, forceLang] = React.useState(0)
+      React.useEffect(() => {
+        const fn = () => forceLang((v) => v + 1)
+        langListeners.add(fn)
+        return () => { langListeners.delete(fn) }
+      }, [])
+      const toggleLang = () => {
+        LANG = LANG === 'zh' ? 'en' : 'zh'
+        try { localStorage.setItem('wealth-lang', LANG) } catch { /* storage may be blocked */ }
+        langListeners.forEach((fn) => fn())
+      }
 
       const reload = React.useCallback(async () => {
         try { const s = await getState(); if (s.ok) { setState(s); setErr('') } else setErr(s.error?.message || '读取失败') }
@@ -245,6 +346,7 @@ window.__ModuleLoader__.load({
                   h('h1', { className: 'wealth-title' }, title),
                   h('div', { style: { fontSize: 12, color: t.sub, marginTop: 2 } }, state?.summary ? (detailAccount ? (detailAccount.currency + ' · 单账户视图') : '全部账户 · 本位币 ' + state.summary.baseCurrency) : '连接你的资产，建立清晰全貌')),
                 h('div', { style: { display: 'flex', gap: 8 } },
+                  h('button', { style: T.btn(t, false), onClick: toggleLang, title: LANG === 'zh' ? 'Switch to English' : '切换到中文' }, LANG === 'zh' ? 'EN' : '中文'),
                   h('button', { style: T.btn(t, false), onClick: reload, disabled: busy, title: '刷新账本' }, '刷新'),
                   h('button', { style: T.btn(t, chatOpen), onClick: () => setChatOpen(!chatOpen), 'aria-pressed': chatOpen }, chatOpen ? '收起助手' : '资产助手'))),
               err ? h('div', { role: 'alert', style: { ...T.card(t), borderColor: t.red, color: t.red, marginBottom: 12 } }, err) : null,
@@ -338,7 +440,7 @@ window.__ModuleLoader__.load({
         const scope = fixedAccounts || sel
         const targets = thsAccountIds.filter(id => !scope.length || scope.includes(id))
         if (!targets.length) return
-        if (!window.confirm('回扫银证转账明细：把「资金流动」区间总额二分定位到具体某天。首次全历史可能需要几分钟、几百个请求，之后每次同步只增量收尾。确认开始？')) return
+        if (!window.confirm('回扫入金/出金明细：把「资金流动」区间总额二分定位到具体某天。首次全历史可能需要几分钟、几百个请求，之后每次同步只增量收尾。确认开始？')) return
         setThzScan(true)
         try {
           const results = []
@@ -521,13 +623,13 @@ window.__ModuleLoader__.load({
             row('累计入金', fmtMoney(f.totals && f.totals.externalIn) + ' ' + a.baseCurrency, t.text),
             row('累计出金', fmtMoney(f.totals && f.totals.externalOut) + ' ' + a.baseCurrency, t.text),
             row('净流入', fmtMoney(f.totals && f.totals.netExternal) + ' ' + a.baseCurrency, (f.totals && f.totals.netExternal) >= 0 ? t.green : t.red),
-            transfer.accounts ? row('银证转入', '+' + fmtMoney(transfer.in) + ' ' + a.baseCurrency, t.green) : null,
-            transfer.accounts ? row('银证转出', '-' + fmtMoney(transfer.out) + ' ' + a.baseCurrency, t.red) : null,
+            transfer.accounts ? row('入金（同花顺）', '+' + fmtMoney(transfer.in) + ' ' + a.baseCurrency, t.green) : null,
+            transfer.accounts ? row('出金（同花顺）', '-' + fmtMoney(transfer.out) + ' ' + a.baseCurrency, t.red) : null,
             transfer.accounts && transfer.profit ? row('账户累计盈亏', fmtMoney(transfer.profit) + ' ' + a.baseCurrency, transfer.profit >= 0 ? t.green : t.red) : null,
             inf && inf.total > 0 && !transfer.accounts ? row('推定入金（下限估算）', '+' + fmtMoney(inf.total) + ' ' + a.baseCurrency, t.terra) : null,
             row('分红 / 利息', fmtMoney(f.totals && f.totals.dividends) + ' / ' + fmtMoney(f.totals && f.totals.interest), t.green),
             row('费用 / 税费', fmtMoney(f.totals && f.totals.fees) + ' / ' + fmtMoney(f.totals && f.totals.taxes), t.red),
-            transfer.accounts ? h('div', { style: { fontSize: 10.5, color: t.sub, marginTop: 8, lineHeight: 1.6 } }, '银证转入/转出来自同花顺「资金流动」累计值' + (transfer.names.length ? '（' + transfer.names.join('、') + '）' : '') + (transfer.to ? '，截至 ' + transfer.to : '') + '；富途/IB 等来源的转账以逐笔流水计入上方累计入金/出金。单笔时点可「回扫」或补录券商资金流水。') : null,
+            transfer.accounts ? h('div', { style: { fontSize: 10.5, color: t.sub, marginTop: 8, lineHeight: 1.6 } }, '同花顺账户的入金/出金取自其「资金流动」累计值' + (transfer.names.length ? '（' + transfer.names.join('、') + '）' : '') + (transfer.to ? '，截至 ' + transfer.to : '') + '；富途/IB 等来源的转账以逐笔流水计入上方累计入金/出金。单笔时点可「回扫」或补录券商资金流水。') : null,
             (() => {
               const scope = fixedAccounts || sel
               const targets = thsAccountIds.filter(id => !scope.length || scope.includes(id))
@@ -535,7 +637,7 @@ window.__ModuleLoader__.load({
               const cursors = state.ledger.accounts.filter(x => targets.includes(x.id) && x.transferScan?.coveredFrom)
               const scanned = cursors.length ? '已回扫至 ' + cursors.map(x => x.transferScan.coveredFrom + (x.transferScan.complete ? '（全历史）' : '')).join('、') + '；' : ''
               return h('div', { style: { marginTop: 8 } },
-                h('button', { style: { ...T.btn(t, false) }, disabled: thzScan, onClick: runTransferScan }, thzScan ? '回扫中…（可能需要几分钟）' : '回扫银证转账明细 ↗'),
+                h('button', { style: { ...T.btn(t, false) }, disabled: thzScan, onClick: runTransferScan }, thzScan ? '回扫中…（可能需要几分钟）' : '回扫入金/出金明细 ↗'),
                 cursors.length ? h('div', { style: { fontSize: 10.5, color: t.sub, marginTop: 6, lineHeight: 1.6 } }, scanned + '回扫后每次同步自动增量收尾。') : null)
             })(),
             inf && inf.total > 0 && !transfer.accounts ? h('div', { style: { fontSize: 10.5, color: t.sub, marginTop: 8, lineHeight: 1.6 } }, '推定入金按现金缺口估算（券商流水不含银证转账）；出金与转账时点无法反推，补录银行流水后更准确。') : null,
