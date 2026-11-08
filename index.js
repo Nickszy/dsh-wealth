@@ -5,6 +5,7 @@
  * The AI (资产管家 / any agent) edits the same store through cli.mjs.
  */
 import { load, save, applyOp, summarize, OpError } from './store.mjs'
+import { refreshQuotes } from './quotes.mjs'
 import { previewImport } from './importer.mjs'
 import { modelInfo, chatTurn, applyChatOps } from './chat.mjs'
 import { createSyncService } from './sync.mjs'
@@ -260,6 +261,14 @@ export function apply(ctx, config = {}) {
             const code = error instanceof OpError ? error.code : 'internal'
             send(res, code === 'not-found' ? 404 : code === 'bad-request' ? 400 : 500, { ok: false, op, error: { code, message: error.message } })
           }
+          return
+        }
+        if (path === 'api/quotes/refresh') {
+          if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
+          const db = load()
+          const result = await refreshQuotes(db)
+          if (result.updated) save(db)
+          send(res, 200, { ok: true, ...result, summary: summarize(db), analysis: analyze(db) })
           return
         }
         res.writeHead(404); res.end('not found')

@@ -75,7 +75,7 @@ function session(source, secrets, signal, deps) {
     check()
     if (response.status === 401) fail('AUTH_REQUIRED', '同花顺登录已失效，请重新登录或更新 Cookie')
     if (response.status >= 300 && response.status < 400) fail('REDIRECT_REFUSED', '同花顺请求发生重定向，请重新登录后重试')
-    if (!response.ok) fail('HTTP_ERROR', '同花顺暂时拒绝请求，请稍后重试')
+    if (!response.ok) fail('HTTP_ERROR', '同花顺请求失败（HTTP ' + response.status + '），请稍后重试或更新插件')
     let body
     try { body = record(await response.json()) } catch { check(); fail('INVALID_RESPONSE', '同花顺账本响应格式异常，请稍后重试') }
     check()
@@ -183,7 +183,8 @@ async function fundSnapshot(post, source, id, deps) {
   const list = await accounts(post)
   const book = list.find(row => row.thsType === type && row.id === id)
   if (!book) fail('PORTFOLIO_NOT_FOUND', '指定同花顺基金账本不属于当前登录用户，请重新选择')
-  const params = type === 'ijj' ? { custid: id, fundid: '' } : { custid: '', fundid: id }
+  // 2026-11 起服务端强制要求 from_id 在位（任意值均可，空串即可），缺失时直接 HTTP 400。
+  const params = type === 'ijj' ? { custid: id, fundid: '', from_id: '' } : { custid: '', fundid: id, from_id: '' }
   const data = record(await post('fund/v1/merge_fund', params))
   const account = record(data.account)
   const warnings = [], sourceTotals = {}, holdings = [], seen = new Set()

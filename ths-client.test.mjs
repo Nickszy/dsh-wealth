@@ -213,6 +213,8 @@ test('fund snapshot (ijj) maps merge_fund to holdings with percost avg cost and 
   const d = fundDeps(), result = await fetchStandaloneThsSnapshot({ portfolioId: '100108832246', thsBookType: 'ijj' }, secrets, undefined, d)
   const call = d.calls.find(c => c.url.endsWith('merge_fund')), form = new URLSearchParams(call.init.body)
   assert.equal(form.get('custid'), '100108832246'); assert.equal(form.get('fundid'), '')
+  // 2026-11 起服务端要求 from_id 在位，缺失即 HTTP 400。
+  assert.equal(form.get('from_id'), '')
   assert.equal(result.holdings.length, 2)
   const first = result.holdings[0]
   assert.deepEqual([first.symbol, first.assetClass, first.market, first.currency, first.qty, first.avgCost, first.manualPrice, first.externalId], ['001257', 'fund', 'CN', 'CNY', 4316.86, 1.611245, 1.612, '001257'])
@@ -225,7 +227,7 @@ test('fund snapshot (manFund) uses fundid and derives avg cost when percost miss
   const merge = { account: { cust_id: '', username: '南洋基金', total_asset: '9000', total_cost: '8500', trans_date: '2026-11-01' }, fund: [{ fundcode: '110022', fundname: '消费龙头', fundtype: '0', fundcount: '100', fundcost: '85', fundnav: '0.9', fundvalue: '90', date: '2026-11-01', percost: '', onway: '0', unconf_count: 0 }], currencyfund: [], onwayfund: [], clearfund: [], empty: 'false' }
   const d = fundDeps({ merge }), result = await fetchStandaloneThsSnapshot({ portfolioId: '24507604', thsBookType: 'manFund' }, secrets, undefined, d)
   const form = new URLSearchParams(d.calls.find(c => c.url.endsWith('merge_fund')).init.body)
-  assert.equal(form.get('fundid'), '24507604'); assert.equal(form.get('custid'), '')
+  assert.equal(form.get('fundid'), '24507604'); assert.equal(form.get('custid'), ''); assert.equal(form.get('from_id'), '')
   assert.equal(result.holdings[0].avgCost, 0.85)
   assert.equal(result.sourceTotals.totalAsset, 9000)
 })

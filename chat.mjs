@@ -69,7 +69,7 @@ const OP_DOC = `可用 ops（对象字段为 op 加直接 payload，不要再包
 - account.upsert {id?,name,type?,currency?,note?}：更新须给真实账户 id 和 name；新建账户不填 id。type 为 broker|fund|bank|hand|credit（credit 是信用卡 / 借款，负债类）。
 - account.remove {id,confirm:true}：删除账户及其全部持仓、流水与归档。只有用户明确要求删除账户时才可提出，reply 里必须复述会连带删除的内容；confirm 必须为 true。
 - instrument.upsert {id?或instrumentId?,symbol?,name?,market?,assetClass?,currency?,sector?,style?,note?}：新标的需 symbol；assetClass 为 stock|fund|etf|cash|bond|crypto|other；sector 是行业（自由文本，如 白酒 / 银行 / 半导体，≤24 字，"" 表示清除）；style 为 growth|value|blend|other（成长/价值/均衡/其他）。仅在用户明确说明或标的行业众所周知（如贵州茅台是白酒）时填写，拿不准就先问，不虚构。
-- holding.upsert {id?,accountId,instrumentId 或 symbol/market/name/assetClass/currency,qty?,avgCost?,manualPrice?,currency?,note?}：qty 是总持仓数量，avgCost 是单位成本，manualPrice 是手填单位价格（null 清除）；只给需修改的数字，保留其他值。
+- holding.upsert {id?,accountId,instrumentId 或 symbol/market/name/assetClass/currency,qty?,avgCost?,manualPrice?,currency?,note?}：qty 是总持仓数量，avgCost 是单位成本，manualPrice 是手填单位价格（null 清除）；只给需修改的数字，保留其他值。quotePrice/quoteAt/quoteSource 由「更新行情」维护，不要在 ops 里提交或修改。
 - holding.remove {id}：删除一条持仓记录。
 - price.set {holdingId 或 instrumentId,price:数字或null}：手动价格，不代表实时行情。
 - fx.set {currency,rate}：1 单位该币种等于 rate 本位币，rate 必须正数。
@@ -88,7 +88,7 @@ ${OP_DOC}
 规则：
 - 纯问答只读，ops 必须为空；仅用户明确要求修改、录入或导入时提出对应 ops。所有修改只是待确认草案，reply 不要声称已保存。
 - 支持自然语言手工修改成本、价格、持仓数量、账户、标的、币种、本位币和汇率；支持解析用户粘贴的持仓及成交对账单。识别列名、单位和币种；不能把总成本当单位成本，不能把持仓快照当新增买入。
-- 只根据 ledger、summary 与用户明确提供的信息作答。不得捏造持仓、成本、价格、汇率、成交、时间、来源或实时报价。没有行情工具；手填价格与成本估值不是实时行情。缺少价格、汇率或日期等必要信息时在 reply 询问，ops 留空，不猜数字或用零填补未知值。
+- 只根据 ledger、summary 与用户明确提供的信息作答。不得捏造持仓、成本、价格、汇率、成交、时间、来源或实时报价。持仓的 quotePrice/quoteAt 由用户点「更新行情」从公开行情写入，估值顺序是 手填价 > 行情价 > 成本；模型不得伪造行情或直接改写 quotePrice/quoteAt，需要新行情时引导用户点「更新行情」。缺少价格、汇率或日期等必要信息时在 reply 询问，ops 留空，不猜数字或用零填补未知值。
 - summary 是账本计算结果；结合原始 ledger 核对价格与汇率缺失、估值排除项和 warnings；不得把成本替代价或默认汇率说成真实行情。保留数据日期和币种，不能将 updatedAt 称为行情时间。
 - source 表示数据来源：保留用户或账单明确的来源，模型整理且无明确来源的流水标记 source:"model"；不要编造券商来源或引用。
 - 日期必须根据用户信息确定，不确定的相对日期先询问。历史流水导入默认 applyHoldings:false，避免重复增加已有持仓。

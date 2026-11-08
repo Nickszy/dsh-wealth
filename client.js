@@ -252,7 +252,7 @@ window.__ModuleLoader__.load({
                 tab === 'overview' ? h(Overview, { t, state, call, busy, navigate: setTab, openAccount }) :
                 tab === 'analysis' ? h(Analysis, { t, state, navigate: setTab }) :
                 tab === 'accounts' ? (detailAccount ? h(AccountDetail, { key: detailAccount.id, t, state, call, busy, reload, accountId: detailAccount.id, back: () => setDetailId('') }) : h(AccountsHub, { t, state, call, busy, reload, openAccount })) :
-                tab === 'holdings' ? h(Holdings, { t, state, call, busy }) :
+                tab === 'holdings' ? h(Holdings, { t, state, call, busy, reload }) :
                 tab === 'trades' ? h(Trades, { t, state, call, busy, openAccount }) :
                 h(Settings, { t, state, call, busy }),
               h('footer', { style: { marginTop: 24, fontSize: 10, color: t.sub, lineHeight: 1.8 } }, '账本保存在本机 · 估值以已录入价格和汇率计算', h('br'), '资产助手使用 DSH 默认模型，提问时附带当前账本。')),
@@ -835,7 +835,7 @@ window.__ModuleLoader__.load({
         source && ['error', 'failed'].includes(source.lastStatus) && source.lastError ? h('div', { role: 'alert', style: { ...T.card(t), color: t.red, marginBottom: 14, fontSize: 12 } }, '上次同步失败：' + sourceErrorText(source.lastError)) : null,
         h(SyncNote, { t, note: sync.note, onClose: () => sync.setNote(null) }),
         h('nav', { className: 'wealth-subtabs', 'aria-label': '账户视图' }, subs.map(([id, name]) => h('button', { key: id, className: 'wealth-subtab', 'aria-current': sub === id ? 'page' : undefined, onClick: () => setSub(id) }, name))),
-        sub === 'holdings' ? h(Holdings, { t, state, call, busy, accountId }) :
+        sub === 'holdings' ? h(Holdings, { t, state, call, busy, accountId, reload }) :
         sub === 'trades' ? h(Trades, { t, state, call, busy, accountId, onBackfill: () => setSub('backfill') }) :
         sub === 'symbols' ? h(SymbolLedger, { t, state, accountId }) :
         sub === 'analysis' ? h(Analysis, { t, state, fixedAccounts: [accountId], onBackfill: () => setSub('backfill') }) :
@@ -850,6 +850,19 @@ window.__ModuleLoader__.load({
       const blank = () => ({ accountId: accountId || db.accounts[0]?.id || '', symbol: '', name: '', market: 'CN', assetClass: 'stock', sector: '', style: '', qty: '', avgCost: '', currency: '', manualPrice: '' })
       const [form, setForm] = React.useState(null), [editing, setEditing] = React.useState(false), [msg, setMsg] = React.useState(''), [acctFilter, setAcctFilter] = React.useState('')
       const [group, setGroup] = React.useState('account')
+      const [quoting, setQuoting] = React.useState(false)
+      const refreshQuotes = async () => {
+        setQuoting(true); setMsg('')
+        try {
+          const r = await fetch('/portfolio/api/quotes/refresh', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+          const d = await r.json()
+          if (!r.ok || !d.ok) throw new Error(d.error?.message || '行情更新失败')
+          const missing = (d.warnings || []).filter(w => String(w).startsWith('QUOTE_')).length
+          setMsg('已更新 ' + d.updated + ' 条行情现价' + (missing ? '；' + missing + ' 个标的暂无行情，保留原估值' : '') + '。手填价格仍然优先。')
+          if (reload) await reload()
+        } catch (e) { setMsg(e.message) }
+        finally { setQuoting(false) }
+      }
       const open = (f, isEdit) => { setForm(f); setEditing(!!isEdit); setMsg('') }
       const submit = async () => {
         if (!form.accountId || !form.symbol.trim()) { setMsg('请选择账户并填写代码'); return }
@@ -881,7 +894,7 @@ window.__ModuleLoader__.load({
         if (!g) { g = { key, rows: [], mv: 0 }; groups.push(g) }
         const ins = insMap.get(ho.instrumentId)
         const rate = ho.currency === db.baseCurrency ? 1 : db.fx[ho.currency]
-        if (Number.isFinite(rate) && rate > 0) g.mv += ho.qty * (ho.manualPrice ?? ho.avgCost ?? 0) * rate
+        if (Number.isFinite(rate) && rate > 0) g.mv += ho.qty * (ho.manualPrice ?? ho.quotePrice ?? ho.avgCost ?? 0) * rate
         g.rows.push([ho, ins])
       }
       const totalMv = groups.reduce((s, g) => s + g.mv, 0)
@@ -895,6 +908,7 @@ window.__ModuleLoader__.load({
                 db.accounts.map((a) => h('option', { key: a.id, value: a.id }, a.name))),
               h('select', { 'aria-label': '持仓分组', value: group, onChange: e => setGroup(e.target.value), style: { ...T.input(t), minHeight: 30, width: 'auto', fontSize: 12 } },
                 (accountId ? [['sector', '按行业'], ['style', '按风格'], ['market', '按市场'], ['currency', '按币种']] : [['account', '按账户'], ['sector', '按行业'], ['style', '按风格'], ['market', '按市场'], ['currency', '按币种']]).map(([v, n]) => h('option', { key: v, value: v }, n))),
+              h('button', { style: T.btn(t, false), disabled: busy || quoting, onClick: refreshQuotes }, quoting ? '正在更新行情…' : '⟳ 更新行情'),
               h('button', { style: T.btn(t, true), disabled: busy || !db.accounts.length, onClick: () => open(blank()) }, '＋ 添加持仓'))),
           h('table', { style: { width: '100%', borderCollapse: 'collapse' } },
             h('thead', null, h('tr', null, T.th('标的', t), accountId ? null : T.th('账户', t), T.th('数量', t), T.th('成本', t), T.th('现价', t), T.th('币种', t), T.th('市值(本位币)', t), T.th('操作', t))),
@@ -902,15 +916,18 @@ window.__ModuleLoader__.load({
               h('tr', { key: 'g:' + g.key }, T.td(h('span', { style: { fontWeight: 650, fontSize: 12 } }, g.key, h('small', { style: { display: 'block', color: t.sub, fontWeight: 400 } }, g.rows.length + ' 项 · ' + fmtMoney(g.mv, db.baseCurrency) + (totalMv ? ' · ' + (g.mv / totalMv * 100).toFixed(1) + '%' : ''))), t, { colSpan: accountId ? 7 : 8 })),
               g.rows.map(([ho, ins]) => {
                 const acc = accMap.get(ho.accountId)
-                const price = ho.manualPrice ?? ho.avgCost ?? 0
+                const price = ho.manualPrice ?? ho.quotePrice ?? ho.avgCost ?? 0
                 const rate = ho.currency === db.baseCurrency ? 1 : db.fx[ho.currency]
                 const mv = Number.isFinite(rate) && rate > 0 ? ho.qty * price * rate : null
+                const quoteTag = ho.manualPrice == null && ho.quotePrice != null ? h('small', { style: { display: 'block', color: t.sub, fontSize: 10 } }, '行情' + (ho.quoteAt ? ' ' + String(ho.quoteAt).slice(5, 10) : '')) : null
                 return h('tr', { key: ho.id },
                   T.td(h('span', null, (ins ? ins.name + ' ' + ins.symbol : ho.instrumentId), ins?.sector ? h('small', { style: { display: 'block', color: t.sub } }, ins.sector + (ins.style ? ' · ' + styleLabel(ins.style) : '')) : null), t),
                   accountId ? null : T.td(acc ? acc.name : ho.accountId, t),
                   T.td(String(ho.qty), t),
                   T.td(fmtMoney(ho.avgCost), t),
-                  T.td(h('input', { defaultValue: ho.manualPrice ?? '', placeholder: '手填', title: '直接修改现价，离开输入框保存', onBlur: (e) => { const v = e.target.value; if (v !== '' && String(ho.manualPrice ?? '') !== v) call('price.set', { holdingId: ho.id, price: Number(v) }) }, style: { ...T.input(t), width: 78 } }), t),
+                  T.td(h('span', null,
+                    h('input', { defaultValue: ho.manualPrice ?? '', placeholder: ho.quotePrice != null ? String(ho.quotePrice) : '手填', title: ho.manualPrice != null ? '手填价格（清空则改用行情/成本）' : ho.quotePrice != null ? '输入框为空：使用行情价 ' + ho.quotePrice + '；填写后以手填优先' : '手填现价，离开输入框保存', onBlur: (e) => { const v = e.target.value; if (String(ho.manualPrice ?? '') !== v) call('price.set', { holdingId: ho.id, price: v === '' ? null : Number(v) }) }, style: { ...T.input(t), width: 78 } }),
+                    quoteTag), t),
                   T.td(ho.currency, t),
                   T.td(fmtMoney(mv, db.baseCurrency), t),
                   T.td(h('span', null,
@@ -918,6 +935,7 @@ window.__ModuleLoader__.load({
                     h('button', { style: { ...T.btn(t, false), padding: '3px 8px', borderColor: t.red, color: t.red }, disabled: busy, onClick: () => { if (window.confirm('删除该持仓？')) call('holding.remove', { id: ho.id }) } }, '删除')), t))
               }),
             ]) : h('tr', null, T.td('还没有持仓', t, { color: t.sub }))))),
+        !form && msg ? h('div', { role: 'status', style: { ...T.card(t), color: msg.includes('已更新') || msg.includes('已保存') || msg.includes('已录入') ? t.accent : t.red, marginTop: 12, fontSize: 12 } }, msg) : null,
         form ? h(Modal, { t, title: editing ? '编辑持仓' : '添加持仓', onClose: () => setForm(null) },
           h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12 } },
             accountId ? null : sel('账户', 'accountId', db.accounts.map(a => [a.id, a.name]), editing),
@@ -940,14 +958,14 @@ window.__ModuleLoader__.load({
     const historyStatus = status => ({ new: '新增', duplicate: '重复 · 跳过', conflict: '冲突 · 待修正', outside: '区间外 · 跳过' })[status] || status || '已归档'
     function HistoryTable({ t, rows, showStatus, showAccount, showAction }) {
       return h('div', { style: { overflowX: 'auto', marginTop: 12 } }, h('table', { style: { width: '100%', borderCollapse: 'collapse', minWidth: 1100 } },
-        h('thead', null, h('tr', null, [...(showAccount ? ['账户'] : []), '日期 / 时间', '类型 / 原始类型', '代码 / 名称', '数量', '价格 / 利率', '原始金额', '净现金', '费用', '币种', showStatus ? '状态' : '来源', ...(showAccount || showAction ? ['操作'] : [])].map(label => T.th(label, t)))),
+        h('thead', null, h('tr', null, [...(showAccount ? ['账户'] : []), '日期 / 时间', '类型 / 原始类型', '代码 / 名称', '数量', '价格 / 利率', '原始金额', '净现金', '费用', '币种', ...(showStatus ? ['状态'] : []), ...(showAccount || showAction ? ['操作'] : [])].map(label => T.th(label, t)))),
         h('tbody', null, rows.map((row, index) => h('tr', { key: row.id || index },
           showAccount ? T.td(row.accountName || row.accountId, t) : null,
           T.td(h('span', { style: { whiteSpace: 'nowrap' } }, row.date || '—', row.time ? h('small', { style: { display: 'block', color: t.sub } }, row.time) : null), t),
           T.td(h('span', null, historyKind(row), h('small', { style: { display: 'block', color: t.sub } }, row.originalType || '—')), t),
           T.td(h('span', null, row.symbol || '—', h('small', { style: { display: 'block', color: t.sub } }, [row.name, row.market].filter(Boolean).join(' · '))), t),
           T.td(historyValue(row.qty), t), T.td((isRepo(row) ? '利率 ' : '') + historyValue(row.price), t), T.td(historyValue(row.grossAmount), t), T.td(historyValue(row.cashAmount), t), T.td(historyValue(row.fee, '未知'), t), T.td(row.currency || '未知', t),
-          T.td(showStatus ? h('span', { style: { color: row.status === 'conflict' ? t.red : row.status === 'new' ? t.accent : t.sub } }, historyStatus(row.status), h('small', { style: { display: 'block', color: t.sub } }, [row.sheet, row.row != null ? '第 ' + row.row + ' 行' : ''].filter(Boolean).join(' · '))) : row.provenance || '—', t), showAccount || showAction ? T.td(row.action || '同步归档', t) : null)))))
+          showStatus ? T.td(h('span', { style: { color: row.status === 'conflict' ? t.red : row.status === 'new' ? t.accent : t.sub } }, historyStatus(row.status), h('small', { style: { display: 'block', color: t.sub } }, [row.sheet, row.row != null ? '第 ' + row.row + ' 行' : ''].filter(Boolean).join(' · '))), t) : null, showAccount || showAction ? T.td(row.action || '同步归档', t) : null)))))
     }
 
     function ledgerEvents(db, accountId) {

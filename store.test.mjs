@@ -77,7 +77,10 @@ test('summary distributions reconcile to unrounded totals and use fractional wei
 
 test('holding and price validation rejects invalid, negative, blank, nonfinite and boolean inputs', () => {
   for (const value of [-1, '', ' ', 'abc', Infinity, NaN, true, [], null]) {
-    for (const field of ['qty', 'avgCost']) bad(fixture(), 'holding.upsert', { accountId: 'a', symbol: 'TEST', [field]: value })
+    bad(fixture(), 'holding.upsert', { accountId: 'a', symbol: 'TEST', qty: value })
+  }
+  for (const value of ['', ' ', 'abc', Infinity, NaN, true, [], null]) {
+    bad(fixture(), 'holding.upsert', { accountId: 'a', symbol: 'TEST', avgCost: value })
   }
   const db = fixture()
   const h = holding(db)
@@ -259,4 +262,47 @@ test('historyEvent.add archives account flows without touching positions and ded
   assert.equal(restored.historyEvents.length, 1)
   assert.equal(restored.historyBatches[0].method, 'model')
   assert.ok(Array.isArray(restored.snapshots[0].sectors))
+})
+
+test('negative diluted avgCost is valid, valued, and survives later trades and save/load', () => {
+  const db = fixture()
+  applyOp(db, 'holding.upsert', { accountId: 'a', symbol: 'DILUTED', market: 'US', qty: 10, avgCost: -2, manualPrice: 3 })
+  const summary = summarize(db)
+  assert.equal(summary.excludedCount, 0)
+  assert.equal(summary.totalValueBase, 240)
+  assert.equal(summary.totalCostBase, -160)
+  assert.equal(summary.totalPnlBase, 400)
+  // 分红稀释后的负成本在后续成交中仍可用（加权平均）
+  applyOp(db, 'trade.add', trade(db, { symbol: 'DILUTED', qty: 10, price: 4 }))
+  assert.equal(db.holdings[0].avgCost, 1)
+  save(db)
+  const restored = load()
+  const summaryAfter = summarize(restored)
+  assert.equal(summaryAfter.excludedCount, 0)
+  assert.ok(restored.holdings.some((h) => h.avgCost === 1))
+  // 非有限成本仍然拒绝估值
+  const broken = fixture()
+  const h = applyOp(broken, 'holding.upsert', { accountId: 'a', symbol: 'BROKEN', market: 'US', qty: 10, avgCost: 2, manualPrice: 3 }).holding
+  h.avgCost = Infinity
+  assert.equal(summarize(broken).excludedHoldings[0].reason, 'invalid-valuation')
+})
+
+test('quotePrice fills valuation below manualPrice and suppresses cost-estimate warnings', () => {
+  const db = fixture()
+  const h = holding(db, { symbol: 'QQQ', manualPrice: null })
+  applyOp(db, 'holding.upsert', { holding: { id: h.id, accountId: 'a', instrumentId: h.instrumentId, quotePrice: 5, quoteAt: '2026-11-07T15:00:03Z', quoteSource: 'tencent' } })
+  const summary = summarize(db)
+  assert.equal(summary.totalValueBase, 400)
+  assert.ok(!summary.warnings.some(w => w.code === 'cost-estimate-price'))
+  bad(db, 'holding.upsert', { holding: { id: h.id, accountId: 'a', instrumentId: h.instrumentId, quoteAt: 'not-a-date' } })
+  applyOp(db, 'price.set', { holdingId: h.id, price: 9 })
+  assert.equal(summarize(db).totalValueBase, 720)
+  // 手填价清除后回落到行情价
+  applyOp(db, 'price.set', { holdingId: h.id, price: null })
+  assert.equal(summarize(db).totalValueBase, 400)
+  // 显式清除行情价回落到成本估值并恢复告警
+  applyOp(db, 'holding.upsert', { holding: { id: h.id, accountId: 'a', instrumentId: h.instrumentId, quotePrice: null } })
+  const afterClear = summarize(db)
+  assert.equal(afterClear.totalValueBase, 160)
+  assert.ok(afterClear.warnings.some(w => w.code === 'cost-estimate-price'))
 })

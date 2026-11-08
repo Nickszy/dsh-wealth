@@ -64,15 +64,15 @@ export function save(db) {
 }
 
 const uid = (prefix) => prefix + '_' + randomUUID().slice(0, 8).toUpperCase()
-function numeric(value, field, { optional = false, nullable = false, positive = false } = {}) {
+function numeric(value, field, { optional = false, nullable = false, positive = false, signed = false } = {}) {
   if (value === undefined && optional) return undefined
   if (value === null && nullable) return null
   if ((typeof value !== 'number' && typeof value !== 'string') || String(value).trim() === '') {
     throw new OpError('bad-request', field + ' 必须是有效数字')
   }
   const number = Number(value)
-  if (!Number.isFinite(number) || (positive ? number <= 0 : number < 0)) {
-    throw new OpError('bad-request', field + (positive ? ' 必须是有限正数' : ' 必须是有限非负数'))
+  if (!Number.isFinite(number) || (positive ? number <= 0 : !signed && number < 0)) {
+    throw new OpError('bad-request', field + (positive ? ' 必须是有限正数' : signed ? ' 必须是有限数字' : ' 必须是有限非负数'))
   }
   return number
 }
@@ -152,7 +152,7 @@ function applyTradeToHolding(db, trade) {
   if (trade.side === 'sell' && (!holding || qty > holding.qty)) throw new OpError('bad-request', '卖出数量超过持仓')
   if (holding && holding.currency !== trade.currency) throw new OpError('bad-request', '流水币种必须与持仓币种一致')
   const currentQty = holding ? numeric(holding.qty, 'holding.qty') : 0
-  const currentCost = holding ? numeric(holding.avgCost, 'holding.avgCost') : 0
+  const currentCost = holding ? numeric(holding.avgCost, 'holding.avgCost', { signed: true }) : 0
   const totalQty = currentQty + qty
   const totalCost = currentQty * currentCost + qty * price
   if (trade.side === 'buy' && (!Number.isFinite(totalQty) || !Number.isFinite(totalCost))) throw new OpError('bad-request', '买入后持仓数值超出可计算范围')
@@ -249,8 +249,15 @@ export function applyOp(db, op, payload = {}) {
       if (!p.accountId) throw new OpError('bad-request', '缺少 accountId')
       if (!findAccount(db, p.accountId)) throw new OpError('not-found', '账户不存在: ' + p.accountId)
       const qty = numeric(p.qty, 'qty', { optional: true })
-      const avgCost = numeric(p.avgCost, 'avgCost', { optional: true })
+      // 摊薄成本可以为负（分红超过投入）；数量与估值不允许负值。
+      const avgCost = numeric(p.avgCost, 'avgCost', { optional: true, signed: true })
       const manualPrice = numeric(p.manualPrice, 'manualPrice', { optional: true, nullable: true })
+      // 行情价由「更新行情」写入；模型与手工路径不应伪造，允许显式清除。
+      const quotePrice = numeric(p.quotePrice, 'quotePrice', { optional: true, nullable: true })
+      const quoteSource = p.quoteSource === undefined ? undefined : String(p.quoteSource).slice(0, 40) || null
+      let quoteAt = p.quoteAt === undefined ? undefined : p.quoteAt === null ? null : String(p.quoteAt)
+      if (quoteAt !== undefined && quoteAt !== null && !/^\d{4}-\d{2}-\d{2}(T[\d:.]+Z?)?$/.test(quoteAt)) throw new OpError('bad-request', 'quoteAt 必须是 ISO 时间或日期')
+      if (quotePrice === null && quoteAt === undefined) quoteAt = null
       const instrument = resolveInstrument(db, p, { create: true })
       let holding = p.id ? db.holdings.find((h) => h.id === p.id) : findHolding(db, p.accountId, instrument.id)
       if (p.id && (!holding || holding.accountId !== p.accountId || holding.instrumentId !== instrument.id)) throw new OpError('bad-request', '持仓 id 与账户或标的不匹配')
@@ -258,6 +265,9 @@ export function applyOp(db, op, payload = {}) {
         if (qty !== undefined) holding.qty = qty
         if (avgCost !== undefined) holding.avgCost = avgCost
         if (manualPrice !== undefined) holding.manualPrice = manualPrice
+        if (quotePrice !== undefined) holding.quotePrice = quotePrice
+        if (quoteAt !== undefined) holding.quoteAt = quoteAt
+        if (quoteSource !== undefined) holding.quoteSource = quoteSource
         if (p.currency !== undefined) holding.currency = normCurrency(p.currency, holding.currency)
         if (p.note !== undefined) holding.note = String(p.note)
         holding.updatedAt = nowISO()
@@ -266,7 +276,8 @@ export function applyOp(db, op, payload = {}) {
           id: uid('POS'), accountId: p.accountId, instrumentId: instrument.id,
           qty: qty ?? 0, avgCost: avgCost ?? 0,
           currency: normCurrency(p.currency, instrument.currency),
-          manualPrice: manualPrice ?? null, note: String(p.note || ''), updatedAt: nowISO(),
+          manualPrice: manualPrice ?? null, quotePrice: quotePrice ?? null, quoteAt: quoteAt ?? null, quoteSource: quoteSource ?? null,
+          note: String(p.note || ''), updatedAt: nowISO(),
         }
         db.holdings.push(holding)
       }
@@ -456,17 +467,20 @@ export function summarize(db) {
     const cur = h.currency || ins?.currency || base
     if (!ins) { exclude(h, cur, 'missing-instrument', '持仓标的不存在'); continue }
     if (!byAccount.has(h.accountId)) { exclude(h, cur, 'missing-account', '持仓账户不存在'); continue }
-    const price = h.manualPrice ?? h.avgCost ?? 0
+    // 估值优先级：手填价 > 行情价 > 平均成本；前两者都缺时才按成本估值并提示。
+    const price = h.manualPrice ?? h.quotePrice ?? h.avgCost ?? 0
     const rate = fx[cur]
     if (typeof rate !== 'number' || !Number.isFinite(rate) || rate <= 0) {
       exclude(h, cur, 'missing-fx', '缺少有效汇率: ' + cur); continue
     }
     const valueBase = h.qty * price * rate
     const costBase = h.qty * (h.avgCost ?? 0) * rate
-    if (![h.qty, price, h.avgCost ?? 0].every((n) => typeof n === 'number' && Number.isFinite(n) && n >= 0) || !Number.isFinite(valueBase) || !Number.isFinite(costBase) || !Number.isFinite(totalBase + valueBase) || !Number.isFinite(totalCost + costBase)) {
+    // 负平均成本是合法状态（累计分红超过投入），仅要求有限数值；数量与价格仍须非负。
+    const finiteNonNegative = (n) => typeof n === 'number' && Number.isFinite(n) && n >= 0
+    if (!finiteNonNegative(h.qty) || !finiteNonNegative(price) || (h.avgCost != null && !Number.isFinite(h.avgCost)) || !Number.isFinite(valueBase) || !Number.isFinite(costBase) || !Number.isFinite(totalBase + valueBase) || !Number.isFinite(totalCost + costBase)) {
       exclude(h, cur, 'invalid-valuation', '持仓数值无效或超出可计算范围'); continue
     }
-    if (h.manualPrice == null && h.qty > 0) warnings.push({ code: 'cost-estimate-price', message: '未设置现价，使用平均成本估值', holdingId: h.id, currency: cur })
+    if (h.manualPrice == null && h.quotePrice == null && h.qty > 0) warnings.push({ code: 'cost-estimate-price', message: '未设置现价，使用平均成本估值', holdingId: h.id, currency: cur })
     totalBase += valueBase
     totalCost += costBase
     const cls = ins.assetClass || 'other'
