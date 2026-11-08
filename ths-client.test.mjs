@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { listThsAccounts, fetchStandaloneThsSnapshot, fetchThsHistory, createThsVTokenRefresher } from './ths-client.mjs'
+import { listThsAccounts, fetchStandaloneThsSnapshot, fetchThsHistory, fetchThsAssetChange, createThsVTokenRefresher } from './ths-client.mjs'
 
 const source = { portfolioId: 'chosen' }, secrets = { cookie: 'userid=123; v=fixture' }
 const rows = [{ fund_key: 'other', manualname: 'Other' }, { fund_key: 'chosen', manualname: 'Selected', brokername: 'Broker' }]
@@ -290,4 +290,64 @@ test('fund history for manFund books uses fundid param and account_type 4 keeps 
   const form = new URLSearchParams(d.calls.find(c => c.url.endsWith('get_money_history')).init.body)
   assert.equal(form.get('fundid'), '24507604'); assert.equal(form.get('custid'), '')
   assert.equal(out.rows[0].kind, 'buy'); assert.equal(out.rows[0].cashAmount, -1000)
+})
+
+// ---- 资产变动（analysis/v1/asset_change）：银证转入/转出 ----
+const assetChangeFixture = {
+  id: '4',
+  stock: { start_asset: 1000, money_in: 5600, end_asset: 6900, money_out: 2400, profit: -500, bonus: 216 },
+  fund: { start_asset: '', money_net_in: '', money_in: '', end_asset: '', bonus: '', total_profit: '', id: null, money_out: '', profit: '' },
+}
+function assetChangeDeps(response = assetChangeFixture, options = {}) {
+  const calls = []
+  return { calls, now: () => new Date('2026-11-08T12:00:00Z'), fetch: async (url, init) => {
+    calls.push({ url, init })
+    if (url.endsWith('asset_change')) return { ok: true, status: 200, json: async () => ({ error_code: '0', ex_data: response, ...options }) }
+    return deps().fetch(url, init)
+  } }
+}
+test('asset change reads 银证转入转出 and period from analysis/v1/asset_change', async () => {
+  const d = assetChangeDeps()
+  const out = await fetchThsAssetChange(source, secrets, { from: '2020-01-01', to: '2026-11-08' }, undefined, d)
+  const form = new URLSearchParams(d.calls.find(c => c.url.endsWith('asset_change')).init.body)
+  assert.equal(form.get('fund_key'), 'chosen'); assert.equal(form.get('fundkey'), 'chosen')
+  assert.equal(form.get('start_date'), '20200101'); assert.equal(form.get('end_date'), '20261108')
+  assert.equal(form.get('from_pc'), '1'); assert.equal(form.get('id'), '4')
+  assert.deepEqual(out, {
+    from: '2020-01-01', to: '2026-11-08', bookType: 'common',
+    startAsset: 1000, moneyIn: 5600, moneyOut: 2400, netIn: null,
+    endAsset: 6900, profit: -500, bonus: 216, totalProfit: null,
+  })
+})
+test('asset change rejects foreign books, negative transfers and empty payloads', async () => {
+  await assert.rejects(fetchThsAssetChange({ portfolioId: 'foreign' }, secrets, {}, undefined, assetChangeDeps()), { code: 'PORTFOLIO_NOT_FOUND' })
+  const negative = assetChangeDeps({ stock: { money_in: -1 } })
+  await assert.rejects(fetchThsAssetChange(source, secrets, {}, undefined, negative), { code: 'INVALID_RESPONSE' })
+  const empty = assetChangeDeps({ fund: { money_in: '', money_out: '' } })
+  await assert.rejects(fetchThsAssetChange(source, secrets, {}, undefined, empty), { code: 'INVALID_RESPONSE' })
+})
+test('snapshot attaches transfer totals and stays complete when asset change is unavailable', async () => {
+  const ok = await fetchStandaloneThsSnapshot(source, secrets, undefined, assetChangeDeps())
+  assert.deepEqual(
+    [ok.sourceTotals.transferIn, ok.sourceTotals.transferOut, ok.sourceTotals.assetProfit, ok.sourceTotals.assetBonus],
+    [5600, 2400, -500, 216])
+  assert.deepEqual([ok.sourceTotals.transferFrom, ok.sourceTotals.transferTo], ['2000-01-01', '2026-11-08'])
+  // 接口临时失败只记告警，不影响持仓同步。
+  const failing = { ...deps(), fetch: async (url, init) => url.endsWith('asset_change')
+    ? { ok: true, status: 200, json: async () => ({ error_code: '-1', error_msg: 'x' }) }
+    : deps().fetch(url, init) }
+  const partial = await fetchStandaloneThsSnapshot(source, secrets, undefined, failing)
+  assert.equal(partial.holdings.length, 2)
+  assert.ok(partial.warnings.some(w => w.startsWith('THS_ASSET_CHANGE_UNAVAILABLE')))
+  assert.equal(partial.sourceTotals.transferIn, undefined)
+})
+test('fund snapshot does not attach fund money_in as bank transfers', async () => {
+  const base = fundDeps()
+  const d = { ...base, fetch: async (url, init) => {
+    if (!url.endsWith('asset_change')) return base.fetch(url, init)
+    return { ok: true, status: 200, json: async () => ({ error_code: '0', ex_data: { fund: { money_in: 1234.5, money_out: 200 } } }) }
+  } }
+  const result = await fetchStandaloneThsSnapshot({ portfolioId: '100108832246', thsBookType: 'ijj' }, secrets, undefined, d)
+  assert.equal(result.sourceTotals.transferIn, undefined)
+  assert.equal(result.sourceTotals.transferOut, undefined)
 })

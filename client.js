@@ -421,6 +421,20 @@ window.__ModuleLoader__.load({
       const liabilities = summaryAccounts.filter(x => x.type === 'credit').reduce((s, x) => s + Math.abs(x.valueBase || 0), 0)
       const assets = summaryAccounts.filter(x => x.type !== 'credit').reduce((s, x) => s + Math.max(0, x.valueBase || 0), 0)
       const balanceSheet = !fixedAccounts
+      // 同花顺「资金流动」累计转账：券商口径的银证转入/转出，优先于推定入金展示。
+      const transferScope = fixedAccounts || sel
+      const transfer = state.ledger.accounts.reduce((acc, x) => {
+        if (transferScope.length && !transferScope.includes(x.id)) return acc
+        if (x.currency !== a.baseCurrency) return acc
+        const s = x.sourceTotals
+        if (!s || (typeof s.transferIn !== 'number' && typeof s.transferOut !== 'number')) return acc
+        acc.accounts += 1
+        acc.in += typeof s.transferIn === 'number' ? s.transferIn : 0
+        acc.out += typeof s.transferOut === 'number' ? s.transferOut : 0
+        if (typeof s.assetProfit === 'number') acc.profit += s.assetProfit
+        if (s.transferTo && (!acc.to || s.transferTo > acc.to)) acc.to = s.transferTo
+        return acc
+      }, { accounts: 0, in: 0, out: 0, profit: 0, to: null })
       const pct = (v, d = 2) => (typeof v === 'number' && Number.isFinite(v) ? (v > 0 ? '+' : '') + v.toFixed(d) + '%' : '—')
       const kpi = (label, value, sub, color) => h('div', { style: { ...T.card(t), flex: '1 1 150px', minWidth: 140 } },
         h('div', { style: { fontSize: 11, color: t.sub, letterSpacing: .3 } }, label),
@@ -472,10 +486,14 @@ window.__ModuleLoader__.load({
             row('累计入金', fmtMoney(f.totals && f.totals.externalIn) + ' ' + a.baseCurrency, t.text),
             row('累计出金', fmtMoney(f.totals && f.totals.externalOut) + ' ' + a.baseCurrency, t.text),
             row('净流入', fmtMoney(f.totals && f.totals.netExternal) + ' ' + a.baseCurrency, (f.totals && f.totals.netExternal) >= 0 ? t.green : t.red),
-            inf && inf.total > 0 ? row('推定入金（下限估算）', '+' + fmtMoney(inf.total) + ' ' + a.baseCurrency, t.terra) : null,
+            transfer.accounts ? row('银证转入（同花顺）', '+' + fmtMoney(transfer.in) + ' ' + a.baseCurrency, t.green) : null,
+            transfer.accounts ? row('银证转出（同花顺）', '-' + fmtMoney(transfer.out) + ' ' + a.baseCurrency, t.red) : null,
+            transfer.accounts && transfer.profit ? row('账户累计盈亏（同花顺）', fmtMoney(transfer.profit) + ' ' + a.baseCurrency, transfer.profit >= 0 ? t.green : t.red) : null,
+            inf && inf.total > 0 && !transfer.accounts ? row('推定入金（下限估算）', '+' + fmtMoney(inf.total) + ' ' + a.baseCurrency, t.terra) : null,
             row('分红 / 利息', fmtMoney(f.totals && f.totals.dividends) + ' / ' + fmtMoney(f.totals && f.totals.interest), t.green),
             row('费用 / 税费', fmtMoney(f.totals && f.totals.fees) + ' / ' + fmtMoney(f.totals && f.totals.taxes), t.red),
-            inf && inf.total > 0 ? h('div', { style: { fontSize: 10.5, color: t.sub, marginTop: 8, lineHeight: 1.6 } }, '推定入金按现金缺口估算（券商流水不含银证转账）；出金与转账时点无法反推，补录银行流水后更准确。') : null,
+            transfer.accounts ? h('div', { style: { fontSize: 10.5, color: t.sub, marginTop: 8, lineHeight: 1.6 } }, '银证转入/转出取自同花顺「资金流动」累计值' + (transfer.to ? '（截至 ' + transfer.to + '）' : '') + '；单笔转账时点仍需券商资金流水，可补录后按明细查看。') : null,
+            inf && inf.total > 0 && !transfer.accounts ? h('div', { style: { fontSize: 10.5, color: t.sub, marginTop: 8, lineHeight: 1.6 } }, '推定入金按现金缺口估算（券商流水不含银证转账）；出金与转账时点无法反推，补录银行流水后更准确。') : null,
             f.unknownCashRows ? h('div', { style: { fontSize: 10.5, color: t.terra, marginTop: 8 } }, '⚠ ' + f.unknownCashRows + ' 条流水缺少金额，以上为下限估算') : null),
           h('section', { style: T.card(t), 'aria-label': '配置与集中度' },
             h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 10, gap: 8, flexWrap: 'wrap' } },

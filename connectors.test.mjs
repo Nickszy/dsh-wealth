@@ -14,6 +14,14 @@ test('normalizer strips unknown fields recursively, returns detached data, accep
   result.holdings[0].name = 'changed'; result.warnings.push('changed')
   assert.equal(raw.holdings[0].name, '股票'); assert.deepEqual(raw.warnings, [])
 })
+test('normalizer keeps broker transfer totals and their period while stripping unknown keys', () => {
+  const raw = canonical()
+  raw.sourceTotals = { transferIn: '5600', transferOut: 2400, assetProfit: '-500', assetStart: 1000, assetEnd: 6900, transferFrom: '2000-01-01', transferTo: '2026-11-08', secret: 'remove' }
+  assert.deepEqual(normalizeSnapshot(raw).sourceTotals, {
+    transferIn: 5600, transferOut: 2400, assetProfit: -500, assetStart: 1000, assetEnd: 6900,
+    transferFrom: '2000-01-01', transferTo: '2026-11-08',
+  })
+})
 test('normalizer rejects missing required values, shorts, duplicates and invalid metadata', () => {
   for (const field of ['symbol', 'name', 'market', 'currency', 'assetClass', 'qty', 'avgCost', 'manualPrice']) {
     const raw = canonical(); delete raw.holdings[0][field]; assert.throws(() => normalizeSnapshot(raw), undefined, field)

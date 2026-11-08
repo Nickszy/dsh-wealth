@@ -174,6 +174,7 @@ export async function fetchStandaloneThsSnapshot(source, secrets, signal, deps =
   const uploaded = scalar(data.upload_time)
   const uploadedAt = /^\d{13}$/.test(uploaded) && Number.isFinite(new Date(Number(uploaded)).getTime()) ? new Date(Number(uploaded)).toISOString() : null
   if (!uploadedAt) warnings.push('UPLOAD_TIME_UNAVAILABLE')
+  await attachAssetChange(post, 'common', id, sourceTotals, warnings, deps)
   return normalizeSnapshot({ holdings, complete, warnings, queriedAt: (deps.now ?? (() => new Date()))().toISOString(), uploadedAt, quoteDate: null, sourceTotals })
 }
 
@@ -223,7 +224,75 @@ async function fundSnapshot(post, source, id, deps) {
     if (Array.isArray(data[key]) && data[key].length) warnings.push('THS_FUND_SKIPPED:' + key + ':' + data[key].length)
   }
   sourceTotals.quoteDate = sourceTotals.quoteDate || scalar(account.trans_date).trim() || null
+  // 基金账本的 asset_change「资金流动」是申购/赎回口径（实测 money_in 759k、money_out 548k
+  // 与转换流水同量级），不是银行侧转账，主界面不展示；需要时用 fetchThsAssetChange 直接读取。
   return normalizeSnapshot({ holdings, complete, warnings, queriedAt: (deps.now ?? (() => new Date()))().toISOString(), uploadedAt: null, quoteDate: sourceTotals.quoteDate, sourceTotals })
+}
+
+// ---- 资产变动（analysis/v1/asset_change）----
+// 同花顺「资金流动」口径：期初/期末资产、累计银证转入/转出、账户盈亏与分红。
+// get_money_history 不含银行侧记录，这里是唯一能拿到转账总额的接口；
+// 金额为空字符串表示该账本没有这个口径，不能当作 0。
+const ASSET_CHANGE_ID = '4' // 前端报表固定传的维度编号，随接口原样保留
+function assetChangeSection(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const part = record(raw)
+  const num = key => decimal(part[key])
+  const values = {
+    startAsset: num('start_asset'), moneyIn: num('money_in'), moneyOut: num('money_out'),
+    netIn: num('money_net_in'), endAsset: num('end_asset'), profit: num('profit'),
+    bonus: num('bonus'), totalProfit: num('total_profit'),
+  }
+  if (Object.values(values).every(v => v === null)) return null
+  if ((values.moneyIn ?? 0) < 0 || (values.moneyOut ?? 0) < 0) fail('INVALID_RESPONSE', '同花顺转账金额无效，已停止读取以避免错账')
+  return values
+}
+const localDay = now => {
+  const d = now instanceof Date ? now : new Date(now)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+async function assetChange(post, bookType, id, range, deps = {}) {
+  const from = range?.from ? thsDay(range.from, '开始日期') : '2000-01-01'
+  const to = range?.to ? thsDay(range.to, '结束日期') : localDay(deps.now ? deps.now() : new Date())
+  if (from > to) fail('INVALID_RESPONSE', '开始日期不能晚于结束日期')
+  const params = bookType === 'common'
+    ? { fund_key: id, fundkey: id, cust_id: '', fund_id: '' }
+    : bookType === 'ijj'
+      ? { fund_key: '', fundkey: '', cust_id: id, fund_id: '' }
+      : { fund_key: '', fundkey: '', cust_id: '', fund_id: id }
+  const data = record(await post('analysis/v1/asset_change', {
+    start_date: from.replaceAll('-', ''), end_date: to.replaceAll('-', ''), ...params,
+    rzrq_fund_key: '', manual_id: '', from_pc: '1', id: ASSET_CHANGE_ID,
+  }))
+  const section = bookType === 'common' ? assetChangeSection(data.stock) : assetChangeSection(data.fund)
+  return section ? { from, to, bookType, ...section } : null
+}
+// 快照附带转账统计：失败不影响持仓同步，只记录告警（接口可能临时变更或被风控拦截）。
+async function attachAssetChange(post, bookType, id, sourceTotals, warnings, deps) {
+  let change
+  try { change = await assetChange(post, bookType, id, null, deps) } catch (e) {
+    if (e?.code === 'CANCELLED' || e?.code === 'AUTH_REQUIRED') throw e
+    warnings.push('THS_ASSET_CHANGE_UNAVAILABLE:' + (e?.code || 'ERROR'))
+    return
+  }
+  if (!change) return
+  const totals = {
+    transferIn: change.moneyIn, transferOut: change.moneyOut, assetProfit: change.profit,
+    assetBonus: change.bonus, assetStart: change.startAsset, assetEnd: change.endAsset,
+  }
+  for (const [key, value] of Object.entries(totals)) if (value !== null) sourceTotals[key] = value
+  sourceTotals.transferFrom = change.from; sourceTotals.transferTo = change.to
+}
+export async function fetchThsAssetChange(source, secrets, range, signal, deps = {}) {
+  const id = typeof source?.portfolioId === 'string' ? source.portfolioId.trim() : ''
+  if (!id) fail('PORTFOLIO_REQUIRED', '请先明确选择同花顺账本')
+  const bookType = thsBookType(source)
+  const post = session(source, secrets, signal, deps)
+  const list = await accounts(post)
+  if (!list.some(row => row.id === id && row.thsType === bookType)) fail('PORTFOLIO_NOT_FOUND', '指定同花顺账本不属于当前登录用户，请重新选择')
+  const result = await assetChange(post, bookType, id, range, deps)
+  if (!result) fail('INVALID_RESPONSE', '同花顺资产变动数据为空，请稍后重试')
+  return result
 }
 
 // 同花顺投资账本「资金流水」接口（get_money_history）。与持仓接口共用登录会话，

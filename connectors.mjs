@@ -44,7 +44,9 @@ function identity(row, field) {
   if (row.externalId !== undefined) result.externalId = text(row.externalId, `${field}.externalId`)
   return result
 }
-const TOTAL_KEYS = ['cash', 'totalValue', 'totalAsset', 'totalCost', 'totalLiability', 'investedPct', 'holdingProfit', 'dayProfit']
+const TOTAL_KEYS = ['cash', 'totalValue', 'totalAsset', 'totalCost', 'totalLiability', 'investedPct', 'holdingProfit', 'dayProfit', 'transferIn', 'transferOut', 'assetProfit', 'assetBonus', 'assetStart', 'assetEnd']
+// 转账统计的区间说明来自来源接口本身，按文本保留（不是金额字段）。
+const TOTAL_TEXT_KEYS = ['transferFrom', 'transferTo']
 
 /** Validate the whole snapshot before returning a detached, allowlisted value. */
 export function normalizeSnapshot(snapshot) {
@@ -87,7 +89,10 @@ export function normalizeSnapshot(snapshot) {
     const totals = object(input.sourceTotals, 'snapshot.sourceTotals')
     result.sourceTotals = {}
     for (const key of TOTAL_KEYS) if (totals[key] !== undefined) {
-      result.sourceTotals[key] = totals[key] === null ? null : number(totals[key], `sourceTotals.${key}`, ['holdingProfit', 'dayProfit'].includes(key))
+      result.sourceTotals[key] = totals[key] === null ? null : number(totals[key], `sourceTotals.${key}`, ['holdingProfit', 'dayProfit', 'assetProfit'].includes(key))
+    }
+    for (const key of TOTAL_TEXT_KEYS) if (totals[key] !== undefined) {
+      result.sourceTotals[key] = totals[key] === null ? null : text(totals[key], `sourceTotals.${key}`)
     }
   }
   return result
