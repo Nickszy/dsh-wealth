@@ -278,6 +278,7 @@ export function createSyncService(ctx, options = {}) {
       ...(source.connector === 'futu' && !saved.mcpToken ? vault.get('pending-futu-mcp') : {}),
       ...(source.connector === 'tiger' && !saved.accessToken ? vault.get('pending-tiger-mcp') : {}),
       ...(source.connector === 'qieman' && !saved.bearerToken && !saved.apiKey ? vault.get('pending-qieman-mcp') : {}),
+      ...(source.connector === 'fosun' && !saved.apiKey ? vault.get('pending-fosun') : {}),
       ...saved, ...typed,
     }
   }
@@ -495,7 +496,9 @@ export function createSyncService(ctx, options = {}) {
         ? (existing ? vault.get('pending-tiger-mcp:' + existing.id) : vault.get('pending-tiger-mcp'))
         : connector === 'qieman' && transport === 'mcp'
           ? (existing ? vault.get('pending-qieman-mcp:' + existing.id) : vault.get('pending-qieman-mcp'))
-          : existing ? {} : (connector === 'ths' ? vault.get('pending-ths') : {})
+          : connector === 'fosun'
+            ? (existing ? vault.get('pending-fosun:' + existing.id) : vault.get('pending-fosun'))
+            : existing ? {} : (connector === 'ths' ? vault.get('pending-ths') : {})
     const saved = existing ? vault.get(id) : {}
     // A fresh browser token must win over the stored one, otherwise "重新授权"
     // keeps using a possibly revoked credential.
@@ -545,6 +548,7 @@ export function createSyncService(ctx, options = {}) {
     if (connector === 'futu') { vault.remove('pending-futu-mcp'); vault.remove('pending-futu-mcp:' + id) }
     if (connector === 'tiger') { vault.remove('pending-tiger-mcp'); vault.remove('pending-tiger-mcp:' + id) }
     if (connector === 'qieman') { vault.remove('pending-qieman-mcp'); vault.remove('pending-qieman-mcp:' + id) }
+    if (connector === 'fosun') { vault.remove('pending-fosun'); vault.remove('pending-fosun:' + id) }
     const auth = {
       ...(existing || {}),
       id,

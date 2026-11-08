@@ -6,7 +6,7 @@ import {
   createCipheriv, createDecipheriv, createHash, createHmac, createPublicKey,
   diffieHellman, generateKeyPairSync, hkdfSync, randomBytes, sign,
 } from 'node:crypto'
-import { listFosunAccounts, fetchFosunSnapshot, fetchFosunHistory } from './fosun-client.mjs'
+import { listFosunAccounts, fetchFosunSnapshot, fetchFosunHistory, generateFosunClientKey, fosunTicketCreate, checkFosunApiKey } from './fosun-client.mjs'
 
 const GATEWAY = 'https://gateway.example.com'
 
@@ -148,4 +148,44 @@ test('复星 rejects a mismatched server public key', async () => {
   const bad = { ...SECRETS, serverPublicKey: other.publicPem }
   const deps = gatewayDeps(() => ({ code: 0, data: { accounts: [] } }))
   await assert.rejects(() => listFosunAccounts({ gatewayUrl: GATEWAY }, bad, undefined, deps), /签名校验失败/)
+})
+
+test('复星 TicketCreate onboarding: pending then bound, plus key generation', async () => {
+  const { createPublicKey } = await import('node:crypto')
+  const calls = []
+  let bound = false
+  const deps = {
+    timeoutMs: 5000,
+    fetch: async (url, init) => {
+      const path = new URL(url).pathname
+      calls.push({ path, body: JSON.parse(init.body) })
+      const data = path === '/api/v1/auth/TicketCreate'
+        ? (bound
+          ? { apiKey: 'ak_abcdef1234567890abcdef', serverPubKey: '-----BEGIN PUBLIC KEY-----\nX\n-----END PUBLIC KEY-----', ticket: 'T2', url: 'https://h5.fosunxcz.com/open', expireTime: 1794144000 }
+          : { ticket: 'T1', url: 'https://h5.fosunxcz.com/open', expireTime: 1794140400 })
+        : path === '/api/v1/auth/APIKeyCheck'
+          ? { status: 'valid', expiresAt: 1799999999 }
+          : (() => { throw new Error('unexpected ' + path) })()
+      return { ok: true, status: 200, headers: { get: () => 'application/json' }, text: async () => JSON.stringify({ code: 0, message: 'ok', data }) }
+    },
+  }
+  const key = generateFosunClientKey()
+  assert.match(key.privatePem, /BEGIN PRIVATE KEY/)
+  assert.match(key.publicPem, /BEGIN PUBLIC KEY/)
+  createPublicKey(key.publicPem) // must parse
+
+  const pending = await fosunTicketCreate({ gatewayUrl: GATEWAY, clientPubKey: key.publicPem, macId: 'mac1', deps })
+  assert.equal(pending.ticket, 'T1')
+  assert.equal(pending.apiKey, null)
+  assert.equal(calls[0].body.macId, 'mac1')
+  assert.equal(calls[0].body.clientPubKey, key.publicPem)
+
+  bound = true
+  const done = await fosunTicketCreate({ gatewayUrl: GATEWAY, clientPubKey: key.publicPem, macId: 'mac1', deps })
+  assert.match(done.apiKey, /^ak_/)
+  assert.match(done.serverPubKey, /BEGIN PUBLIC KEY/)
+  const check = await checkFosunApiKey({ gatewayUrl: GATEWAY, apiKey: done.apiKey, deps })
+  assert.equal(check.status, 'valid')
+
+  await assert.rejects(() => fosunTicketCreate({ gatewayUrl: GATEWAY, clientPubKey: key.publicPem, macId: 'm', deps: { fetch: async () => ({ ok: true, status: 200, headers: { get: () => 'application/json' }, text: async () => JSON.stringify({ code: 500, message: 'boom', data: {} }) }) } }), /boom/)
 })

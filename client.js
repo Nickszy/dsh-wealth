@@ -1604,7 +1604,7 @@ window.__ModuleLoader__.load({
         if (!auth && choice === 'longbridge' && form.lbInterface === 'mcp' && !credentials.mcpToken) throw new Error('请先在 open.longbridge.com/connect 生成授权码并点击兑换')
         if (!auth && choice === 'qieman' && !credentials.apiKey && !credentials.bearerToken && login?.status !== 'ready') throw new Error('请先完成且慢浏览器授权（账户与资产工具只对 OAuth 授权开放）')
         if (!auth && choice === 'tiger' && !credentials.accessToken) throw new Error('请先完成老虎设备码授权')
-        if (!auth && choice === 'fosun' && !(credentials.apiKey && credentials.privateKey && credentials.serverPublicKey)) throw new Error('请填写复星 API Key（ak_ 开头）、客户端私钥与服务端公钥')
+        if (!auth && choice === 'fosun' && !(credentials.apiKey && credentials.privateKey && credentials.serverPublicKey) && login?.status !== 'ready') throw new Error('请先扫码开通，或填入 API Key（ak_ 开头）、客户端私钥与服务端公钥')
         const out = await requestAuth()
         if (!current()) return
         applyAuth(out)
@@ -1612,7 +1612,7 @@ window.__ModuleLoader__.load({
       })
       const startLogin = () => { if (disabled || lock.current) return; invalidate(); setForm(old => ({ ...old, portfolioId: '', brokerAccountId: '' })); loginAttempt.current++; const attempt = loginAttempt.current; return act('login', async current => { const r = await post('sources/login/start', { authId: auth?.id || reauth?.id || undefined, sourceId: form.id || undefined }); if (!current() || attempt !== loginAttempt.current) return; loginStart.current = Date.now(); setLogin({ status: r.status || 'opening', message: r.message }); }) }
       React.useEffect(() => {
-        if (!['ths','futu','tiger','qieman'].includes(choice) || login?.status !== 'ready' || !loginAttempt.current || adopted.current === loginAttempt.current || working || loading || busy || lock.current) return
+        if (!['ths','futu','tiger','qieman','fosun'].includes(choice) || login?.status !== 'ready' || !loginAttempt.current || adopted.current === loginAttempt.current || working || loading || busy || lock.current) return
         if (choice === 'futu' && form.futuInterface !== 'mcp') return
         adopted.current = loginAttempt.current
         adopt()
@@ -1649,6 +1649,33 @@ window.__ModuleLoader__.load({
         setLbCode('')
         applyAuth(out)
       })
+      const startFosunOnboard = () => {
+        if (disabled || lock.current) return
+        invalidate()
+        loginAttempt.current++
+        const attempt = loginAttempt.current
+        return act('fosun-onboard', async current => {
+          const r = await post('sources/fosun/onboard/start', { authId: auth?.id || reauth?.id, gatewayUrl: form.gatewayUrl.trim() || undefined })
+          if (!current() || attempt !== loginAttempt.current) return
+          setLogin({ status: r.status || 'waiting', message: r.message, openUrl: r.openUrl, qrDataUrl: r.qrDataUrl, expiresAt: r.expiresAt })
+        })
+      }
+      React.useEffect(() => {
+        if (choice !== 'fosun' || login?.status !== 'waiting') return
+        let live = true, inflight = false
+        const version = generation.current
+        const current = () => live && mounted.current && version === generation.current
+        const timer = setInterval(async () => {
+          if (inflight || !current()) return
+          inflight = true
+          try {
+            const r = await get('sources/fosun/onboard/status')
+            if (current() && r.status !== 'waiting') setLogin({ status: r.status, message: r.message, openUrl: login?.openUrl, qrDataUrl: login?.qrDataUrl })
+          } catch { /* keep waiting; transient polling errors stay silent */ }
+          finally { inflight = false }
+        }, 3000)
+        return () => { live = false; clearInterval(timer) }
+      }, [login?.status, choice])
       const startQiemanAuth = () => {
         if (disabled || lock.current) return
         invalidate()
@@ -1763,7 +1790,7 @@ window.__ModuleLoader__.load({
         longbridge: '官方 MCP 接入：在 open.longbridge.com/connect 生成一次性授权码，兑换后自动读取持仓、余额与流水；也可改用 OpenAPI 凭据（App Key / Secret / Access Token）。不需要其他 DSH 插件。',
         qieman: '盈米 / 且慢官方 MCP。点「浏览器授权」用且慢账号登录，插件通过官方 OAuth（动态注册 + PKCE + 本机回环）获取长期凭据并自动续期，读取总账户 / 子账户的基金持仓、资产与收益。且慢不提供逐笔流水，历史记录可用账单文件补录。',
         tiger: '老虎官方远程 MCP（mcp.tigerfintech.com）。点「设备码授权」后在浏览器登录老虎账户并选择授权账户；refresh token 长期有效并自动续期，插件读取账户、持仓、现金与最近成交。无需安装 OpenD。',
-        fosun: '复星证券 / 星财富官方 OpenAPI（默认网关 openapi.fosunxcz.com）。在复星 OpenAPI 开通页完成授权后，填入页面的 API Key（ak_ 开头）与服务端公钥 PEM，再加本机生成的客户端私钥；插件按官方 ECDH + 签名 + AES-GCM 协议读取账户、持仓、现金与资金流水。',
+        fosun: '复星证券 / 星财富官方 OpenAPI（默认网关 openapi.fosunxcz.com）。点「扫码开通」，用星财富 App 扫码完成授权，插件本机生成密钥对并自动保存 API Key、服务端公钥与客户端私钥；之后按官方 ECDH + 签名 + AES-GCM 协议读取账户、持仓、现金与资金流水。',
         ib: '需先启动并登录官方 IB Client Portal Gateway。本插件使用其账户接口；本地自签名证书须明确勾选信任。',
         custom: '高级选项：连接标准化持仓快照接口或已有只读 MCP 工具。请勿将密钥写入 URL 或工具参数。',
       }
@@ -1845,11 +1872,19 @@ window.__ModuleLoader__.load({
               h('div', { style: { marginTop: 6, color: t.sub, fontSize: 11 } }, '授权页面里选择要导入的账户；完成后本页会自动读取。')) : null,
             h('details', { style: { marginTop: 10, fontSize: 12, color: t.sub } }, h('summary', { style: { cursor: 'pointer' } }, '手动粘贴 Token（可选备用方式）'), h('div', { style: { marginTop: 10 } }, secret('Access Token', 'accessToken'), secret('Refresh Token', 'refreshToken'), secret('OAuth Client ID', 'clientId')))) : null,
           choice === 'fosun' ? h('div', { style: { marginTop: 18 } },
-            h('div', { className: 'wealth-source-fields' },
-              field('OpenAPI 网关地址（默认官方网关）', 'gatewayUrl', { type: 'url', placeholder: 'https://openapi.fosunxcz.com', autoComplete: 'off' }),
-              secret('API Key（ak_ 开头）', 'apiKey')),
-            h('div', { style: { marginTop: 12 } }, secretArea('客户端私钥（PEM）', 'privateKey'), secretArea('服务端公钥（PEM）', 'serverPublicKey')),
-            h('small', { style: { display: 'block', marginTop: 10, color: t.sub, fontSize: 11 } }, '复星开放平台提供的 API Key 与密钥对长期有效；插件按官方 ECDH 握手、请求签名与 AES-GCM 加密协议读取账户、持仓与资金流水。')) : null,
+            h('div', { className: 'wealth-source-actions', style: { alignItems: 'center' } },
+              h('button', { style: T.btn(t, false), disabled: disabled || login?.status === 'waiting', onClick: startFosunOnboard }, working === 'fosun-onboard' ? '正在签发开通码…' : login?.status === 'waiting' ? '等待扫码开通…' : credentials.apiKey || auth ? '重新扫码开通' : '扫码开通'),
+              h('span', { style: { color: login?.status === 'error' ? t.red : login?.status === 'ready' ? t.accent : t.sub, fontSize: 11 }, role: 'status' }, login ? loginText(login.status, login.message, { waiting: '请在手机上完成开通后自动返回', ready: '复星开通完成，凭据已保存', error: '开通未完成' }) : credentials.apiKey ? '✓ 已保存复星凭据' : '扫码后自动生成本机密钥并保存三元组')),
+            login?.openUrl && login?.status === 'waiting' ? h('div', { style: { marginTop: 10, padding: 12, border: '1px solid ' + t.border, borderRadius: 10, background: t.panel, fontSize: 12, display: 'flex', gap: 12, alignItems: 'flex-start' } },
+              login?.qrDataUrl ? h('img', { src: login.qrDataUrl, alt: '复星 OpenAPI 开通二维码', width: 132, height: 132, style: { borderRadius: 8, border: '1px solid ' + t.border } }) : null,
+              h('div', { style: { minWidth: 0 } },
+                h('div', null, '用「星财富」App 扫码，或在手机浏览器打开：'),
+                h('div', { style: { marginTop: 4, wordBreak: 'break-all', fontSize: 11 } }, h('a', { href: login.openUrl, target: '_blank', rel: 'noreferrer', style: { color: t.accent } }, login.openUrl)),
+                h('div', { style: { marginTop: 6, color: t.sub, fontSize: 11 } }, '完成后回到本页，凭据（API Key、服务端公钥、本机私钥）会自动保存。'))) : null,
+            h('div', { className: 'wealth-source-fields', style: { marginTop: 12 } },
+              field('OpenAPI 网关地址（默认官方网关）', 'gatewayUrl', { type: 'url', placeholder: 'https://openapi.fosunxcz.com', autoComplete: 'off' })),
+            h('details', { style: { marginTop: 10, fontSize: 12, color: t.sub } }, h('summary', { style: { cursor: 'pointer' } }, '手动粘贴三元组（可选备用方式）'), h('div', { style: { marginTop: 10 } }, secret('API Key（ak_ 开头）', 'apiKey'), secretArea('客户端私钥（PEM）', 'privateKey'), secretArea('服务端公钥（PEM）', 'serverPublicKey'))),
+            h('small', { style: { display: 'block', marginTop: 10, color: t.sub, fontSize: 11 } }, 'API Key、服务端公钥与客户端私钥必须来自同一次开通/重置；平台型 Key（fsk_ 等）不适用于 OpenAPI。')) : null,
           choice === 'ib' ? h('div', { className: 'wealth-source-fields', style: { marginTop: 18 } }, field('Client Portal Gateway URL', 'gatewayUrl', { type: 'url' }), check('信任本机 Gateway 的自签名证书', 'trustLocalGateway')) : null,
           choice !== 'custom' ? h('div', { style: { marginTop: 18 } },
             h('button', { style: T.btn(t, false), disabled: disabled || ['opening','waiting'].includes(login?.status), onClick: discover }, (working === 'accounts' || working === 'adopt') ? '读取中…' : auth ? '读取/更新账户' : choice === 'ths' ? '登录并读取账本' : '授权并读取账户'),

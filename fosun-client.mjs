@@ -8,6 +8,7 @@ import {
   createCipheriv, createDecipheriv, createHash, createHmac, createPrivateKey,
   createPublicKey, diffieHellman, generateKeyPairSync, hkdfSync, randomBytes, randomUUID, sign, verify,
 } from 'node:crypto'
+
 import { cashSignOf, isFlowKind } from './model.mjs'
 
 const fail = (message) => { throw new Error(message) }
@@ -466,6 +467,89 @@ export async function fetchFosunHistory(source, secrets, range, signal, deps = {
 export async function verifyFosunCredentials(source, secrets, { signal, deps = {} } = {}) {
   const session = await openSession(source, secrets, signal, deps)
   return session.post('/v1/account/Accounts', {})
+}
+
+// ---------- onboarding (TicketCreate 扫码开通) ----------
+// Official flow (fw-tradings fosun-env-setup): generate a P-384 client keypair,
+// POST /api/v1/auth/TicketCreate {macId, clientPubKey PEM}; the response carries
+// the H5 open URL. After the user completes onboarding, calling TicketCreate
+// again with the SAME clientPubKey returns apiKey + serverPubKey.
+
+export function generateFosunClientKey() {
+  const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'secp384r1' })
+  return {
+    privatePem: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
+    publicPem: publicKey.export({ type: 'spki', format: 'pem' }).toString().trim(),
+  }
+}
+
+function unwrapEnvelope(payload) {
+  if (!payload || typeof payload !== 'object') fail('复星认证接口返回格式不正确')
+  const code = payload.code
+  if (code !== undefined && code !== null && code !== 0) fail('复星认证接口调用失败：' + (payload.message || code))
+  const content = payload.content
+  if (content && typeof content === 'object') return content.data && typeof content.data === 'object' ? content.data : content
+  return payload.data && typeof payload.data === 'object' ? payload.data : payload
+}
+
+/** One TicketCreate call. After H5 binding the response carries apiKey + serverPubKey. */
+export async function fosunTicketCreate({ gatewayUrl, clientPubKey, macId, signal, deps = {} } = {}) {
+  const { origin, basePath } = baseUrlOf({ gatewayUrl })
+  const fetchImpl = deps.fetch || globalThis.fetch
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(new Error('复星 TicketCreate 请求超时')), deps.timeoutMs ?? 20000)
+  const onAbort = () => controller.abort(signal?.reason ?? new Error('复星 TicketCreate 已中止'))
+  signal?.addEventListener('abort', onAbort, { once: true })
+  let response
+  try {
+    response = await fetchImpl(origin + basePath + '/api/v1/auth/TicketCreate', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json', 'X-Request-Id': randomUUID() },
+      body: JSON.stringify({ macId: String(macId || ''), clientPubKey: String(clientPubKey || '') }),
+      signal: controller.signal,
+      redirect: 'error',
+    })
+  } catch (error) {
+    if (controller.signal.aborted && !signal?.aborted) fail('复星 TicketCreate 请求超时')
+    throw error
+  } finally { clearTimeout(timer); signal?.removeEventListener('abort', onAbort) }
+  if (!response.ok) fail('复星 TicketCreate 返回 HTTP ' + response.status)
+  const raw = await response.text()
+  let payload = null
+  try { payload = raw ? JSON.parse(raw) : null } catch { payload = null }
+  const data = unwrapEnvelope(payload)
+  const apiKey = text(pick(data, ['apiKey', 'apiKeyValue']))
+  const serverPubKey = text(data.serverPubKey || data.serverPublicKey)
+  const ticket = text(data.ticket)
+  const url = text(data.url || data.openUrl)
+  const expireTime = text(data.expireTime)
+  if (!ticket || !url) fail('复星 TicketCreate 返回缺少必要字段（ticket/开通页地址）')
+  return { apiKey, serverPubKey, ticket, url, expireTime }
+}
+
+/** APIKeyCheck: 'valid' | 'invalid' | 'expired' | 'disabled' | 'unknown'. */
+export async function checkFosunApiKey({ gatewayUrl, apiKey, signal, deps = {} } = {}) {
+  const { origin, basePath } = baseUrlOf({ gatewayUrl })
+  const fetchImpl = deps.fetch || globalThis.fetch
+  const response = await fetchImpl(origin + basePath + '/api/v1/auth/APIKeyCheck', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json', 'X-Request-Id': randomUUID() },
+    body: JSON.stringify({ apiKey: String(apiKey || '') }),
+    signal,
+    redirect: 'error',
+  })
+  if (!response.ok) fail('复星 APIKeyCheck 返回 HTTP ' + response.status)
+  const raw = await response.text()
+  let payload = null
+  try { payload = raw ? JSON.parse(raw) : null } catch { payload = null }
+  const data = unwrapEnvelope(payload)
+  const flag = (value) => value === true || value === 'true' || value === 1 || value === '1' ? 'valid'
+    : value === false || value === 'false' || value === 0 || value === '0' ? 'invalid' : null
+  const named = String(data.status || '').toLowerCase()
+  const status = ['valid', 'invalid', 'expired', 'disabled'].includes(named) ? named
+    : flag(data.valid) || flag(data.isValid) || flag(data.active) || 'unknown'
+  const expiresAt = Number(data.expiresAt) > 0 ? Number(data.expiresAt) : null
+  return { status, expiresAt }
 }
 
 export function fosunFingerprintPart(secrets = {}) {

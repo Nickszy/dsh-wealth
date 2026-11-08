@@ -5,6 +5,7 @@
  * The AI (资产管家 / any agent) edits the same store through cli.mjs.
  */
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { load, save, applyOp, summarize, OpError, DATA_DIR } from './store.mjs'
 import { refreshQuotes } from './quotes.mjs'
 import { forecast } from './forecast.mjs'
@@ -18,6 +19,8 @@ import { modelInfo, chatTurn, applyChatOps } from './chat.mjs'
 import { createSyncService } from './sync.mjs'
 import { startTigerDeviceAuth, pollTigerDeviceToken } from './tiger-mcp.mjs'
 import { createQiemanLogin } from './qieman-login.mjs'
+import { generateFosunClientKey, fosunTicketCreate, checkFosunApiKey } from './fosun-client.mjs'
+import qrcode from 'qrcode-generator'
 import { createCredentialStore } from './credentials.mjs'
 import { createThsLogin } from './ths-login.mjs'
 import { createFutuLogin } from './futu-login.mjs'
@@ -136,6 +139,55 @@ export function apply(ctx, config = {}) {
     return { status, message: current.message, ...(current.authorizeUrl ? { authorizeUrl: current.authorizeUrl } : {}) }
   }
   ctx.effect(() => () => qiemanLoginSlot?.dispose(), 'dsh-wealth: own Qieman MCP login lifecycle')
+  // 复星 OpenAPI 扫码开通：本机生成客户端密钥对 -> TicketCreate 签发开通页；
+  // H5 完成后再次 TicketCreate（同一 clientPubKey）即返回 apiKey + serverPubKey，
+  // 存入 `pending-fosun` 供授权创建消费（照 ths/futu 的 pending 模式）。
+  let fosunOnboard = null
+  const appendTicketToUrl = (url, ticket) => {
+    if (!ticket || url.includes('ticket=')) return url
+    if (url.includes('#')) {
+      const [base, fragment] = url.split('#', 2)
+      return base + '#' + fragment + (fragment.includes('?') ? '&' : '?') + 'ticket=' + encodeURIComponent(ticket)
+    }
+    return url + (url.includes('?') ? '&' : '?') + 'ticket=' + encodeURIComponent(ticket)
+  }
+  const qrDataUrlFor = (url) => {
+    const qr = qrcode(0, 'M')
+    qr.addData(url)
+    qr.make()
+    return qr.createDataURL(6, 8)
+  }
+  const fosunOnboardStatus = () => fosunOnboard ? {
+    status: fosunOnboard.status,
+    message: fosunOnboard.message,
+    openUrl: fosunOnboard.openUrl,
+    qrDataUrl: fosunOnboard.qrDataUrl,
+    expiresAt: fosunOnboard.expiresAt || null,
+  } : { status: 'idle', message: '' }
+  const pendingFosunOwner = () => fosunOnboard?.authId ? 'pending-fosun:' + fosunOnboard.authId : 'pending-fosun'
+  const pollFosunOnboard = async () => {
+    if (!fosunOnboard || fosunOnboard.status !== 'waiting') return
+    try {
+      const ticket = await fosunTicketCreate({ gatewayUrl: fosunOnboard.gatewayUrl, clientPubKey: fosunOnboard.publicPem, macId: fosunOnboard.macId })
+      if (!ticket.apiKey || !ticket.serverPubKey) return
+      const check = await checkFosunApiKey({ gatewayUrl: fosunOnboard.gatewayUrl, apiKey: ticket.apiKey }).catch(() => ({ status: 'unknown' }))
+      if (['expired', 'disabled', 'invalid'].includes(check.status)) {
+        fosunOnboard.status = 'error'
+        fosunOnboard.message = '复星 API Key 校验未通过（' + check.status + '），请在开通页重新复制'
+        return
+      }
+      vault.set(pendingFosunOwner(), 'fosun', {
+        apiKey: ticket.apiKey,
+        privateKey: fosunOnboard.privatePem,
+        serverPublicKey: ticket.serverPubKey,
+      })
+      fosunOnboard.status = 'ready'
+      fosunOnboard.message = '复星开通完成，凭据已保存，可以读取账户'
+    } catch (error) {
+      // Transient gateway errors must not kill the waiting flow; the UI shows the message.
+      fosunOnboard.message = '轮询开通状态失败：' + String(error?.message || error)
+    }
+  }
   // Tiger's remote MCP uses the OAuth 2.1 device flow: no redirect listener, the
   // user enters a short code in the browser. The refresh token is long-lived.
   let tigerLogin = null
@@ -301,6 +353,38 @@ export function apply(ctx, config = {}) {
         if (path === 'api/sources' || path === 'api/sources/ths/portfolios') {
           if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
           send(res, 200, { ok: true, ...(path === 'api/sources' ? sync.list() : await sync.listThsPortfolios()) }); return
+        }
+        if (path === 'api/sources/fosun/onboard/start') {
+          if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
+          const body = JSON.parse(await readBody(req).catch(() => '{}') || '{}')
+          const target = body.authId ? sync.list().authorizations.find(a => a.id === body.authId && a.connector === 'fosun') : null
+          const key = generateFosunClientKey()
+          const macId = randomUUID().replace(/-/g, '')
+          const gatewayUrl = String(body.gatewayUrl || '').trim() || undefined
+          const ticket = await fosunTicketCreate({ gatewayUrl, clientPubKey: key.publicPem, macId })
+          const openUrl = appendTicketToUrl(ticket.url, ticket.ticket)
+          let expiresAt = null
+          const expireNumber = Number(ticket.expireTime)
+          if (Number.isFinite(expireNumber) && expireNumber > 0) expiresAt = expireNumber > 1e12 ? expireNumber : expireNumber * 1000
+          fosunOnboard = {
+            status: 'waiting',
+            message: '请用星财富 App 扫码，或点开链接完成开通',
+            openUrl, ticket: ticket.ticket,
+            qrDataUrl: qrDataUrlFor(openUrl),
+            privatePem: key.privatePem, publicPem: key.publicPem, macId, gatewayUrl,
+            authId: target ? target.id : null, expiresAt,
+          }
+          send(res, 200, { ok: true, ...fosunOnboardStatus() }); return
+        }
+        if (path === 'api/sources/fosun/onboard/status') {
+          if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
+          await pollFosunOnboard()
+          send(res, 200, { ok: true, ...fosunOnboardStatus() }); return
+        }
+        if (path === 'api/sources/fosun/onboard/cancel') {
+          if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
+          fosunOnboard = null
+          send(res, 200, { ok: true, ...fosunOnboardStatus() }); return
         }
         if (path === 'api/sources/qieman/mcp/start') {
           if (req.method !== 'POST') { res.writeHead(405); res.end(); return }

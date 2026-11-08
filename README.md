@@ -91,12 +91,12 @@ DSH 多账户、多资产、多币种账本。本地开发版 **0.9.0**：独立
 
 ### 复星证券（星财富）
 
-- 复星财富官方 OpenAPI，网关默认 `https://openapi.fosunxcz.com`。凭证是**同一 ticket 的原子三元组**：API Key（`ak_` 开头，页面复制）、服务端公钥 PEM（同一页面复制）、本机生成的客户端私钥。三者必须来自同一次开通/重置流程，不能跨 ticket 混用。
+- 复星财富官方 OpenAPI，网关默认 `https://openapi.fosunxcz.com`。点「**扫码开通**」：插件本机生成 P-384 客户端密钥对并调官方 `TicketCreate` 签发开通页（二维码 + 链接），用「星财富」App 扫码（或手机打开链接）完成授权后，插件自动取回 **API Key（ak_ 开头）+ 服务端公钥** 并与本机私钥一起存入加密凭据库；三方必须来自同一次开通/重置。也可手动粘贴三元组。
 - 插件按官方协议工作：ECDH P-384 握手 + ECDSA 服务端签名校验建立会话，之后每个请求 HMAC-SHA256 签名并对请求/响应体做 AES-256-GCM 加解密；会话过期自动重建。协议与官方 `openapi-python-sdk` 1.2.0 的 `crypto.py` 一致。
 - 读取交易账户列表、资金汇总（现金 / 总资产 / 持有盈亏）与分页持仓；历史记录走资金流水接口（入金 / 出金 / 股息 / 买卖等，未知业务保留原文并归为「其他」）。
-- 注意：`fsk_` 等平台型 Key 不是 OpenAPI Key，无法用于此连接；需先在复星 OpenAPI 开通页完成授权。
+- 注意：`fsk_` 等平台型 Key 不是 OpenAPI Key，无法用于此连接；扫码开通会自动取回正确的 `ak_` 凭据。
 
-官方 SDK：<https://github.com/fosunwealth/openapi-python-sdk>；开通与凭证流程见官方 `fw-tradings` skill 的 `fosun-env-setup`。
+官方 SDK：<https://github.com/fosunwealth/openapi-python-sdk>；扫码开通与 `fw-tradings` skill 的 `fosun-env-setup` 流程一致。新增依赖 `qrcode-generator`（MIT，二维码渲染）。
 
 ### Interactive Brokers / IB
 
