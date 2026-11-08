@@ -306,6 +306,30 @@ test('history events carry validated life-bill categories and can be recategoriz
   assert.equal(load().historyEvents.length, 1)
 })
 
+test('bills.import archives batch flows with categories, dedupes and never guesses', () => {
+  const db = fixture()
+  const rows = [
+    { date: '2026-11-03', time: '12:30:00', direction: 'out', amount: 86, category: 'food', note: '美团 · 外卖', externalId: 'wechat:1' },
+    { date: '2026-11-04', direction: 'in', amount: 200, note: '还款', externalId: 'wechat:2' },
+    { date: '2026-11-05', direction: 'none', amount: 1000, externalId: 'wechat:3' },
+    { date: 'bad-date', direction: 'out', amount: 1 },
+  ]
+  const result = applyOp(db, 'bills.import', { accountId: 'a', provider: 'wechat', rows })
+  assert.deepEqual([result.imported, result.duplicates, result.skipped], [2, 0, 2])
+  assert.equal(db.historyEvents.length, 2)
+  const [out, income] = db.historyEvents
+  assert.deepEqual([out.kind, out.cashAmount, out.category, out.time, out.source], ['withdrawal', -86, 'food', '12:30:00', 'bill-import:wechat'])
+  assert.deepEqual([income.kind, income.cashAmount, income.category], ['deposit', 200, undefined])
+  assert.equal(db.historyBatches.at(-1).imported, 2)
+  const again = applyOp(db, 'bills.import', { accountId: 'a', provider: 'wechat', rows })
+  assert.deepEqual([again.imported, again.duplicates], [0, 2])
+  bad(db, 'bills.import', { accountId: 'a', rows: [{ date: '2026-11-06', direction: 'out', amount: 1, category: 'grocery' }] })
+  bad(db, 'bills.import', { accountId: 'a', rows: [] })
+  assert.throws(() => applyOp(db, 'bills.import', { accountId: 'missing', rows: [{ date: '2026-11-06', direction: 'out', amount: 1 }] }), (e) => e.code === 'not-found')
+  save(db)
+  assert.equal(load().historyEvents.length, 2)
+})
+
 test('quotePrice fills valuation below manualPrice and suppresses cost-estimate warnings', () => {
   const db = fixture()
   const h = holding(db, { symbol: 'QQQ', manualPrice: null })

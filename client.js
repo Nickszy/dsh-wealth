@@ -295,7 +295,38 @@ window.__ModuleLoader__.load({
       const [fc, setFc] = React.useState(null), [fcErr, setFcErr] = React.useState('')
       const [perf, setPerf] = React.useState(null), [perfErr, setPerfErr] = React.useState('')
       const [bills, setBills] = React.useState(null), [billsErr, setBillsErr] = React.useState('')
+      const [billPrev, setBillPrev] = React.useState(null), [billMsg, setBillMsg] = React.useState(''), [billAccount, setBillAccount] = React.useState(''), [billBusy, setBillBusy] = React.useState(false)
       const perfAccount = fixedAccounts && fixedAccounts.length === 1 ? fixedAccounts[0] : null
+      const loadBills = () => fetch('/portfolio/api/bills?months=12', { headers: { accept: 'application/json' } }).then(r => r.json()).then(d => { if (d.ok) setBills(d); else setBillsErr(d.error?.message || '生活账单读取失败') }).catch(e => setBillsErr(e.message))
+      const pickBillFile = async (e) => {
+        const file = e.target.files && e.target.files[0]
+        if (!file) return
+        setBillBusy(true); setBillMsg(''); setBillPrev(null)
+        try {
+          const bytes = new Uint8Array(await file.arrayBuffer())
+          let text
+          try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes) } catch { text = new TextDecoder('gbk').decode(bytes) }
+          const r = await fetch('/portfolio/api/bills/preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }) })
+          const d = await r.json()
+          if (!r.ok || !d.ok) throw new Error((d.error && d.error.message) || '账单解析失败')
+          setBillPrev({ ...d, text, fileName: file.name })
+          if (!billAccount) setBillAccount((state.ledger.accounts.find(a => a.type === 'bank' || a.type === 'hand') || state.ledger.accounts[0] || {}).id || '')
+          if (!d.counts || !d.counts.total) setBillMsg('没有识别到可导入的收支行，请确认是微信/支付宝导出的 CSV 账单')
+        } catch (err) { setBillMsg(err.message) } finally { setBillBusy(false) }
+      }
+      const confirmBillImport = async () => {
+        if (!billPrev) return
+        if (!billAccount) { setBillMsg('请选择入账账户'); return }
+        setBillBusy(true); setBillMsg('')
+        try {
+          const r = await fetch('/portfolio/api/bills/import', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ accountId: billAccount, text: billPrev.text }) })
+          const d = await r.json()
+          if (!r.ok || !d.ok) throw new Error((d.error && d.error.message) || '导入失败')
+          setBillMsg('已导入 ' + d.imported + ' 笔' + (d.duplicates ? '，跳过重复 ' + d.duplicates + ' 笔' : '') + (d.skipped ? '，忽略 ' + d.skipped + ' 行' : '') + '。可在「流水」里调整分类。')
+          setBillPrev(null)
+          await loadBills()
+        } catch (err) { setBillMsg(err.message) } finally { setBillBusy(false) }
+      }
       const key = (fixedAccounts || sel).join(',')
       React.useEffect(() => {
         if (!key) { setScoped(null); return }
@@ -313,9 +344,7 @@ window.__ModuleLoader__.load({
       // 生活账单汇总：与投资流水同一份归档，只统计已归类的生活收支。
       React.useEffect(() => {
         if (fixedAccounts) return
-        let live = true
-        fetch('/portfolio/api/bills?months=12', { headers: { accept: 'application/json' } }).then(r => r.json()).then(d => { if (!live) return; if (d.ok) setBills(d); else setBillsErr(d.error?.message || '生活账单读取失败') }).catch(e => { if (live) setBillsErr(e.message) })
-        return () => { live = false }
+        loadBills()
       }, [state.ledger.updatedAt])
       // 历史净值回补：首次需要拉取历史行情，稍慢；之后走服务端缓存。
       React.useEffect(() => {
@@ -445,25 +474,40 @@ window.__ModuleLoader__.load({
           h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', marginBottom: 8 } },
             h('strong', { style: { fontSize: 15 } }, '生活账单', h('span', { style: { fontWeight: 400, color: t.sub, fontSize: 11, marginLeft: 7 } }, '近 12 个月 · 按分类')),
             bills && bills.totals ? h('span', { style: { fontSize: 10.5, color: t.sub } }, '支出 ' + fmtMoney(bills.totals.out) + ' · 收入 ' + fmtMoney(bills.totals.in) + ' · ' + bills.baseCurrency) : null),
-          billsErr ? h('div', { style: { fontSize: 12, color: t.terra } }, billsErr) :
-          !bills ? h('div', { style: { fontSize: 12, color: t.sub } }, '读取中…') :
-          !bills.categories.length ? h('div', { style: { fontSize: 12, color: t.sub, lineHeight: 1.7 } }, '还没有归类的生活账单。在「流水」里给入金 / 出金选择生活分类（餐饮、居住、交通…），或用资产助手说「把 11 月的房租记为居住」，这里就会按分类汇总。') :
           h('div', null,
-            h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))', gap: 16 } },
-              h('div', null,
-                h('div', { style: { fontSize: 11, color: t.sub, marginBottom: 6 } }, '近 12 个月分类'),
-                bills.categories.map((c) => h('div', { key: c.category, style: { display: 'flex', justifyContent: 'space-between', gap: 8, padding: '5px 0', borderBottom: '1px solid ' + t.border, fontSize: 12.5 } },
-                  h('span', null, c.label, h('small', { style: { color: t.sub, marginLeft: 6 } }, c.count + ' 笔')),
-                  h('strong', { style: { fontVariantNumeric: 'tabular-nums', color: t.text } }, fmtMoney(c.out) + (c.in ? ' / +' + fmtMoney(c.in) : ''))))),
-              h('div', null,
-                h('div', { style: { fontSize: 11, color: t.sub, marginBottom: 6 } }, '按月'),
-                h('div', { style: { overflowX: 'auto' } }, h('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: 11.5 } },
-                  h('thead', null, h('tr', null, ['月份', '支出', '收入', '净'].map((h2, i) => h('th', { key: h2, style: { textAlign: i ? 'right' : 'left', padding: '4px 6px', color: t.sub, fontWeight: 500, borderBottom: '1px solid ' + t.border } }, h2)))),
-                  h('tbody', null, bills.months.filter((m2) => m2.count).slice(-8).map((m2) => h('tr', { key: m2.month },
-                    h('td', { style: { padding: '4px 6px', color: t.sub } }, m2.month), h('td', { style: { textAlign: 'right', padding: '4px 6px', fontVariantNumeric: 'tabular-nums' } }, fmtMoney(m2.out)),
-                    h('td', { style: { textAlign: 'right', padding: '4px 6px', fontVariantNumeric: 'tabular-nums' } }, fmtMoney(m2.in)), h('td', { style: { textAlign: 'right', padding: '4px 6px', fontVariantNumeric: 'tabular-nums', color: m2.net >= 0 ? t.green : t.red } }, fmtMoney(m2.net))))))))),
-            bills.uncategorized ? h('div', { style: { fontSize: 10.5, color: t.terra, marginTop: 8 } }, '另有 ' + bills.uncategorized + ' 笔入金 / 出金尚未归类，可在「流水」里逐笔补选，或用 AI 助手批量归类。') : null,
-            h('div', { style: { fontSize: 10.5, color: t.sub, marginTop: 8 } }, '生活账单与投资流水共用同一份归档：每笔只记一次，分类只影响汇总口径。'))) : null,
+            billsErr ? h('div', { style: { fontSize: 12, color: t.terra } }, billsErr) :
+            !bills ? h('div', { style: { fontSize: 12, color: t.sub } }, '读取中…') :
+            !bills.categories.length ? h('div', { style: { fontSize: 12, color: t.sub, lineHeight: 1.7 } }, '还没有归类的生活账单。用下方「导入微信 / 支付宝账单」自动归类，或在「流水」里给入金 / 出金选择分类（餐饮、居住、交通…）。') :
+            h('div', null,
+              h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))', gap: 16 } },
+                h('div', null,
+                  h('div', { style: { fontSize: 11, color: t.sub, marginBottom: 6 } }, '近 12 个月分类'),
+                  bills.categories.map((c) => h('div', { key: c.category, style: { display: 'flex', justifyContent: 'space-between', gap: 8, padding: '5px 0', borderBottom: '1px solid ' + t.border, fontSize: 12.5 } },
+                    h('span', null, c.label, h('small', { style: { color: t.sub, marginLeft: 6 } }, c.count + ' 笔')),
+                    h('strong', { style: { fontVariantNumeric: 'tabular-nums', color: t.text } }, fmtMoney(c.out) + (c.in ? ' / +' + fmtMoney(c.in) : ''))))),
+                h('div', null,
+                  h('div', { style: { fontSize: 11, color: t.sub, marginBottom: 6 } }, '按月'),
+                  h('div', { style: { overflowX: 'auto' } }, h('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: 11.5 } },
+                    h('thead', null, h('tr', null, ['月份', '支出', '收入', '净'].map((h2, i) => h('th', { key: h2, style: { textAlign: i ? 'right' : 'left', padding: '4px 6px', color: t.sub, fontWeight: 500, borderBottom: '1px solid ' + t.border } }, h2)))),
+                    h('tbody', null, bills.months.filter((m2) => m2.count).slice(-8).map((m2) => h('tr', { key: m2.month },
+                      h('td', { style: { padding: '4px 6px', color: t.sub } }, m2.month), h('td', { style: { textAlign: 'right', padding: '4px 6px', fontVariantNumeric: 'tabular-nums' } }, fmtMoney(m2.out)),
+                      h('td', { style: { textAlign: 'right', padding: '4px 6px', fontVariantNumeric: 'tabular-nums' } }, fmtMoney(m2.in)), h('td', { style: { textAlign: 'right', padding: '4px 6px', fontVariantNumeric: 'tabular-nums', color: m2.net >= 0 ? t.green : t.red } }, fmtMoney(m2.net))))))))),
+              bills.uncategorized ? h('div', { style: { fontSize: 10.5, color: t.terra, marginTop: 8 } }, '另有 ' + bills.uncategorized + ' 笔入金 / 出金尚未归类，可在「流水」里逐笔补选，或用 AI 助手批量归类。') : null,
+              h('div', { style: { fontSize: 10.5, color: t.sub, marginTop: 8 } }, '生活账单与投资流水共用同一份归档：每笔只记一次，分类只影响汇总口径。')),
+            h('div', { style: { marginTop: 12, paddingTop: 10, borderTop: '1px solid ' + t.border } },
+              h('div', { style: { display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', fontSize: 12 } },
+                h('label', { style: { ...T.btn(t, false), cursor: 'pointer', display: 'inline-block' } }, billBusy ? '处理中…' : '导入微信 / 支付宝账单',
+                  h('input', { type: 'file', accept: '.csv,text/csv', style: { display: 'none' }, onChange: pickBillFile, disabled: billBusy })),
+                billPrev
+                  ? h('span', { style: { color: t.sub } }, (billPrev.provider === 'wechat' ? '微信' : billPrev.provider === 'alipay' ? '支付宝' : '账单') + '：' + billPrev.counts.total + ' 行 · 支出 ' + fmtMoney(billPrev.totals.out) + ' · 收入 ' + fmtMoney(billPrev.totals.in) + (billPrev.counts.skipped ? ' · 忽略 ' + billPrev.counts.skipped + ' 行' : ''))
+                  : h('span', { style: { color: t.sub } }, '在微信「账单 → 常见问题 → 下载账单」或支付宝「导出交易记录」得到 CSV，导入后自动建议分类，可再调整。')),
+              billPrev ? h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 } },
+                h('select', { 'aria-label': '账单入账账户', value: billAccount, onChange: (e) => setBillAccount(e.target.value), style: { ...T.input(t), width: 'auto', fontSize: 12 } },
+                  state.ledger.accounts.map((acc2) => h('option', { key: acc2.id, value: acc2.id }, acc2.name))),
+                h('button', { style: T.btn(t, true), disabled: billBusy || !billAccount, onClick: confirmBillImport }, '确认导入'),
+                h('button', { style: T.btn(t, false), onClick: () => { setBillPrev(null); setBillMsg('') } }, '取消'),
+                (billPrev.categories || []).length ? h('span', { style: { fontSize: 10.5, color: t.sub } }, '分类建议：' + billPrev.categories.slice(0, 5).map((c) => c.label + ' ' + fmtMoney(c.amount)).join('　')) : null) : null,
+              billMsg ? h('div', { role: 'status', style: { fontSize: 11.5, color: billMsg.startsWith('已导入') ? t.green : t.red, marginTop: 6 } }, billMsg) : null))) : null,
         h('section', { style: { ...T.card(t), marginTop: 14 }, 'aria-label': '数据健康' },
           h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 } }, h('strong', { style: { fontSize: 15 } }, '数据健康'), h('span', { style: { fontSize: 10.5, color: t.sub } }, '决定指标可信度')),
           h('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12, color: t.sub, marginBottom: 8 } },

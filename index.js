@@ -9,6 +9,7 @@ import { load, save, applyOp, summarize, OpError, DATA_DIR } from './store.mjs'
 import { refreshQuotes } from './quotes.mjs'
 import { forecast } from './forecast.mjs'
 import { billSummary } from './bills.mjs'
+import { parseBillCsv, billPreview } from './bills-import.mjs'
 import { computePerformance } from './performance.mjs'
 import { previewImport } from './importer.mjs'
 import { modelInfo, chatTurn, applyChatOps } from './chat.mjs'
@@ -162,6 +163,26 @@ export function apply(ctx, config = {}) {
           if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
           const months = Math.min(60, Math.max(1, Number(url.searchParams.get('months')) || 12))
           send(res, 200, { ok: true, ...billSummary(load(), { months }) })
+          return
+        }
+        if (path === 'api/bills/preview') {
+          if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
+          const body = JSON.parse(await readBody(req, 8 * 1024 * 1024))
+          if (typeof body.text !== 'string' || !body.text.trim()) { send(res, 400, { ok: false, error: { code: 'bad-request', message: '请提供账单文件文本' } }); return }
+          const parsed = parseBillCsv(body.text)
+          send(res, 200, { ok: true, ...billPreview(parsed) })
+          return
+        }
+        if (path === 'api/bills/import') {
+          if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
+          const body = JSON.parse(await readBody(req, 8 * 1024 * 1024))
+          if (!body.accountId) { send(res, 400, { ok: false, error: { code: 'bad-request', message: '请选择入账账户' } }); return }
+          if (typeof body.text !== 'string' || !body.text.trim()) { send(res, 400, { ok: false, error: { code: 'bad-request', message: '请提供账单文件文本' } }); return }
+          const parsed = parseBillCsv(body.text)
+          const db = load()
+          const result = applyOp(db, 'bills.import', { accountId: body.accountId, rows: parsed.rows, provider: parsed.provider })
+          if (result.imported) save(db)
+          send(res, 200, { ok: true, ...result, summary: summarize(db) })
           return
         }
         if (path === 'api/performance') {

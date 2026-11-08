@@ -396,6 +396,56 @@ export function applyOp(db, op, payload = {}) {
       return { event }
     }
 
+    // 批量归档微信 / 支付宝账单：一文件一批次，按 externalId 去重，未识别行如实计数。
+    case 'bills.import': {
+      const p = payload
+      if (!p.accountId) throw new OpError('bad-request', '缺少 accountId')
+      const account = findAccount(db, p.accountId)
+      if (!account) throw new OpError('not-found', '账户不存在: ' + p.accountId)
+      if (!Array.isArray(p.rows) || !p.rows.length) throw new OpError('bad-request', '没有可导入的账单行')
+      if (p.rows.length > 5000) throw new OpError('bad-request', '单次最多导入 5000 行')
+      db.historyEvents ||= []
+      const existing = new Set(db.historyEvents.filter((e) => e.accountId === p.accountId && e.externalId).map((e) => e.externalId))
+      const batchId = uid('HIST'), importedAt = nowISO()
+      const provider = String(p.provider || p.source || 'bill').slice(0, 32)
+      const added = []
+      let duplicates = 0, skipped = 0
+      for (const row of p.rows) {
+        const date = String(row?.date || '')
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date))) { skipped++; continue }
+        const amount = numeric(row.amount, 'amount', { positive: true })
+        const direction = row.direction
+        if (direction !== 'out' && direction !== 'in') { skipped++; continue }
+        const category = row.category === undefined || row.category === null || row.category === '' ? null : String(row.category).trim()
+        if (category !== null && !isLifeCategory(category)) throw new OpError('bad-request', '未知的生活账单分类: ' + category)
+        const externalId = row.externalId ? String(row.externalId) : null
+        if (externalId && existing.has(externalId)) { duplicates++; continue }
+        const event = {
+          id: uid('EVT'), accountId: account.id, kind: direction === 'in' ? 'deposit' : 'withdrawal',
+          date, cashAmount: direction === 'in' ? amount : -amount,
+          currency: normCurrency(row.currency, account.currency || db.baseCurrency),
+          ...(category ? { category } : {}),
+          ...(row.time ? { time: String(row.time) } : {}),
+          note: String(row.note || ''), source: 'bill-import:' + provider,
+          ...(externalId ? { externalId } : {}),
+          batchId, importedAt, archiveOnly: true, observedAt: importedAt,
+        }
+        if (externalId) existing.add(externalId)
+        db.historyEvents.push(event)
+        added.push(event)
+      }
+      if (added.length) {
+        db.historyBatches ||= []
+        db.historyBatches.push({
+          id: batchId, accountId: account.id, importedAt, imported: added.length, duplicates, skipped, outside: 0,
+          method: 'bills', provider,
+          coverage: { method: 'bills', complete: false, note: '微信 / 支付宝账单导入，仅覆盖文件内可见记录。' },
+          byKind: added.reduce((acc, e) => { acc[e.kind] = (acc[e.kind] || 0) + 1; return acc }, {}),
+        })
+      }
+      return { batchId, imported: added.length, duplicates, skipped }
+    }
+
     case 'price.set': {
       const p = payload
       const price = numeric(p.price, 'price', { nullable: true })
