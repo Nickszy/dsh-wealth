@@ -63,6 +63,7 @@ test('OAuth: register uses the workbuddy callback, exchange/refresh bind the MCP
   assert.equal(authorizeUrl.searchParams.get('code_challenge_method'), 'S256')
   assert.equal(authorizeUrl.searchParams.get('resource'), WESTOCK_MCP_ENDPOINT)
   assert.equal(authorizeUrl.searchParams.get('scope'), 'read write')
+  assert.equal(authorizeUrl.searchParams.get('connector_authorize_url'), WESTOCK_REDIRECT_URI, '微信回跳分支靠它拿到回调地址')
 
   const token = await exchangeWestockCode({ code: 'abc', clientId: 'wb_dyn_x', codeVerifier: pkce.codeVerifier }, { fetch: fetchImpl })
   assert.equal(token.accessToken, 'at-1')

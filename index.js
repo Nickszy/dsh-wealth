@@ -318,6 +318,10 @@ export function apply(ctx, config = {}) {
           if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
           const body = JSON.parse(await readBody(req, 64 * 1024))
           if (!westockLoginSlot) { send(res, 400, { ok: false, error: { code: 'bad-request', message: '请先发起 westock 授权' } }); return }
+          if (typeof body.callbackUrl !== 'string' || !/^workbuddy:\/\//i.test(body.callbackUrl.trim())) {
+            send(res, 400, { ok: false, error: { code: 'bad-request', message: '这不是授权回调地址：请在弹出的页面勾选同意并点「同意授权」，浏览器跳转到 workbuddy://… 后再把该地址完整粘贴回来' } })
+            return
+          }
           const parsed = westockCallbackCode(body.callbackUrl)
           if (!parsed.code) { send(res, 400, { ok: false, error: { code: 'bad-request', message: '回调地址里没有 code，请粘贴完整的 workbuddy:// 回调链接' } }); return }
           if (parsed.state && westockLoginSlot.state && parsed.state !== westockLoginSlot.state) {

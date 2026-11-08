@@ -66,6 +66,9 @@ export function buildWestockAuthorizeUrl({ clientId, state, codeChallenge }) {
   url.searchParams.set('code_challenge_method', 'S256')
   // RFC 8707：token 必须绑定到 MCP 资源，否则签发的 token 调 MCP 会 401。
   url.searchParams.set('resource', WESTOCK_MCP_ENDPOINT)
+  // 登录页的「微信回跳」分支（网址里带 code 时）只从该参数取回调地址，
+  // 缺了它点「同意授权」后不会跳回 workbuddy://，用户就拿不到授权码。
+  url.searchParams.set('connector_authorize_url', WESTOCK_REDIRECT_URI)
   return url.toString()
 }
 
