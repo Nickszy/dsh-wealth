@@ -263,6 +263,15 @@ window.__ModuleLoader__.load({
       const s = state.summary, db = state.ledger, cur = s.baseCurrency
       const positiveTotal = s.accounts.reduce((sum, a) => sum + Math.max(0, a.valueBase || 0), 0)
       const [digest, setDigest] = React.useState(null)
+      const todayKey = new Date().toISOString().slice(0, 10)
+      // 每日提醒：当天首次打开时显示一次，点「知道了」后当天不再出现，次日自动恢复。
+      const [digestHidden, setDigestHidden] = React.useState(() => {
+        try { return localStorage.getItem('wealth-digest-dismissed') === todayKey } catch { return false }
+      })
+      const dismissDigest = () => {
+        setDigestHidden(true)
+        try { localStorage.setItem('wealth-digest-dismissed', todayKey) } catch { /* ignore */ }
+      }
       React.useEffect(() => {
         let live = true
         fetch('/portfolio/api/digest?days=7', { headers: { accept: 'application/json' } }).then(r => r.json()).then(d => { if (live && d.ok) setDigest(d) }).catch(() => {})
@@ -282,11 +291,12 @@ window.__ModuleLoader__.load({
             h('div', null, h('span', { style: T.label(t) }, '浮动盈亏'), h('strong', { style: { color: s.totalPnlBase >= 0 ? t.green : t.red } }, fmtMoney(s.totalPnlBase, cur))),
             h('div', null, h('span', { style: T.label(t) }, '账户 / 持仓'), h('strong', null, db.accounts.length + ' / ' + db.holdings.length))),
           h(DashboardCharts, { t, state, call, busy })),
-        digest ? h('section', { style: { ...T.card(t), marginBottom: 16 }, 'aria-label': '今日摘要' },
-          h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 } },
-            h('strong', { style: { fontSize: 15 } }, '今日摘要'),
-            h('span', { style: { fontSize: 10.5, color: t.sub } }, digest.date + ' · 可让资产助手复述或追问')),
-          digest.lines.map((line, i) => h('div', { key: i, style: { fontSize: 12.5, color: i === 0 ? t.text : t.sub, lineHeight: 1.8, fontVariantNumeric: 'tabular-nums' } }, line))) : null,
+        digest && !digestHidden ? h('section', { style: { ...T.card(t), marginBottom: 16, borderColor: t.accent + '55' }, 'aria-label': '今日提醒', role: 'status' },
+          h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, marginBottom: 6 } },
+            h('strong', { style: { fontSize: 15 } }, '今日提醒', h('span', { style: { fontWeight: 400, color: t.sub, fontSize: 11, marginLeft: 7 } }, digest.date)),
+            h('button', { style: { ...T.btn(t, false), padding: '3px 10px', fontSize: 11 }, onClick: dismissDigest }, '知道了')),
+          digest.lines.map((line, i) => h('div', { key: i, style: { fontSize: 12.5, color: i === 0 ? t.text : t.sub, lineHeight: 1.8, fontVariantNumeric: 'tabular-nums' } }, line)),
+          h('div', { style: { fontSize: 10.5, color: t.sub, marginTop: 6 } }, '每天首次打开显示一次；可让资产助手复述或追问。')) : null,
         h('section', { style: T.card(t), 'aria-label': '我的账户' },
           h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 5 } }, h('strong', { style: { fontSize: 15, fontWeight: 600 } }, '我的账户', h('span', { style: { fontWeight: 400, color: t.sub, marginLeft: 7, fontSize: 12 } }, db.accounts.length)), h('button', { style: T.btn(t, false), onClick: () => navigate('accounts') }, '管理账户 ↗')),
           !s.accounts.length ? h('div', { className: 'wealth-empty' },
