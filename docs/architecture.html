@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>dsh-wealth · 架构图</title>
+<style>
+  html,body{margin:0;background:#f5f5f2;font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;color:#161a1f}
+  .wrap{width:1440px;margin:0 auto;padding:28px 32px 40px}
+  h1{font-size:24px;margin:0 0 2px;letter-spacing:-.4px}
+  .sub{color:#5c6470;font-size:12.5px;margin-bottom:20px}
+  .legend{display:flex;gap:18px;font-size:11.5px;color:#5c6470;margin-bottom:14px}
+  .legend i{display:inline-block;width:26px;height:0;border-top:2px solid #2563eb;vertical-align:middle;margin-right:6px}
+  .legend i.dash{border-top-style:dashed;border-color:#8a94a3}
+  svg{display:block;width:1440px;height:1120px}
+  .band{fill:#ffffff;stroke:#dfe3e8;stroke-width:1.2;rx:12}
+  .band-title{font-size:12px;font-weight:700;letter-spacing:.6px;fill:#8a94a3;text-transform:uppercase}
+  .box{fill:#fbfbfa;stroke:#d6dbe1;stroke-width:1.1}
+  .box-accent{fill:#eef4ff;stroke:#b9cdf5}
+  .box-data{fill:#fff8ea;stroke:#efd9a8}
+  .box-ink{fill:#14181d;stroke:#14181d}
+  .t{font-size:13px;font-weight:650;fill:#161a1f}
+  .t-sm{font-size:11.5px;fill:#5c6470}
+  .t-file{font-size:12px;font-family:ui-monospace,Consolas,monospace;fill:#7a5400}
+  .t-inv{fill:#ffffff}
+  .t-inv-sm{fill:#c8d0da}
+  .arrow{stroke:#2563eb;stroke-width:1.8;fill:none;marker-end:url(#a)}
+  .arrow-dash{stroke:#8a94a3;stroke-width:1.5;stroke-dasharray:5 5;fill:none;marker-end:url(#ad)}
+  .alabel{font-size:11px;fill:#2563eb;font-weight:600}
+  .alabel-dash{font-size:11px;fill:#6b7480}
+  .note{font-size:11.5px;fill:#5c6470}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>dsh-wealth · 聚合式个人资产管家架构</h1>
+  <div class="sub">一个本机账本 + 多券商同步 + 历史回补 + AI 读写。所有落盘数据留在 <code>~/.dsh/data/dsh-portfolio/</code>，插件仅在回环地址提供服务。</div>
+  <div class="legend"><span><i></i>写入 / 拉取数据流</span><span><i class="dash"></i>只读查询</span><span>实线框 = 运行模块　黄框 = 落盘文件　深色框 = 唯一写入口</span></div>
+
+<svg viewBox="0 0 1440 1120" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#2563eb"/>
+    </marker>
+    <marker id="ad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8a94a3"/>
+    </marker>
+  </defs>
+
+  <!-- ===== L1 外部数据源 ===== -->
+  <rect class="band" x="24" y="10" width="1010" height="150" rx="12"/>
+  <text class="band-title" x="44" y="34">① 外部数据源</text>
+
+  <rect class="box" x="44" y="46" width="228" height="96" rx="9"/>
+  <text class="t" x="60" y="70">同花顺投资账本</text>
+  <text class="t-sm" x="60" y="90">caishen_fund：account_list</text>
+  <text class="t-sm" x="60" y="107">stock_position · merge_fund</text>
+  <text class="t-sm" x="60" y="124">get_money_history · asset_change</text>
+
+  <rect class="box" x="288" y="46" width="150" height="96" rx="9"/>
+  <text class="t" x="304" y="70">富途</text>
+  <text class="t-sm" x="304" y="90">OpenD 只读</text>
+  <text class="t-sm" x="304" y="107">或官方 MCP</text>
+
+  <rect class="box" x="454" y="46" width="150" height="96" rx="9"/>
+  <text class="t" x="470" y="70">长桥</text>
+  <text class="t-sm" x="470" y="90">官方 SDK</text>
+  <text class="t-sm" x="470" y="107">或 OAuth MCP</text>
+
+  <rect class="box" x="620" y="46" width="150" height="96" rx="9"/>
+  <text class="t" x="636" y="70">Interactive Brokers</text>
+  <text class="t-sm" x="636" y="90">Client Portal</text>
+  <text class="t-sm" x="636" y="107">Gateway（本机）</text>
+
+  <rect class="box" x="786" y="46" width="228" height="96" rx="9"/>
+  <text class="t" x="802" y="70">公开行情与净值</text>
+  <text class="t-sm" x="802" y="90">腾讯 qt.gtimg.cn（实时价）</text>
+  <text class="t-sm" x="802" y="107">东财 push2his / fund f10（日线）</text>
+  <text class="t-sm" x="802" y="124">微信 / 支付宝 CSV（生活账单）</text>
+
+  <!-- ===== L2 连接器适配层 ===== -->
+  <rect class="band" x="24" y="184" width="1010" height="150" rx="12"/>
+  <text class="band-title" x="44" y="208">② 连接器适配层（只读、统一快照契约）</text>
+
+  <rect class="box" x="44" y="220" width="228" height="96" rx="9"/>
+  <text class="t" x="60" y="244">ths-client.mjs</text>
+  <text class="t-sm" x="60" y="264">持仓/流水/资产变动解析</text>
+  <text class="t-sm" x="60" y="281">Cookie 登录 ths-login.mjs</text>
+  <text class="t-sm" x="60" y="298">v= 令牌每请求轮换</text>
+
+  <rect class="box" x="288" y="220" width="316" height="96" rx="9"/>
+  <text class="t" x="304" y="244" style="font-size:12px">brokers-sdk · futu-mcp · lb-mcp · ib-client</text>
+  <text class="t-sm" x="304" y="264">券商原始数据 → holdings / cash / totals</text>
+  <text class="t-sm" x="304" y="281">MCP 客户端 mcp-http.mjs（OAuth 设备流）</text>
+  <text class="t-sm" x="304" y="298">来源可插拔：且慢 / 老虎 / 复星 同层接入</text>
+
+  <rect class="box" x="620" y="220" width="150" height="96" rx="9"/>
+  <text class="t" x="636" y="244">quotes.mjs</text>
+  <text class="t-sm" x="636" y="264">实时行情</text>
+  <text class="t-sm" x="636" y="281">hk02549 统一键</text>
+
+  <rect class="box" x="786" y="220" width="228" height="96" rx="9"/>
+  <text class="t" x="802" y="244">klines.mjs · bills-import.mjs</text>
+  <text class="t-sm" x="802" y="264">日线/净值分页拉取 + 磁盘缓存</text>
+  <text class="t-sm" x="802" y="281">账单表头定位、关键词分类</text>
+  <text class="t-sm" x="802" y="298">交易关闭/失败行跳过</text>
+
+  <!-- ===== L3 同步与授权 ===== -->
+  <rect class="band" x="24" y="358" width="1010" height="150" rx="12"/>
+  <text class="band-title" x="44" y="382">③ 同步与授权服务 · sync.mjs</text>
+
+  <rect class="box" x="44" y="394" width="300" height="96" rx="9"/>
+  <text class="t" x="60" y="418">一次登录 = 一条授权</text>
+  <text class="t-sm" x="60" y="438">authorizations → sources（账户绑定）</text>
+  <text class="t-sm" x="60" y="455">凭据按授权 id 隔离</text>
+  <text class="t-sm" x="60" y="472">定时 tick · 并发去重 · 水位线防回退</text>
+
+  <rect class="box" x="360" y="394" width="300" height="96" rx="9"/>
+  <text class="t" x="376" y="418">mergeSnapshot + normalizeSnapshot</text>
+  <text class="t-sm" x="376" y="438">按来源指纹认领持仓，不覆盖手工记录</text>
+  <text class="t-sm" x="376" y="455">白名单字段校验（connectors.mjs）</text>
+  <text class="t-sm" x="376" y="472">转账增量回扫（二分定位到日）</text>
+
+  <rect class="box" x="676" y="394" width="338" height="96" rx="9"/>
+  <text class="t" x="692" y="418">credentials.mjs</text>
+  <text class="t-sm" x="692" y="438">AES-256-GCM 本机加密，密钥独立文件</text>
+  <text class="t-sm" x="692" y="455">日志 / 报错 / 界面全程脱敏</text>
+  <text class="t-sm" x="692" y="472">连接地址不可被请求体覆盖</text>
+
+  <!-- ===== L4 账本核心 ===== -->
+  <rect class="band" x="24" y="532" width="1010" height="150" rx="12"/>
+  <text class="band-title" x="44" y="556">④ 账本核心 · store.mjs（唯一写入口 applyOp）</text>
+
+  <rect class="box box-ink" x="44" y="568" width="220" height="96" rx="9"/>
+  <text class="t t-inv" x="60" y="592">applyOp(db, op, payload)</text>
+  <text class="t-sm t-inv-sm" x="60" y="612">校验 / 规范化 / 去重</text>
+  <text class="t-sm t-inv-sm" x="60" y="629">UI、CLI、AI 共用同一入口</text>
+  <text class="t-sm t-inv-sm" x="60" y="646">先预览后应用，不静默改账</text>
+
+  <rect class="box" x="280" y="568" width="350" height="96" rx="9"/>
+  <text class="t" x="296" y="592">实体：accounts · instruments · holdings</text>
+  <text class="t-sm" x="296" y="612">trades · historyEvents / historyBatches</text>
+  <text class="t-sm" x="296" y="629">snapshots · budgets · sourceTotals</text>
+  <text class="t-sm" x="296" y="646">统一代码 symbols.mjs · 枚举 model.mjs</text>
+
+  <rect class="box" x="646" y="568" width="368" height="96" rx="9"/>
+  <text class="t" x="662" y="592">记录分开，统计合并</text>
+  <text class="t-sm" x="662" y="612">同一标的的重复记录保留（不同来源/币种）</text>
+  <text class="t-sm" x="662" y="629">统计按 identity（市场|代码）归并展示</text>
+  <text class="t-sm" x="662" y="646">账面市值 = 数量 × 手填价/行情价 × 汇率</text>
+
+  <!-- ===== L5 派生分析 ===== -->
+  <rect class="band" x="24" y="706" width="1010" height="176" rx="12"/>
+  <text class="band-title" x="44" y="730">⑤ 派生分析层（全部从账本重算，可复现）</text>
+
+  <rect class="box" x="44" y="742" width="236" height="122" rx="9"/>
+  <text class="t" x="60" y="766">analytics.mjs</text>
+  <text class="t-sm" x="60" y="786">资产负债表 · 资产类别/行业/风格</text>
+  <text class="t-sm" x="60" y="803">集中度 HHI · 年度现金流</text>
+  <text class="t-sm" x="60" y="820">TWR / XIRR / 快照回撤</text>
+
+  <rect class="box" x="296" y="742" width="236" height="122" rx="9"/>
+  <text class="t" x="312" y="766">timeline.mjs</text>
+  <text class="t-sm" x="312" y="786">当前持仓按流水逆推</text>
+  <text class="t-sm" x="312" y="803">合成已卖出标的 · 每日现金</text>
+  <text class="t-sm" x="312" y="820">负现金 → 推定入金（下限）</text>
+  <text class="t-sm" x="312" y="837">多账户合并时间线</text>
+
+  <rect class="box" x="548" y="742" width="236" height="122" rx="9"/>
+  <text class="t" x="564" y="766">performance.mjs</text>
+  <text class="t-sm" x="564" y="786">每日市值 = 持仓 × 前收 + 现金</text>
+  <text class="t-sm" x="564" y="803">历史净值曲线 · 最大回撤</text>
+  <text class="t-sm" x="564" y="820">依赖 klines 缓存，缺价平推/剔除</text>
+  <text class="t-sm" x="564" y="837">任意账户范围合并</text>
+
+  <rect class="box" x="800" y="742" width="214" height="122" rx="9"/>
+  <text class="t" x="816" y="766">forecast · bills · digest</text>
+  <text class="t-sm" x="816" y="786">周期性收支识别与 30 天预测</text>
+  <text class="t-sm" x="816" y="803">生活分类汇总 · 月度预算</text>
+  <text class="t-sm" x="816" y="820">每日摘要：净资产/到期/超支</text>
+  <text class="t-sm" x="816" y="837">数据健康提示</text>
+
+  <!-- ===== L6 接口层 ===== -->
+  <rect class="band" x="24" y="906" width="1010" height="150" rx="12"/>
+  <text class="band-title" x="44" y="930">⑥ 接口层</text>
+
+  <rect class="box" x="44" y="942" width="316" height="96" rx="9"/>
+  <text class="t" x="60" y="966">index.js · /portfolio/api/*</text>
+  <text class="t-sm" x="60" y="986">state · op · analysis · performance</text>
+  <text class="t-sm" x="60" y="1003">forecast · bills · digest · transfers/scan</text>
+  <text class="t-sm" x="60" y="1020">sources / auth / history / chat</text>
+
+  <rect class="box" x="376" y="942" width="316" height="96" rx="9"/>
+  <text class="t" x="392" y="966">cli.mjs（其他 session / AI 取数）</text>
+  <text class="t-sm" x="392" y="986">summary · positions · history · bills</text>
+  <text class="t-sm" x="392" y="1003">forecast · performance · transfer-scan</text>
+  <text class="t-sm" x="392" y="1020">任意 op 直接写入（同 applyOp 校验）</text>
+
+  <rect class="box" x="708" y="942" width="306" height="96" rx="9"/>
+  <text class="t" x="724" y="966">chat.mjs（资产助手）</text>
+  <text class="t-sm" x="724" y="986">自然语言 → 白名单 op 提案</text>
+  <text class="t-sm" x="724" y="1003">用户确认后应用到账本</text>
+  <text class="t-sm" x="724" y="1020">提问时附带当前账本摘要</text>
+
+  <!-- ===== L7 呈现层 ===== -->
+  <rect class="band" x="24" y="1080" width="1010" height="34" rx="10"/>
+  <text class="t" x="44" y="1102">⑦ 呈现层 · client.js（React via __ModuleLoader__）：总览 / 账户 / 持仓 / 流水 / 分析 / 设置 · 中英切换</text>
+
+  <!-- ===== flow arrows ===== -->
+  <line class="arrow" x1="158" y1="162" x2="158" y2="182"/>
+  <text class="alabel" x="166" y="158">HTTPS 拉取</text>
+  <line class="arrow" x1="446" y1="162" x2="446" y2="182"/>
+  <line class="arrow" x1="530" y1="162" x2="530" y2="182"/>
+  <line class="arrow" x1="695" y1="162" x2="695" y2="182"/>
+  <line class="arrow" x1="900" y1="162" x2="900" y2="182"/>
+
+  <line class="arrow" x1="158" y1="336" x2="158" y2="356"/>
+  <text class="alabel" x="166" y="332">统一快照</text>
+  <line class="arrow" x1="446" y1="336" x2="446" y2="356"/>
+  <line class="arrow" x1="695" y1="336" x2="695" y2="356"/>
+  <line class="arrow" x1="900" y1="336" x2="900" y2="356"/>
+
+  <line class="arrow" x1="194" y1="510" x2="194" y2="530"/>
+  <text class="alabel" x="202" y="506">mergeSnapshot</text>
+  <line class="arrow-dash" x1="510" y1="510" x2="510" y2="530"/>
+
+  <line class="arrow" x1="154" y1="684" x2="154" y2="704"/>
+  <text class="alabel" x="162" y="680">读取账本</text>
+  <line class="arrow" x1="414" y1="684" x2="414" y2="704"/>
+  <line class="arrow" x1="666" y1="684" x2="666" y2="704"/>
+  <line class="arrow" x1="907" y1="684" x2="907" y2="704"/>
+
+  <line class="arrow" x1="236" y1="884" x2="236" y2="904"/>
+  <text class="alabel" x="244" y="880">查询</text>
+  <line class="arrow" x1="590" y1="884" x2="590" y2="904"/>
+  <line class="arrow" x1="840" y1="884" x2="840" y2="904"/>
+
+  <line class="arrow" x1="202" y1="1058" x2="202" y2="1078"/>
+  <line class="arrow" x1="534" y1="1058" x2="534" y2="1078"/>
+  <line class="arrow" x1="861" y1="1058" x2="861" y2="1078"/>
+  <text class="alabel" x="210" y="1054">JSON</text>
+
+  <!-- ===== RIGHT COLUMN ===== -->
+  <rect class="band" x="1058" y="10" width="358" height="330" rx="12"/>
+  <text class="band-title" x="1078" y="34">数据落盘（本机）</text>
+
+  <rect class="box box-data" x="1078" y="48" width="318" height="54" rx="9"/>
+  <text class="t-file" x="1092" y="70">ledger.json</text>
+  <text class="t-sm" x="1092" y="88">账户 / 标的 / 持仓 / 流水 / 快照 / 预算</text>
+
+  <rect class="box box-data" x="1078" y="112" width="318" height="54" rx="9"/>
+  <text class="t-file" x="1092" y="134">sources.json (v2)</text>
+  <text class="t-sm" x="1092" y="152">authorizations + sources（不含凭据）</text>
+
+  <rect class="box box-data" x="1078" y="176" width="318" height="54" rx="9"/>
+  <text class="t-file" x="1092" y="198">credentials.enc.json + .key</text>
+  <text class="t-sm" x="1092" y="216">AES-256-GCM 密文 + 独立密钥文件</text>
+
+  <rect class="box box-data" x="1078" y="240" width="318" height="54" rx="9"/>
+  <text class="t-file" x="1092" y="262">cache/klines.json</text>
+  <text class="t-sm" x="1092" y="280">历史日线/净值缓存（按代码分片）</text>
+
+  <text class="note" x="1078" y="320">写账：writeFileSync 临时文件 + rename；改前留 .bak。</text>
+
+  <rect class="band" x="1058" y="358" width="358" height="324" rx="12"/>
+  <text class="band-title" x="1078" y="382">边界与约束</text>
+  <text class="note" x="1078" y="408">· 服务只监听回环地址，宿主受信任</text>
+  <text class="note" x="1078" y="432">· 连接地址不可被请求体覆盖</text>
+  <text class="note" x="1078" y="456">· 报错 / 日志 / 界面全程脱敏</text>
+  <text class="note" x="1078" y="480">· 券商接口只读：不做交易、不下单</text>
+  <text class="note" x="1078" y="504">· 快照水位线：旧数据不覆盖新数据</text>
+  <text class="note" x="1078" y="528">· 缺价不用 0 填充：平推或剔除并告警</text>
+  <text class="note" x="1078" y="552">· 现金逆推为负 → 标注“推定入金”</text>
+  <text class="note" x="1078" y="576">· 金额/汇率异常立即中止导入</text>
+  <text class="note" x="1078" y="600">· AI 写入需用户确认（预览 → 应用）</text>
+  <text class="note" x="1078" y="624">· 港股通按 HKD 原币，净值人民币折算</text>
+  <text class="note" x="1078" y="648">· 记录分开存储，统计按身份合并</text>
+
+  <rect class="band" x="1058" y="700" width="358" height="356" rx="12"/>
+  <text class="band-title" x="1078" y="724">关键数据流</text>
+
+  <text class="t" x="1078" y="752">① 同步</text>
+  <text class="note" x="1078" y="772">授权 → 适配器拉快照 → normalizeSnapshot</text>
+  <text class="note" x="1078" y="790">→ mergeSnapshot 认领持仓 → 写 ledger</text>
+
+  <text class="t" x="1078" y="820">② 历史回补</text>
+  <text class="note" x="1078" y="840">流水 + 当前持仓 → 逆推每日持仓/现金</text>
+  <text class="note" x="1078" y="858">→ 拉日线/净值 → 每日市值 → 曲线/回撤</text>
+
+  <text class="t" x="1078" y="888">③ 转账还原</text>
+  <text class="note" x="1078" y="908">asset_change 区间总额 → 二分定位到日</text>
+  <text class="note" x="1078" y="926">→ historyEvents（入金/出金）→ 现金时间线</text>
+
+  <text class="t" x="1078" y="956">④ AI / 其他 session</text>
+  <text class="note" x="1078" y="976">自然语言或 CLI → op 提案 → applyOp</text>
+  <text class="note" x="1078" y="994">→ 校验/去重 → 写回同一份 ledger</text>
+
+  <text class="t" x="1078" y="1024">⑤ 报表</text>
+  <text class="note" x="1078" y="1044">ledger → analytics/forecast/bills/digest</text>
+</svg>
+</div>
+</body>
+</html>
