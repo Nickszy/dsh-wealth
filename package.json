@@ -1,6 +1,6 @@
 {
   "name": "dsh-wealth",
-  "version": "0.1.0",
+  "version": "0.9.0",
   "description": "资产账本：多账户、多资产、多币种持仓与交易流水管理，支持对话维护与本机持久化 | Multi-account, multi-asset, multi-currency portfolio & trade ledger for DeepSeek Harness, with chat-based maintenance.",
   "type": "module",
   "main": "index.js",
@@ -10,14 +10,75 @@
     "./client": "./client.js",
     "./package.json": "./package.json"
   },
-  "files": ["index.js", "client.js", "store.mjs", "cli.mjs", "cordis.patch.yml", "icon.svg", "README.md", "LICENSE"],
-  "keywords": ["dsh", "dsh-plugin", "deepseek-harness", "portfolio", "ledger", "assets", "投资", "持仓", "记账"],
+  "files": [
+    "index.js",
+    "client.js",
+    "ui-theme.js",
+    "model.mjs",
+    "DATA-MODEL.md",
+    "analytics.mjs",
+    "store.mjs",
+    "importer.mjs",
+    "history.mjs",
+    "history-file.mjs",
+    "history-provider.mjs",
+    "lb-mcp.mjs",
+    "futu-mcp.mjs",
+    "futu-login.mjs",
+    "HISTORY-DESIGN.md",
+    "chat.mjs",
+    "sync.mjs",
+    "connectors.mjs",
+    "credentials.mjs",
+    "ths-client.mjs",
+    "ths-login.mjs",
+    "brokers-sdk.mjs",
+    "ib-client.mjs",
+    "cli.mjs",
+    "cordis.patch.yml",
+    "icon.svg",
+    "README.md",
+    "SYNC-DESIGN.md",
+    "THS-NOTICE.txt",
+    "BOARDUI-NOTICE.txt",
+    "vendor/futu",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "longport": "4.3.7",
+    "ws": "8.22.1",
+    "protobufjs": "7.6.6",
+    "bytebuffer": "5.0.1",
+    "long": "4.0.0",
+    "read-excel-file": "9.3.14"
+  },
+  "scripts": {
+    "test": "node --test analytics.test.mjs model.test.mjs lb-mcp.test.mjs futu-mcp.test.mjs history-file.test.mjs history.test.mjs history-sync.test.mjs history-provider.test.mjs store.test.mjs importer.test.mjs chat.test.mjs host.test.mjs connectors.test.mjs sync.test.mjs account-import.test.mjs authorization.test.mjs credentials.test.mjs ths-client.test.mjs ths-login.test.mjs brokers-sdk.test.mjs ib-client.test.mjs futu-transport.test.mjs"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "portfolio",
+    "ledger",
+    "assets",
+    "投资",
+    "持仓",
+    "记账"
+  ],
   "license": "MIT",
-  "repository": { "type": "git", "url": "git+https://github.com/Nickszy/dsh-wealth.git" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Nickszy/dsh-wealth.git"
+  },
   "homepage": "https://github.com/Nickszy/dsh-wealth#readme",
-  "bugs": { "url": "https://github.com/Nickszy/dsh-wealth/issues" },
+  "bugs": {
+    "url": "https://github.com/Nickszy/dsh-wealth/issues"
+  },
   "dsh": {
-    "bundle": { "patch": "./cordis.patch.yml" },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
       "platform": "web",
       "inject": [
@@ -27,5 +88,7 @@
       ]
     }
   },
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": ">=20"
+  }
 }

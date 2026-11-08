@@ -22,9 +22,122 @@ window.__ModuleLoader__.load({
     }
     function palette(dark) {
       return dark
-        ? { bg: '#0f1115', panel: '#161a21', card: '#1d222b', border: '#2b323d', text: '#e6e8ee', sub: '#9aa3b2', accent: '#5b8cff', green: '#3ddc84', red: '#ff6161', input: '#12161d' }
-        : { bg: '#f6f7f9', panel: '#ffffff', card: '#ffffff', border: '#e3e6eb', text: '#1b1f27', sub: '#6b7480', accent: '#2f6fed', green: '#1f9d55', red: '#d64545', input: '#ffffff' }
+        ? {
+            bg: 'radial-gradient(1100px 640px at 18% -12%, #232e52 0%, #141a2c 55%, #0d1120 100%)',
+            panel: '#151a29', card: '#1b2130', border: '#2a3247', text: '#e9edf8', sub: '#8e99b0',
+            accent: '#5b8cff', accent2: '#7ba6ff', green: '#38c97f', red: '#ff6b7a',
+            input: '#141a28', soft: '#202738', terra: '#e05a80', hover: '#232b3e', scroll: '#333c52',
+            shell: 'linear-gradient(180deg,#101527,#0d1120)',
+            shadow: '0 12px 30px rgba(0,0,0,.38)',
+            cat: ['#5b8cff', '#bd8422', '#e05a80', '#8b6ef5', '#2fae6d'],
+          }
+        : {
+            bg: 'linear-gradient(155deg,#a9b4f7 0%,#b8c2fb 45%,#a7b3f6 100%)',
+            panel: '#ffffff', card: '#ffffff', border: '#e7ebf5', text: '#171c2b', sub: '#8b93a7',
+            accent: '#2f6fed', accent2: '#5c95ff', green: '#149c5b', red: '#dd4655',
+            input: '#f6f8fd', soft: '#eef3fe', terra: '#e8567e', hover: '#f3f6fe', scroll: '#d7ddec',
+            shell: 'linear-gradient(180deg,#f4f6fc,#eef2fa)',
+            shadow: '0 10px 28px rgba(35,48,95,.07)',
+            cat: ['#2f6fed', '#b97c1f', '#e8567e', '#7b61e8', '#149c5b'],
+          }
     }
+
+    // BoardUI FREE MIT token adaptations; see BOARDUI-NOTICE.txt and ui-theme.js.
+    // Embedded so the host loader only requires its own React, without a CSS build.
+    const WEALTH_CSS = `
+.wealth-shell{container-type:inline-size;box-sizing:border-box;font-family:"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;font-size:13.5px;line-height:1.55;color:var(--wealth-text)}
+.wealth-shell *{box-sizing:border-box}
+.wealth-shell button,.wealth-shell input,.wealth-shell select,.wealth-shell textarea{font:inherit;color:inherit}
+.wealth-shell button{transition:transform .16s ease,box-shadow .16s ease,filter .16s ease}
+.wealth-shell button:hover:not(:disabled){filter:brightness(.985)}
+.wealth-shell button:active:not(:disabled){transform:translateY(1px)}
+.wealth-shell button:disabled{opacity:.55;cursor:default!important}
+.wealth-shell :is(button,input,select,textarea):focus-visible{outline:2px solid var(--wealth-accent);outline-offset:2px}
+.wealth-shell input:not([type=checkbox]):not([type=radio]),.wealth-shell select{min-height:38px}
+.wealth-shell table{border-collapse:collapse;min-width:560px}
+.wealth-shell td,.wealth-shell th{font-variant-numeric:tabular-nums}
+.wealth-shell th{letter-spacing:.03em}
+.wealth-shell tbody tr{transition:background .12s ease}
+.wealth-shell tbody tr:hover{background:var(--wealth-hover)}
+.wealth-shell tbody tr:last-child td{border-bottom:0!important}
+.wealth-shell ::-webkit-scrollbar{width:9px;height:9px}
+.wealth-shell ::-webkit-scrollbar-thumb{background:var(--wealth-scroll);border-radius:999px}
+.wealth-shell ::-webkit-scrollbar-track{background:transparent}
+.wealth-shell .wealth-topbar{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:16px;padding:10px 24px;min-height:58px;border-bottom:1px solid var(--wealth-border);background:var(--wealth-panel)}
+.wealth-shell .wealth-wordmark{font-size:17px;font-weight:750;letter-spacing:-.4px;white-space:nowrap;display:flex;align-items:center;gap:9px}
+.wealth-shell .wealth-wordmark:before{content:'';width:30px;height:30px;border-radius:10px;background:linear-gradient(135deg,var(--wealth-accent),var(--wealth-accent2));display:inline-block}
+.wealth-shell .wealth-wordmark small{font-size:9.5px;letter-spacing:1.6px;font-weight:700;color:var(--wealth-sub)}
+.wealth-shell .wealth-tabs{display:flex;gap:4px;overflow-x:auto;flex:1;min-width:0}
+.wealth-shell .wealth-tab{border:1px solid transparent;background:transparent;color:var(--wealth-sub);padding:8px 15px;border-radius:999px;cursor:pointer;white-space:nowrap;font-weight:600;font-size:13px}
+.wealth-shell .wealth-tab:hover{background:var(--wealth-hover);color:var(--wealth-text)}
+.wealth-shell .wealth-tab[aria-current=page]{background:var(--wealth-soft);color:var(--wealth-accent);font-weight:750}
+.wealth-shell .wealth-body{flex:1;min-width:0;display:flex;align-items:stretch;overflow:auto}
+.wealth-shell .wealth-main{flex:1;min-width:0;padding:24px 26px 40px;background:var(--wealth-shell)}
+.wealth-shell .wealth-main>div{max-width:1360px;margin-left:auto;margin-right:auto}
+.wealth-shell .wealth-page-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:20px}
+.wealth-shell .wealth-eyebrow{font-size:10px;letter-spacing:2px;color:var(--wealth-sub);text-transform:uppercase;font-weight:700}
+.wealth-shell .wealth-title{font-size:24px;letter-spacing:-.6px;margin:4px 0;font-weight:780}
+.wealth-shell .wealth-chat{width:310px;flex-shrink:0;border-left:1px solid var(--wealth-border);position:sticky;top:0;height:100%;background:var(--wealth-panel)}
+.wealth-shell .wealth-hero{background:var(--wealth-card);border:1px solid var(--wealth-border);border-radius:24px;padding:22px 24px 14px;margin-bottom:16px;box-shadow:var(--wealth-shadow)}
+.wealth-shell .wealth-asset-value{font-size:clamp(32px,3.3vw,42px);font-weight:780;letter-spacing:-1.4px;line-height:1.2;font-variant-numeric:tabular-nums;margin:8px 0 16px}
+.wealth-shell .wealth-asset-value small{font-size:12px;font-weight:600;letter-spacing:0;margin-left:9px;color:var(--wealth-sub)}
+.wealth-shell .wealth-metrics{display:flex;gap:26px;flex-wrap:wrap;padding-bottom:16px}
+.wealth-shell .wealth-metrics strong{display:block;font-size:17px;font-weight:750;margin-top:4px;font-variant-numeric:tabular-nums}
+.wealth-shell .wealth-charts{display:grid;grid-template-columns:minmax(0,1fr) 250px;gap:20px;border-top:1px solid var(--wealth-border);padding-top:16px}
+.wealth-shell .wealth-charts>section{min-width:0;background:transparent!important;border:0!important;padding:0!important;box-shadow:none!important}
+.wealth-shell .wealth-empty{min-height:180px;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;gap:9px;padding:20px;color:var(--wealth-sub)}
+.wealth-shell .wealth-empty-mark{width:52px;height:52px;border:1px solid var(--wealth-border);border-radius:17px;display:grid;place-items:center;color:var(--wealth-accent);font-size:22px;background:var(--wealth-soft)}
+.wealth-shell .wealth-acct-layout{display:grid;grid-template-columns:minmax(0,1fr) 310px;gap:16px;align-items:start}
+.wealth-shell .wealth-account-row{display:grid;grid-template-columns:42px minmax(100px,1fr) minmax(100px,1fr) auto;gap:13px;align-items:center;padding:13px 8px;border-bottom:1px solid var(--wealth-border);border-radius:12px}
+.wealth-shell .wealth-account-row:last-child{border-bottom:0}
+.wealth-shell .wealth-account-row:hover{background:var(--wealth-hover)}
+.wealth-shell .wealth-acct-row{display:grid;grid-template-columns:42px minmax(130px,1.5fr) minmax(90px,1fr) auto 22px;gap:12px;align-items:center;padding:11px 12px;border-radius:14px;cursor:pointer}
+.wealth-shell .wealth-acct-row:hover{background:var(--wealth-hover)}
+.wealth-shell .wealth-acct-row.is-open{background:var(--wealth-soft)}
+.wealth-shell .wealth-account-badge{width:38px;height:38px;border-radius:12px;display:grid;place-items:center;font-weight:750;font-size:15px;background:var(--wealth-soft);color:var(--wealth-accent);flex:none}
+.wealth-shell .wealth-bar{height:4px;border-radius:5px;background:var(--wealth-border);overflow:hidden;margin-top:7px}
+.wealth-shell .wealth-bar i{display:block;height:100%;background:linear-gradient(90deg,var(--wealth-accent),var(--wealth-accent2));border-radius:5px}
+.wealth-shell .wealth-nested{padding:0 12px 14px 66px}
+.wealth-shell .wealth-nested-card{background:var(--wealth-soft);border:1px solid var(--wealth-border);border-radius:16px;padding:6px 14px;overflow-x:auto}
+.wealth-shell .wealth-nested-card table{min-width:0;width:100%}
+.wealth-shell .wealth-nested-card th,.wealth-shell .wealth-nested-card td{padding:8px 8px;font-size:12px;white-space:nowrap}
+.wealth-shell .wealth-summary{position:sticky;top:74px}
+.wealth-shell .wealth-modal-backdrop{position:fixed;inset:0;z-index:100;background:rgba(10,16,34,.5);backdrop-filter:blur(3px);display:flex;align-items:flex-start;justify-content:center;padding:6vh 16px;overflow:auto}
+.wealth-shell .wealth-modal{width:min(760px,100%);background:var(--wealth-card);color:var(--wealth-text);border:1px solid var(--wealth-border);border-radius:22px;box-shadow:0 30px 80px rgba(12,20,45,.4);padding:22px 24px}
+.wealth-shell .wealth-modal-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:16px}
+.wealth-shell .wealth-method-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.wealth-shell .wealth-subtabs{display:flex;gap:4px;border-bottom:1px solid var(--wealth-border);margin:18px 0 16px;overflow-x:auto}
+.wealth-shell .wealth-subtab{border:0;background:transparent;padding:9px 14px;color:var(--wealth-sub);border-bottom:2px solid transparent;cursor:pointer;white-space:nowrap;font-weight:600}
+.wealth-shell .wealth-subtab[aria-current=page]{color:var(--wealth-accent);border-bottom-color:var(--wealth-accent)}
+.wealth-shell .wealth-acct-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:14px}
+.wealth-shell .wealth-chip{border:1px solid var(--wealth-border);background:var(--wealth-card);color:var(--wealth-sub);border-radius:999px;padding:6px 13px;cursor:pointer;font-size:12.5px;font-weight:600}
+.wealth-shell .wealth-chip[aria-pressed=true]{background:var(--wealth-soft);border-color:var(--wealth-accent);color:var(--wealth-accent);font-weight:700}
+.wealth-shell .wealth-chat-intro{padding:24px 0 20px}
+.wealth-shell .wealth-chat-intro h3{font-weight:600;font-size:21px;letter-spacing:-.4px;margin:14px 0 8px}
+.wealth-shell .wealth-chat form{padding:10px;border:1px solid var(--wealth-border);border-radius:16px;background:var(--wealth-card);box-shadow:var(--wealth-shadow)}
+.wealth-shell .wealth-chat form textarea{border:0!important;background:transparent!important;box-shadow:none!important;min-height:80px}
+.wealth-shell .wealth-source-options{display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:10px;margin:20px 0}
+.wealth-shell .wealth-source-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:13px}
+.wealth-shell .wealth-source-actions{display:flex;gap:8px;flex-wrap:wrap}
+.wealth-shell .wealth-source-panel{overflow-wrap:anywhere}
+.wealth-shell .wealth-source-meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:12px}
+.wealth-shell .wealth-main table{width:100%}
+.wealth-shell .wealth-table-wrap{overflow-x:auto}
+
+.wealth-shell .wealth-frame{height:100%;max-width:1480px;margin:0 auto;display:flex;background:var(--wealth-shell);border-radius:24px;overflow:hidden;box-shadow:0 26px 60px rgba(28,40,88,.22)}
+.wealth-shell .wealth-rail{width:212px;flex:none;background:var(--wealth-panel);border-right:1px solid var(--wealth-border);padding:20px 14px;display:flex;flex-direction:column;gap:4px;overflow-y:auto}
+.wealth-shell .wealth-brand{display:flex;align-items:center;gap:10px;padding:2px 8px 14px}
+.wealth-shell .wealth-logo{width:36px;height:36px;border-radius:12px;background:linear-gradient(135deg,var(--wealth-accent),var(--wealth-accent2));display:inline-block;flex:none;position:relative;box-shadow:0 8px 18px rgba(47,111,237,.28)}
+.wealth-shell .wealth-logo:after{content:'';position:absolute;inset:10px;border-radius:3px;border:2px solid rgba(255,255,255,.92)}
+.wealth-shell .wealth-navlist{display:flex;flex-direction:column;gap:4px}
+.wealth-shell .wealth-nav{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:12px;border:1px solid transparent;background:transparent;color:var(--wealth-sub);font-weight:600;cursor:pointer;text-align:left;width:100%}
+.wealth-shell .wealth-nav:hover{background:var(--wealth-hover);color:var(--wealth-text)}
+.wealth-shell .wealth-nav[aria-current=page]{background:var(--wealth-soft);color:var(--wealth-accent);font-weight:750}
+.wealth-shell .wealth-rail-foot{margin-top:12px;padding-top:10px;border-top:1px solid var(--wealth-border);display:flex;flex-direction:column;gap:4px}
+@container(max-width:1200px){.wealth-shell .wealth-acct-layout{grid-template-columns:1fr}.wealth-shell .wealth-summary{position:static}.wealth-shell .wealth-chat{width:270px}.wealth-shell .wealth-charts{grid-template-columns:1fr}.wealth-shell .wealth-charts>section:last-child{border-top:1px solid var(--wealth-border)!important;padding-top:16px!important}}
+@container(max-width:900px){.wealth-shell .wealth-rail{width:66px;padding:16px 8px}.wealth-shell .wealth-brand>div,.wealth-shell .wealth-nav-label{display:none}.wealth-shell .wealth-brand{justify-content:center;padding:0 0 12px}.wealth-shell .wealth-nav{justify-content:center;padding:10px 6px}.wealth-shell .wealth-body{flex-wrap:wrap}.wealth-shell .wealth-main{flex:0 0 100%;width:100%;padding:20px 16px}.wealth-shell .wealth-chat{width:100%;position:relative;top:0;height:520px;min-height:0;border-left:0;border-top:1px solid}.wealth-shell .wealth-topbar{padding:8px 12px;gap:10px}.wealth-shell .wealth-topbar .wealth-wordmark{display:none}.wealth-shell .wealth-modal{padding:18px 16px}.wealth-shell .wealth-acct-row{grid-template-columns:36px minmax(90px,1fr) auto 20px}.wealth-shell .wealth-acct-row .wealth-alloc{display:none}.wealth-shell .wealth-nested{padding-left:12px}.wealth-shell .wealth-title{font-size:22px}}
+@media(prefers-reduced-motion:reduce){.wealth-shell *{transition:none!important;animation:none!important}}
+`
 
     // ---------- data access ----------
     async function getState() {
@@ -44,21 +157,45 @@ window.__ModuleLoader__.load({
       const v = Math.abs(n) >= 10000 ? Math.round(n).toLocaleString('zh-CN') : (Math.round(n * 100) / 100).toLocaleString('zh-CN')
       return (cur ? '' : '') + v + (cur ? ' ' + cur : '')
     }
-    function fmtPct(n) { if (n === null || !Number.isFinite(n)) return '—'; return (n >= 0 ? '+' : '') + (Math.round(n * 100) / 100) + '%' }
+    function fmtPct(n) { if (n === null || !Number.isFinite(n)) return '—'; return (n >= 0 ? '+' : '') + (Math.round(n * 10000) / 100) + '%' }
+    function fmtCompact(n) {
+      const a = Math.abs(n)
+      if (a >= 1e8) return (n / 1e8).toFixed(1).replace(/\.0$/, '') + '亿'
+      if (a >= 1e4) return (n / 1e4).toFixed(1).replace(/\.0$/, '') + '万'
+      return String(Math.round(n))
+    }
 
     const T = {
-      th: (c, t) => h('th', { style: { textAlign: 'left', padding: '8px 10px', fontSize: 12, color: t.sub, fontWeight: 500, borderBottom: '1px solid ' + t.border, whiteSpace: 'nowrap' } }, c),
-      td: (c, t, extra) => h('td', { style: Object.assign({ padding: '8px 10px', fontSize: 13, color: t.text, borderBottom: '1px solid ' + t.border, verticalAlign: 'middle' }, extra || {}) }, c),
-      btn: (t, active) => ({ padding: '6px 12px', fontSize: 13, borderRadius: 7, cursor: 'pointer', border: '1px solid ' + (active ? t.accent : t.border), background: active ? t.accent : t.card, color: active ? '#fff' : t.text }),
-      input: (t) => ({ padding: '7px 9px', fontSize: 13, borderRadius: 7, border: '1px solid ' + t.border, background: t.input, color: t.text, outline: 'none', width: '100%', boxSizing: 'border-box' }),
-      card: (t) => ({ background: t.card, border: '1px solid ' + t.border, borderRadius: 10, padding: 14 }),
-      label: (t) => ({ fontSize: 12, color: t.sub, marginBottom: 4, display: 'block' }),
+      th: (c, t) => h('th', { style: { textAlign: 'left', padding: '0 12px 10px', fontSize: 10.5, letterSpacing: .7, color: t.sub, fontWeight: 700, borderBottom: '1px solid ' + t.border, whiteSpace: 'nowrap' } }, c),
+      td: (c, t, extra) => h('td', { style: Object.assign({ padding: '11px 12px', fontSize: 13, color: t.text, borderBottom: '1px solid ' + t.border, verticalAlign: 'middle' }, extra || {}) }, c),
+      btn: (t, active) => ({ padding: '7px 14px', fontSize: 12.5, borderRadius: 999, minHeight: 34, fontWeight: 650, cursor: 'pointer', border: '1px solid ' + (active ? 'transparent' : t.border), background: active ? 'linear-gradient(135deg,' + t.accent + ',' + t.accent2 + ')' : t.card, color: active ? '#fff' : t.text, boxShadow: active ? '0 8px 18px ' + t.accent + '33' : t.shadow }),
+      input: (t) => ({ padding: '8px 11px', fontSize: 13, borderRadius: 11, border: '1px solid ' + t.border, background: t.input, color: t.text, outline: 'none', width: '100%', boxSizing: 'border-box' }),
+      card: (t) => ({ background: t.card, border: '1px solid ' + t.border, borderRadius: 20, padding: 18, boxShadow: t.shadow, overflowX: 'auto' }),
+      label: (t) => ({ fontSize: 11.5, color: t.sub, marginBottom: 5, display: 'block', fontWeight: 650 }),
     }
 
     // ---------- main page ----------
+    const NAV_PATHS = {
+      overview: ['M4 10.5 12 4l8 6.5', 'M6 9.8V20h12V9.8'],
+      accounts: ['M4 8.5A2.5 2.5 0 0 1 6.5 6H19a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H6.5A2.5 2.5 0 0 1 4 15.5z', 'M4 9h16', 'M15.5 13.5h2'],
+      holdings: ['M12 3a9 9 0 1 0 9 9h-9z', 'M12 3v9h9'],
+      trades: ['M4 8h13', 'm14 5 3 3-3 3', 'M20 16H7', 'm10 13-3 3 3 3'],
+      analysis: ['M4 19V5', 'M4 19h16', 'M7 15l3-4 3 2 4-6'],
+      settings: ['M12 8.6a3.4 3.4 0 1 0 0 6.8 3.4 3.4 0 0 0 0-6.8', 'M12 2.5v2.2', 'M12 19.3v2.2', 'M2.5 12h2.2', 'M19.3 12h2.2', 'm5 5 1.6 1.6', 'm17.4 17.4 1.6 1.6', 'm19 5-1.6 1.6', 'm6.6 17.4L5 19'],
+      refresh: ['M20 12a8 8 0 1 1-2.34-5.66', 'M20 4v5h-5'],
+      chat: ['M21 12a8 8 0 0 1-8 8H6l-3 2V12a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8z'],
+    }
+    function NavIcon({ id, size = 17 }) {
+      return h('svg', { width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true }, (NAV_PATHS[id] || []).map((d, i) => h('path', { key: i, d })))
+    }
+
     function PortfolioPage() {
       const dark = useIsDark(); const t = palette(dark)
-      const [tab, setTab] = React.useState('overview')
+      const [tab, setTabRaw] = React.useState('overview')
+      const [detailId, setDetailId] = React.useState('')
+      const [chatOpen, setChatOpen] = React.useState(true)
+      const setTab = id => { setDetailId(''); setTabRaw(id) }
+      const openAccount = id => { setTabRaw('accounts'); setDetailId(id || '') }
       const [state, setState] = React.useState(null)
       const [err, setErr] = React.useState('')
       const [busy, setBusy] = React.useState(false)
@@ -71,49 +208,184 @@ window.__ModuleLoader__.load({
 
       const call = async (op, payload) => {
         setBusy(true)
-        try { const r = await runOp(op, payload); if (r.ok) { setState({ ok: true, ledger: r.ledger, summary: r.summary }); setErr('') } else setErr(r.error?.message || '操作失败'); return r }
+        try { const r = await runOp(op, payload); if (r.ok) { setState({ ok: true, ledger: r.ledger, summary: r.summary, analysis: r.analysis }); setErr('') } else setErr(r.error?.message || '操作失败'); return r }
         catch (e) { setErr('操作失败：' + e.message); return { ok: false } }
         finally { setBusy(false) }
       }
 
-      const tabs = [['overview', '总览'], ['accounts', '账户'], ['holdings', '持仓'], ['trades', '流水'], ['input', '录入/导入']]
-      return h('div', { style: { height: '100%', overflow: 'auto', background: t.bg, color: t.text, fontFamily: 'system-ui,-apple-system,"Segoe UI",Roboto,sans-serif' } },
-        h('div', { style: { maxWidth: 1080, margin: '0 auto', padding: '18px 20px 40px' } },
-          h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 } },
-            h('div', { style: { fontSize: 18, fontWeight: 650 } }, '资产账本'),
-            h('div', { style: { fontSize: 12, color: t.sub } }, state?.summary ? ('· 本位币 ' + state.summary.baseCurrency) : ''),
-            h('div', { style: { flex: 1 } }),
-            h('button', { style: T.btn(t, false), onClick: reload, disabled: busy }, '刷新'),
-          ),
-          h('div', { style: { display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' } },
-            tabs.map(([id, name]) => h('button', { key: id, style: T.btn(t, tab === id), onClick: () => setTab(id) }, name)),
-          ),
-          err ? h('div', { role: 'alert', style: { ...T.card(t), borderColor: t.red, color: t.red, marginBottom: 12, fontSize: 13 } }, err) : null,
-          !state ? h('div', { style: { color: t.sub, fontSize: 13 } }, '加载中…') :
-            tab === 'overview' ? h(Overview, { t, state, call, busy }) :
-            tab === 'accounts' ? h(Accounts, { t, state, call, busy }) :
-            tab === 'holdings' ? h(Holdings, { t, state, call, busy }) :
-            tab === 'trades' ? h(Trades, { t, state, call, busy }) :
-            h(Input, { t, state, call, busy }),
-          h('div', { style: { marginTop: 22, fontSize: 11, color: t.sub, lineHeight: 1.7 } },
-            '数据全部保存在本机；行情取不到时可直接手填现价/成本。要用对话记账，打开左侧「资产管家」会话直接说，例如「把华泰账户买 200 股贵州茅台，价格 1600 记上」。'),
-        ),
-      )
+      const tabs = [['overview', '总览'], ['accounts', '账户'], ['holdings', '持仓'], ['trades', '流水'], ['analysis', '分析'], ['settings', '设置']]
+      React.useEffect(() => {
+        const timer = setInterval(() => { if (!document.hidden) reload() }, 15000)
+        return () => clearInterval(timer)
+      }, [reload])
+      const detailAccount = detailId && state ? state.ledger.accounts.find(a => a.id === detailId) : null
+      const title = detailAccount ? detailAccount.name : tabs.find(x => x[0] === tab)?.[1] || '资产总览'
+      return h('div', { className: 'wealth-shell', style: { height: '100%', overflow: 'hidden', background: t.bg, padding: 14, color: t.text, '--wealth-accent': t.accent, '--wealth-accent2': t.accent2, '--wealth-border': t.border, '--wealth-panel': t.panel, '--wealth-card': t.card, '--wealth-text': t.text, '--wealth-sub': t.sub, '--wealth-soft': t.soft, '--wealth-hover': t.hover, '--wealth-scroll': t.scroll, '--wealth-shadow': t.shadow, '--wealth-shell': t.shell } },
+        h('style', null, WEALTH_CSS),
+        h('div', { className: 'wealth-frame' },
+          h('aside', { className: 'wealth-rail' },
+            h('div', { className: 'wealth-brand' },
+              h('span', { className: 'wealth-logo', 'aria-hidden': true }),
+              h('div', null,
+                h('div', { style: { fontSize: 16, fontWeight: 780, letterSpacing: -.3 } }, '资产账本'),
+                h('div', { style: { fontSize: 9, letterSpacing: 1.6, color: t.sub, fontWeight: 700, marginTop: 1 } }, 'WEALTH LEDGER'))),
+            h('div', { style: { fontSize: 10, letterSpacing: 1.4, color: t.sub, fontWeight: 700, padding: '12px 12px 6px' } }, '菜单'),
+            h('nav', { className: 'wealth-navlist', 'aria-label': '资产导航' },
+              tabs.map(([id, name]) => h('button', { key: id, className: 'wealth-nav', 'aria-current': tab === id ? 'page' : undefined, onClick: () => setTab(id) },
+                h(NavIcon, { id }), h('span', { className: 'wealth-nav-label' }, name)))),
+            h('div', { style: { flex: 1, minHeight: 10 } }),
+            h('div', { className: 'wealth-rail-foot' },
+              h('button', { className: 'wealth-nav', onClick: reload, disabled: busy, title: '刷新账本' }, h(NavIcon, { id: 'refresh' }), h('span', { className: 'wealth-nav-label' }, '刷新账本')),
+              h('button', { className: 'wealth-nav', 'aria-pressed': chatOpen, onClick: () => setChatOpen(!chatOpen), title: '资产助手' }, h(NavIcon, { id: 'chat' }), h('span', { className: 'wealth-nav-label' }, chatOpen ? '收起助手' : '资产助手')),
+              h('div', { style: { textAlign: 'center', fontSize: 9.5, color: t.sub, padding: '8px 0 2px', letterSpacing: .3 } }, 'dsh-wealth v0.9.0'))),
+          h('div', { className: 'wealth-body' },
+            h('main', { className: 'wealth-main' },
+              h('header', { className: 'wealth-page-head' },
+                h('div', null,
+                  h('h1', { className: 'wealth-title' }, title),
+                  h('div', { style: { fontSize: 12, color: t.sub, marginTop: 2 } }, state?.summary ? (detailAccount ? (detailAccount.currency + ' · 单账户视图') : '全部账户 · 本位币 ' + state.summary.baseCurrency) : '连接你的资产，建立清晰全貌')),
+                h('div', { style: { display: 'flex', gap: 8 } },
+                  h('button', { style: T.btn(t, false), onClick: reload, disabled: busy, title: '刷新账本' }, '刷新'),
+                  h('button', { style: T.btn(t, chatOpen), onClick: () => setChatOpen(!chatOpen), 'aria-pressed': chatOpen }, chatOpen ? '收起助手' : '资产助手'))),
+              err ? h('div', { role: 'alert', style: { ...T.card(t), borderColor: t.red, color: t.red, marginBottom: 12 } }, err) : null,
+              !state ? h('div', { className: 'wealth-empty', role: 'status' }, h('span', { className: 'wealth-empty-mark' }, '◈'), '正在整理资产全貌…') :
+                tab === 'overview' ? h(Overview, { t, state, call, busy, navigate: setTab, openAccount }) :
+                tab === 'analysis' ? h(Analysis, { t, state, navigate: setTab }) :
+                tab === 'accounts' ? (detailAccount ? h(AccountDetail, { key: detailAccount.id, t, state, call, busy, reload, accountId: detailAccount.id, back: () => setDetailId('') }) : h(AccountsHub, { t, state, call, busy, reload, openAccount })) :
+                tab === 'holdings' ? h(Holdings, { t, state, call, busy }) :
+                tab === 'trades' ? h(Trades, { t, state, call, busy, openAccount }) :
+                h(Settings, { t, state, call, busy }),
+              h('footer', { style: { marginTop: 24, fontSize: 10, color: t.sub, lineHeight: 1.8 } }, '账本保存在本机 · 估值以已录入价格和汇率计算', h('br'), '资产助手使用 DSH 默认模型，提问时附带当前账本。')),
+            state && chatOpen ? h(Chat, { t, state, reload, busy }) : null)))
     }
 
-    function Overview({ t, state, call, busy }) {
-      const s = state.summary, db = state.ledger
-      const accMap = new Map(db.accounts.map((a) => [a.id, a]))
-      const cur = db.baseCurrency
+    function Overview({ t, state, call, busy, navigate, openAccount }) {
+      const s = state.summary, db = state.ledger, cur = s.baseCurrency
+      const positiveTotal = s.accounts.reduce((sum, a) => sum + Math.max(0, a.valueBase || 0), 0)
+      return h('div', null,
+        (s.warnings || []).length ? h('details', { style: { ...T.card(t), marginBottom: 16, color: t.sub, fontSize: 12 } }, h('summary', { style: { cursor: 'pointer' } }, '估值提示 · ' + s.warnings.length + ' 项价格或汇率信息需要核对'), s.warnings.map((w, i) => { const position = db.holdings.find(p => p.id === w.holdingId); const ins = db.instruments.find(x => x.id === position?.instrumentId); return h('div', { key: i, style: { marginTop: 8 } }, (ins ? ins.name + ' · ' : '') + w.message) })) : null,
+        h('section', { className: 'wealth-hero', 'aria-label': '总资产' },
+          h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 } }, h('span', { style: { color: t.sub, fontSize: 12 } }, '总资产 · 全部账户'), h('span', { style: { fontSize: 10, color: t.sub } }, db.updatedAt ? '更新于 ' + new Date(db.updatedAt).toLocaleString('zh-CN') : '等待第一笔记录')),
+          h('div', { className: 'wealth-asset-value' }, fmtMoney(s.totalValueBase), h('small', null, cur)),
+          h('div', { style: { display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginTop: -10, marginBottom: 12, fontSize: 12.5 } },
+            h('span', { style: { padding: '4px 11px', borderRadius: 999, fontWeight: 700, fontVariantNumeric: 'tabular-nums', background: (s.totalPnlBase >= 0 ? t.green : t.red) + '18', color: s.totalPnlBase >= 0 ? t.green : t.red } },
+              (s.totalPnlBase >= 0 ? '▲ ' : '▼ ') + fmtMoney(Math.abs(s.totalPnlBase), cur) + ' · ' + fmtPct(s.totalCostBase > 0 ? s.totalPnlBase / s.totalCostBase : null)),
+            h('span', { style: { color: t.sub } }, '浮动盈亏')),
+          h('div', { className: 'wealth-metrics' },
+            h('div', null, h('span', { style: T.label(t) }, '持仓总成本'), h('strong', null, fmtMoney(s.totalCostBase, cur))),
+            h('div', null, h('span', { style: T.label(t) }, '浮动盈亏'), h('strong', { style: { color: s.totalPnlBase >= 0 ? t.green : t.red } }, fmtMoney(s.totalPnlBase, cur))),
+            h('div', null, h('span', { style: T.label(t) }, '账户 / 持仓'), h('strong', null, db.accounts.length + ' / ' + db.holdings.length))),
+          h(DashboardCharts, { t, state, call, busy })),
+        h('section', { style: T.card(t), 'aria-label': '我的账户' },
+          h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 5 } }, h('strong', { style: { fontSize: 15, fontWeight: 600 } }, '我的账户', h('span', { style: { fontWeight: 400, color: t.sub, marginLeft: 7, fontSize: 12 } }, db.accounts.length)), h('button', { style: T.btn(t, false), onClick: () => navigate('accounts') }, '管理账户 ↗')),
+          !s.accounts.length ? h('div', { className: 'wealth-empty' }, h('span', { className: 'wealth-empty-mark' }, '▣'), h('strong', { style: { fontSize: 16, fontWeight: 500, color: t.text } }, '让每一笔资产，都有归属'), h('span', { style: { maxWidth: 330, fontSize: 12 } }, '登录同花顺、富途、长桥或 IB，选择来源账户即可导入账户与持仓；也可手工维护账户。'), h('button', { style: { ...T.btn(t, true), marginTop: 9 }, onClick: () => navigate('accounts') }, '＋ 添加账户')) : s.accounts.map((a, i) => {
+            const account = db.accounts.find(x => x.id === a.accountId)
+            const share = positiveTotal ? Math.max(0, a.valueBase || 0) / positiveTotal * 100 : 0
+            return h('div', { key: a.accountId, className: 'wealth-account-row', role: 'button', tabIndex: 0, title: '查看账户详情', style: { cursor: 'pointer' }, onClick: () => openAccount(a.accountId), onKeyDown: e => { if (e.key === 'Enter') openAccount(a.accountId) } },
+              h('div', { className: 'wealth-account-badge', style: i % 2 ? { color: t.terra, background: t.panel } : {} }, (account?.name || '账').slice(0, 1)),
+              h('div', null, h('div', { style: { fontSize: 13, fontWeight: 600 } }, account?.name || a.accountId), h('div', { style: { color: t.sub, fontSize: 11, marginTop: 3 } }, (account?.currency || cur) + ' · ' + a.holdings + ' 项持仓')),
+              h('div', { className: 'wealth-account-allocation', style: { padding: '0 22px' } }, h('div', { style: { fontSize: 10, color: t.sub } }, '资产占比 ' + share.toFixed(1) + '%'), h('div', { className: 'wealth-bar' }, h('i', { style: { width: share + '%' } }))),
+              h('div', { style: { textAlign: 'right', fontVariantNumeric: 'tabular-nums' } }, h('strong', { style: { fontSize: 14, fontWeight: 600 } }, fmtMoney(a.valueBase, cur)), h('div', { style: { fontSize: 11, marginTop: 3, color: a.pnlBase >= 0 ? t.green : t.red } }, '浮盈 ' + fmtMoney(a.pnlBase, cur))))
+          })))
+    }
+    function Analysis({ t, state, navigate, fixedAccounts, onBackfill }) {
+      const [sel, setSel] = React.useState([])
+      const [dim, setDim] = React.useState('class')
+      const [scoped, setScoped] = React.useState(null), [scopeErr, setScopeErr] = React.useState('')
+      const key = (fixedAccounts || sel).join(',')
+      React.useEffect(() => {
+        if (!key) { setScoped(null); return }
+        let live = true; setScopeErr('')
+        fetch('/portfolio/api/analysis?accounts=' + encodeURIComponent(key), { headers: { accept: 'application/json' } }).then(r => r.json()).then(d => { if (!live) return; if (d.ok) setScoped(d.analysis); else setScopeErr(d.error?.message || '分析读取失败') }).catch(e => { if (live) setScopeErr(e.message) })
+        return () => { live = false }
+      }, [key, state.ledger.updatedAt])
+      const a = key ? scoped : state.analysis
+      const toggle = id => setSel(old => old.includes(id) ? old.filter(x => x !== id) : [...old, id])
+      const picker = fixedAccounts ? null : h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16 }, 'aria-label': '分析范围' },
+        h('span', { style: { fontSize: 12, color: t.sub, marginRight: 4 } }, '分析范围'),
+        h('button', { className: 'wealth-chip', 'aria-pressed': !sel.length, onClick: () => setSel([]) }, '全部账户合并'),
+        state.ledger.accounts.map(acc => h('button', { key: acc.id, className: 'wealth-chip', 'aria-pressed': sel.includes(acc.id), onClick: () => toggle(acc.id) }, acc.name)),
+        sel.length ? h('span', { style: { fontSize: 11, color: t.sub } }, '已选 ' + sel.length + ' 个账户合并分析') : null)
+      if (!a) return h('div', null, picker, h('div', { className: 'wealth-empty', role: 'status' }, h('span', { className: 'wealth-empty-mark' }, '◔'), scopeErr || '分析层准备中…'))
+      const p = a.performance || {}, f = a.flows || {}, q = a.quality || {}, nw = a.netWorth || {}, al = a.allocation || {}
+      const DIMS = { class: ['byClass', 'concentration', c => assetLabel(c.assetClass)], sector: ['bySector', 'sectorConcentration', c => c.sector], style: ['byStyle', 'styleConcentration', c => ({ growth: '成长', value: '价值', blend: '均衡', other: '其他' })[c.style] || c.style] }
+      const [itemsKey, concKey, labelOf] = DIMS[dim] || DIMS.class
+      const items = al[itemsKey] || []
+      const conc = al[concKey] || {}
+      // 资产负债表：credit 类账户是负债，其余是资产；口径与账户页分组一致。
+      const summaryAccounts = state.summary.accounts || []
+      const liabilities = summaryAccounts.filter(x => x.type === 'credit').reduce((s, x) => s + Math.abs(x.valueBase || 0), 0)
+      const assets = summaryAccounts.filter(x => x.type !== 'credit').reduce((s, x) => s + Math.max(0, x.valueBase || 0), 0)
+      const balanceSheet = !fixedAccounts
+      const pct = (v, d = 2) => (typeof v === 'number' && Number.isFinite(v) ? (v > 0 ? '+' : '') + v.toFixed(d) + '%' : '—')
+      const kpi = (label, value, sub, color) => h('div', { style: { ...T.card(t), flex: '1 1 150px', minWidth: 140 } },
+        h('div', { style: { fontSize: 11, color: t.sub, letterSpacing: .3 } }, label),
+        h('div', { style: { fontSize: 24, fontWeight: 600, margin: '6px 0 2px', fontVariantNumeric: 'tabular-nums', color: color || t.text } }, value),
+        h('div', { style: { fontSize: 10.5, color: t.sub, lineHeight: 1.5 } }, sub || ''))
+      const row = (label, value, tone) => h('div', { style: { display: 'flex', justifyContent: 'space-between', padding: '7px 0', borderBottom: '1px solid ' + t.border, fontSize: 12.5 } },
+        h('span', { style: { color: t.sub } }, label), h('strong', { style: { color: tone || t.text, fontVariantNumeric: 'tabular-nums' } }, value))
+      const tag = (text, color) => h('span', { style: { display: 'inline-block', padding: '2px 7px', borderRadius: 999, fontSize: 10.5, background: color || t.panel, color: t.sub, marginLeft: 6 } }, text)
+      return h('div', null,
+        picker,
+        h('div', { style: { display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 14 } },
+          kpi('时间加权收益 TWR', pct(p.twr && p.twr.value), p.twr && p.twr.value != null ? ('按外部现金流切段 · ' + (p.twr.periods || 0) + ' 段') : (p.twr && p.twr.reason) || '需要至少两天快照', (p.twr && p.twr.value) >= 0 ? t.green : t.red),
+          kpi('资金加权年化 XIRR', pct(p.xirr && p.xirr.value), p.xirr && p.xirr.value != null ? '个人真实年化回报' : (p.xirr && p.xirr.reason) || '—', (p.xirr && p.xirr.value) >= 0 ? t.green : t.red),
+          kpi('最大回撤', p.maxDrawdown && p.maxDrawdown.value != null ? pct(p.maxDrawdown.value) : '—', p.maxDrawdown && p.maxDrawdown.peakDate ? (p.maxDrawdown.peakDate + ' → ' + (p.maxDrawdown.troughDate || '—')) : (p.maxDrawdown && p.maxDrawdown.reason) || '', t.red),
+          kpi('快照覆盖', (nw.snapshotCount || 0) + ' 天', (nw.spanDays ? '跨度 ' + nw.spanDays + ' 天 · ' : '') + '变动 ' + fmtMoney(nw.change) + ' ' + a.baseCurrency, t.text)),
+        h('div', { style: { fontSize: 11, color: t.sub, margin: '-4px 0 16px', lineHeight: 1.6 } }, p.note || ''),
+        h('div', { className: 'wealth-split', style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(280px,1fr))', gap: 14, marginBottom: 14 } },
+          h('section', { style: T.card(t), 'aria-label': '资金流' },
+            h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 } }, h('strong', { style: { fontSize: 15 } }, '资金流总览'), h('span', { style: { fontSize: 10.5, color: t.sub } }, '入金出金为外部现金流')),
+            row('累计入金', fmtMoney(f.totals && f.totals.externalIn) + ' ' + a.baseCurrency, t.text),
+            row('累计出金', fmtMoney(f.totals && f.totals.externalOut) + ' ' + a.baseCurrency, t.text),
+            row('净流入', fmtMoney(f.totals && f.totals.netExternal) + ' ' + a.baseCurrency, (f.totals && f.totals.netExternal) >= 0 ? t.green : t.red),
+            row('分红 / 利息', fmtMoney(f.totals && f.totals.dividends) + ' / ' + fmtMoney(f.totals && f.totals.interest), t.green),
+            row('费用 / 税费', fmtMoney(f.totals && f.totals.fees) + ' / ' + fmtMoney(f.totals && f.totals.taxes), t.red),
+            f.unknownCashRows ? h('div', { style: { fontSize: 10.5, color: t.terra, marginTop: 8 } }, '⚠ ' + f.unknownCashRows + ' 条流水缺少金额，以上为下限估算') : null),
+          h('section', { style: T.card(t), 'aria-label': '配置与集中度' },
+            h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 10, gap: 8, flexWrap: 'wrap' } },
+              h('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap' } }, [['class', '资产类别'], ['sector', '行业'], ['style', '风格']].map(([v, n]) => h('button', { key: v, className: 'wealth-chip', 'aria-pressed': dim === v, onClick: () => setDim(v) }, n))),
+              h('span', { style: { fontSize: 10.5, color: t.sub } }, 'HHI ' + (conc.hhi == null ? '—' : conc.hhi.toFixed(3)) + ' · 最大 ' + (conc.top1 == null ? '—' : conc.top1 + '%'))),
+            items.length ? items.map((c, i) => h('div', { key: i, style: { marginBottom: 9 } },
+              h('div', { style: { display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 3 } }, h('span', null, labelOf(c)), h('span', { style: { color: t.sub, fontVariantNumeric: 'tabular-nums' } }, ((c.weight || 0) * 100).toFixed(1) + '%')),
+              h('div', { className: 'wealth-bar' }, h('i', { style: { width: ((c.weight || 0) * 100) + '%' } })))) : h('div', { style: { fontSize: 12, color: t.sub } }, dim === 'class' ? '暂无持仓分类' : '还没有行业 / 风格分类；在持仓编辑里补充，或让 AI 助手为标的分类。'),
+            conc.top3 != null ? h('div', { style: { fontSize: 10.5, color: t.sub, marginTop: 8 } }, '前三合计 ' + conc.top3 + '% · 篮子 ' + conc.count + ' 类') : null),
+          balanceSheet ? h('section', { style: T.card(t), 'aria-label': '资产负债表' },
+            h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 } }, h('strong', { style: { fontSize: 15 } }, '资产负债表'), h('span', { style: { fontSize: 10.5, color: t.sub } }, '按当前估值 · ' + a.baseCurrency)),
+            row('资产合计', fmtMoney(assets) + ' ' + a.baseCurrency, t.text),
+            (al.byClass || []).map((c, i) => row('　' + assetLabel(c.assetClass), fmtMoney(c.valueBase) + ' · ' + ((c.weight || 0) * 100).toFixed(1) + '%', t.sub)),
+            row('负债合计（信用卡 / 借款）', fmtMoney(liabilities) + ' ' + a.baseCurrency, liabilities ? t.terra : t.sub),
+            row('净资产', fmtMoney(assets - liabilities) + ' ' + a.baseCurrency, t.text),
+            h('div', { style: { fontSize: 10.5, color: t.sub, marginTop: 8 } }, '负债按正市值绝对值计入；净资产 = 资产 − 负债。历史净资产走势见「总览」的快照曲线。')) : null),
+        h('section', { style: T.card(t), 'aria-label': '年度现金流' },
+          h('strong', { style: { fontSize: 15 } }, '年度现金流', h('span', { style: { fontWeight: 400, color: t.sub, fontSize: 11, marginLeft: 7 } }, '按年份汇总')),
+          (f.byYear || []).length ? h('div', { style: { marginTop: 8, overflowX: 'auto' } },
+            h('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: 12 } },
+              h('thead', null, h('tr', null, ['年份', '入金', '出金', '分红', '利息', '费用', '税费', '其他'].map((h2) => h('th', { key: h2, style: { textAlign: h2 === '年份' ? 'left' : 'right', padding: '6px 8px', color: t.sub, fontWeight: 500, borderBottom: '1px solid ' + t.border, whiteSpace: 'nowrap' } }, h2)))),
+              h('tbody', null, (f.byYear || []).map((y) => h('tr', { key: y.year }, [y.year, y.externalIn, y.externalOut, y.dividends, y.interest, y.fees, y.taxes, y.other].map((v, i) => h('td', { key: i, style: { textAlign: i ? 'right' : 'left', padding: '6px 8px', borderBottom: '1px solid ' + t.border, fontVariantNumeric: 'tabular-nums', color: i ? t.text : t.sub } }, i ? fmtMoney(v) : v))))))) : h('div', { style: { fontSize: 12, color: t.sub, marginTop: 8 } }, '还没有归档流水，导入历史后这里会按年份汇总。')),
+        h('section', { style: { ...T.card(t), marginTop: 14 }, 'aria-label': '数据健康' },
+          h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 } }, h('strong', { style: { fontSize: 15 } }, '数据健康'), h('span', { style: { fontSize: 10.5, color: t.sub } }, '决定指标可信度')),
+          h('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12, color: t.sub, marginBottom: 8 } },
+            h('span', null, '快照 ' + (q.snapshotCount || 0) + ' 天'),
+            h('span', null, '无现价 ' + (q.unpricedHoldings || 0) + ' 条'),
+            h('span', null, '未计入 ' + (q.excludedHoldings || 0) + ' 条'),
+            h('span', null, '缺金额流水 ' + (q.unknownCashFlows || 0) + ' 条'),
+            h('span', null, '历史批次 ' + (q.historyBatches || 0) + (q.incompleteBatches ? ' · 覆盖不全 ' + q.incompleteBatches : ''))),
+          (q.warnings || []).length ? q.warnings.map((w, i) => h('div', { key: i, style: { fontSize: 11.5, color: t.terra, padding: '4px 0', borderTop: i ? '1px solid ' + t.border : 'none' } }, '⚠ ' + w)) : h('div', { style: { fontSize: 11.5, color: t.green } }, '✓ 暂无明显数据缺口'),
+          h('div', { style: { fontSize: 10.5, color: t.sub, marginTop: 8 } }, '口径：持仓=快照事实，流水=历史事实；分析只读，不改动账本。'),
+          onBackfill ? h('button', { style: { ...T.btn(t, false), marginTop: 10 }, onClick: onBackfill }, '补录账单 ↗') : navigate ? h('button', { style: { ...T.btn(t, false), marginTop: 10 }, onClick: () => navigate('accounts') }, '到账户中同步或补录流水 ↗') : null))
+    }
+    function assetLabel(cls) {
+      return ({ stock: '股票', fund: '基金', etf: 'ETF', cash: '现金', bond: '债券', crypto: '加密资产', other: '其他' })[cls] || cls || '其他'
+    }
+    function Settings({ t, state, call, busy }) {
+      const db = state.ledger, cur = db.baseCurrency
       const [baseSel, setBaseSel] = React.useState(cur)
       React.useEffect(() => { setBaseSel(cur) }, [cur])
       const [fxEdit, setFxEdit] = React.useState({ cur: '', rate: '' })
       return h('div', null,
-        h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(3,minmax(0,1fr))', gap: 12, marginBottom: 14 } },
-          h('div', { style: T.card(t) }, h('div', { style: T.label(t) }, '总市值'), h('div', { style: { fontSize: 22, fontWeight: 650 } }, fmtMoney(s.totalValueBase, s.baseCurrency))),
-          h('div', { style: T.card(t) }, h('div', { style: T.label(t) }, '总成本'), h('div', { style: { fontSize: 22, fontWeight: 650 } }, fmtMoney(s.totalCostBase, s.baseCurrency))),
-          h('div', { style: T.card(t) }, h('div', { style: T.label(t) }, '浮动盈亏'), h('div', { style: { fontSize: 22, fontWeight: 650, color: s.totalPnlBase >= 0 ? t.green : t.red } }, fmtMoney(s.totalPnlBase, s.baseCurrency))),
-        ),
+        h('h2', { style: { fontSize: 17, margin: '0 0 8px' } }, '设置'),
+        h('p', { style: { color: t.sub, fontSize: 12, marginBottom: 16 } }, '管理本位币与手工汇率，资产估值将统一折算为所选本位币。'),
         h('div', { style: { ...T.card(t), marginBottom: 14 } },
           h('div', { style: { display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' } },
             h('div', null, h('label', { style: T.label(t) }, '本位币'), h('select', { value: baseSel, onChange: (e) => setBaseSel(e.target.value), style: { ...T.input(t), width: 120 } },
@@ -126,194 +398,1170 @@ window.__ModuleLoader__.load({
           ),
           h('div', { style: { marginTop: 10, fontSize: 12, color: t.sub } }, '当前汇率：' + Object.entries(db.fx).map(([c, r]) => c + '→' + cur + ' ' + r).join('　')),
         ),
-        h('div', { style: T.card(t) },
-          h('div', { style: { fontSize: 13, fontWeight: 600, marginBottom: 8 } }, '各账户'),
-          s.accounts.length === 0 ? h('div', { style: { color: t.sub, fontSize: 13 } }, '还没有账户，去「账户」页添加。') :
-          h('table', { style: { width: '100%', borderCollapse: 'collapse' } },
-            h('thead', null, h('tr', null, T.th('账户', t), T.th('持仓数', t), T.th('市值', t), T.th('成本', t), T.th('盈亏', t))),
-            h('tbody', null, s.accounts.map((a) => h('tr', { key: a.accountId },
-              T.td((accMap.get(a.accountId)?.name || a.accountId) + (accMap.get(a.accountId) ? ' · ' + accMap.get(a.accountId).currency : ''), t),
-              T.td(String(a.holdings), t),
-              T.td(fmtMoney(a.valueBase, cur), t),
-              T.td(fmtMoney(a.costBase, cur), t),
-              T.td(fmtMoney(a.pnlBase, cur), t, { color: a.pnlBase >= 0 ? t.green : t.red }),
-            ))),
-          ),
-        ),
       )
     }
 
-    function Accounts({ t, state, call, busy }) {
-      const db = state.ledger
-      const [form, setForm] = React.useState({ name: '', type: 'broker', currency: 'CNY', note: '' })
-      const [editId, setEditId] = React.useState(null)
-      const submit = async () => {
-        if (!form.name.trim()) return
-        await call('account.upsert', { account: { id: editId || undefined, ...form } })
-        setForm({ name: '', type: 'broker', currency: 'CNY', note: '' }); setEditId(null)
+    // ---------- shared UI pieces ----------
+    function Modal({ t, title, onClose, children, wide }) {
+      React.useEffect(() => { const k = e => { if (e.key === 'Escape') onClose() }; window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k) }, [onClose])
+      return h('div', { className: 'wealth-modal-backdrop' },
+        h('div', { className: 'wealth-modal', role: 'dialog', 'aria-modal': true, 'aria-label': title, style: wide ? { width: 'min(980px,100%)' } : undefined },
+          h('div', { className: 'wealth-modal-head' }, h('strong', { style: { fontSize: 17, fontWeight: 600 } }, title), h('button', { style: T.btn(t, false), onClick: onClose, 'aria-label': '关闭' }, '✕')),
+          children))
+    }
+    async function getJson(path) {
+      const r = await fetch('/portfolio/api/' + path, { headers: { accept: 'application/json' } })
+      const d = await r.json()
+      if (!r.ok || !d.ok) throw new Error(d.error?.message || '读取失败')
+      return d
+    }
+    const CONNECTOR_LABEL = { ths: '同花顺投资账本', futu: '富途', longbridge: '长桥', ib: 'Interactive Brokers', custom: '高级接口' }
+    const ADD_METHODS = [
+      ['ths', '同花顺', '投资账本 · 股票与爱基金 / 基金账本', '同'],
+      ['futu', '富途', '官方 MCP 浏览器授权', '富'],
+      ['longbridge', '长桥', '官方 MCP 授权码', '长'],
+      ['ib', 'Interactive Brokers', 'Client Portal Gateway', 'IB'],
+      ['manual', '手动添加', '自己录入持仓和流水', '✎'],
+      ['file', '文件导入', 'CSV / TSV 表格', '↥'],
+      ['custom', '高级 API / MCP', '标准化快照接口', '⌘'],
+    ]
+    const ADD_GROUPS = [
+      { key: 'sync', title: '登录券商，自动同步', note: '一次登录 / 授权就是一个账号，下面列出它的全部子账户。', ids: ['ths', 'futu', 'longbridge', 'ib'] },
+      { key: 'manual', title: '手工添加与导入', note: '自己录入，或从文件、接口导入已有数据。', ids: ['manual', 'file', 'custom'] },
+    ]
+    function useSources() {
+      const [sources, setSources] = React.useState([])
+      const [authorizations, setAuthorizations] = React.useState([])
+      const refresh = React.useCallback(() => getJson('sources').then(r => { setSources(r.sources || []); setAuthorizations(r.authorizations || []); return r }).catch(() => null), [])
+      React.useEffect(() => { refresh(); const timer = setInterval(() => { if (!document.hidden) refresh() }, 15000); return () => clearInterval(timer) }, [refresh])
+      return [sources, refresh, authorizations]
+    }
+    function useAccountSync(reload, refreshSources) {
+      const [syncing, setSyncing] = React.useState(''), [note, setNote] = React.useState(null)
+      const run = async account => {
+        if (syncing) return
+        setSyncing(account.id); setNote(null)
+        try {
+          const r = await post('accounts/sync', { accountId: account.id })
+          const hs = r.history
+          const flow = r.historyError ? '流水同步失败：' + (r.historyError.message || r.historyError) : !hs ? '' : hs.skipped ? '流水：' + (hs.reason || '此来源暂不支持自动读取流水，可在「补录账单」导入') : '流水新增 ' + (hs.imported || 0) + ' 条' + (hs.duplicates ? '、已有 ' + hs.duplicates + ' 条' : '') + (hs.observedFrom ? '（' + hs.observedFrom + ' ～ ' + hs.observedTo + '）' : '')
+          setNote({ ok: true, text: '「' + account.name + '」已同步到最新：持仓已更新' + (flow ? '；' + flow : '') + '。', warnings: (hs?.warnings || []).map(w => typeof w === 'string' ? w : w?.message).filter(Boolean) })
+        } catch (e) { setNote({ ok: false, text: '「' + account.name + '」同步失败：' + e.message }) }
+        finally { setSyncing(''); await reload(); if (refreshSources) refreshSources() }
       }
-      return h('div', null,
-        h('div', { style: { ...T.card(t), marginBottom: 14 } },
-          h('div', { style: { display: 'grid', gridTemplateColumns: '1.4fr 1fr 0.8fr 1.4fr auto', gap: 10, alignItems: 'end' } },
-            h('div', null, h('label', { style: T.label(t) }, '账户名'), h('input', { value: form.name, onChange: (e) => setForm({ ...form, name: e.target.value }), placeholder: '如 华泰证券', style: T.input(t) })),
-            h('div', null, h('label', { style: T.label(t) }, '类型'), h('select', { value: form.type, onChange: (e) => setForm({ ...form, type: e.target.value }), style: T.input(t) }, ['broker', 'bank', 'fund', 'hand'].map((x) => h('option', { key: x, value: x }, x)))),
-            h('div', null, h('label', { style: T.label(t) }, '币种'), h('input', { value: form.currency, onChange: (e) => setForm({ ...form, currency: e.target.value.toUpperCase() }), style: T.input(t) })),
-            h('div', null, h('label', { style: T.label(t) }, '备注'), h('input', { value: form.note, onChange: (e) => setForm({ ...form, note: e.target.value }), style: T.input(t) })),
-            h('button', { style: T.btn(t, true), disabled: busy, onClick: submit }, editId ? '保存' : '添加账户'),
-          ),
-        ),
-        h('div', { style: T.card(t) },
-          h('table', { style: { width: '100%', borderCollapse: 'collapse' } },
-            h('thead', null, h('tr', null, T.th('账户', t), T.th('类型', t), T.th('币种', t), T.th('备注', t), T.th('操作', t))),
-            h('tbody', null, db.accounts.length ? db.accounts.map((a) => h('tr', { key: a.id },
-              T.td(a.name, t), T.td(a.type, t), T.td(a.currency, t), T.td(a.note || '—', t),
-              T.td(h('span', null,
-                h('button', { style: { ...T.btn(t, false), padding: '3px 8px', marginRight: 6 }, onClick: () => { setForm({ name: a.name, type: a.type, currency: a.currency, note: a.note || '' }); setEditId(a.id) } }, '编辑'),
-                h('button', { style: { ...T.btn(t, false), padding: '3px 8px', borderColor: t.red, color: t.red }, onClick: () => { if (window.confirm('删除账户「' + a.name + '」及其全部持仓和流水？')) call('account.remove', { id: a.id }) } }, '删除'),
-              ), t),
-            )) : h('tr', null, T.td('还没有账户', t, { color: t.sub }))),
-          ),
-        ),
-      )
+      return { syncing, note, setNote, run }
     }
-
-    function Holdings({ t, state, call, busy }) {
-      const db = state.ledger
-      const accMap = new Map(db.accounts.map((a) => [a.id, a]))
-      const insMap = new Map(db.instruments.map((i) => [i.id, i]))
-      const [form, setForm] = React.useState({ accountId: db.accounts[0]?.id || '', symbol: '', name: '', market: 'CN', qty: '', avgCost: '', currency: '', manualPrice: '' })
-      const submit = async () => {
-        if (!form.accountId || !form.symbol.trim()) return
-        await call('holding.upsert', { holding: { ...form, qty: Number(form.qty) || 0, avgCost: Number(form.avgCost) || 0, manualPrice: form.manualPrice === '' ? null : Number(form.manualPrice) } })
-        setForm({ ...form, symbol: '', name: '', qty: '', avgCost: '', manualPrice: '' })
-      }
-      return h('div', null,
-        h('div', { style: { ...T.card(t), marginBottom: 14 } },
-          h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 0.9fr 1fr 0.6fr 0.7fr 0.7fr 0.7fr 0.8fr auto', gap: 8, alignItems: 'end' } },
-            h('div', null, h('label', { style: T.label(t) }, '账户'), h('select', { value: form.accountId, onChange: (e) => setForm({ ...form, accountId: e.target.value }), style: T.input(t) }, db.accounts.map((a) => h('option', { key: a.id, value: a.id }, a.name)))),
-            h('div', null, h('label', { style: T.label(t) }, '代码'), h('input', { value: form.symbol, onChange: (e) => setForm({ ...form, symbol: e.target.value.trim() }), placeholder: '600519', style: T.input(t) })),
-            h('div', null, h('label', { style: T.label(t) }, '名称'), h('input', { value: form.name, onChange: (e) => setForm({ ...form, name: e.target.value }), placeholder: '贵州茅台', style: T.input(t) })),
-            h('div', null, h('label', { style: T.label(t) }, '市场'), h('select', { value: form.market, onChange: (e) => setForm({ ...form, market: e.target.value }), style: T.input(t) }, ['CN', 'HK', 'US', 'FUND'].map((x) => h('option', { key: x, value: x }, x)))),
-            h('div', null, h('label', { style: T.label(t) }, '数量'), h('input', { value: form.qty, onChange: (e) => setForm({ ...form, qty: e.target.value }), style: T.input(t) })),
-            h('div', null, h('label', { style: T.label(t) }, '成本'), h('input', { value: form.avgCost, onChange: (e) => setForm({ ...form, avgCost: e.target.value }), style: T.input(t) })),
-            h('div', null, h('label', { style: T.label(t) }, '现价(手填)'), h('input', { value: form.manualPrice, onChange: (e) => setForm({ ...form, manualPrice: e.target.value }), style: T.input(t) })),
-            h('div', null, h('label', { style: T.label(t) }, '币种'), h('input', { value: form.currency, onChange: (e) => setForm({ ...form, currency: e.target.value.toUpperCase() }), placeholder: '自动', style: T.input(t) })),
-            h('button', { style: T.btn(t, true), disabled: busy, onClick: submit }, '添加/更新'),
-          ),
-        ),
-        h('div', { style: T.card(t) },
-          h('table', { style: { width: '100%', borderCollapse: 'collapse' } },
-            h('thead', null, h('tr', null, T.th('标的', t), T.th('账户', t), T.th('数量', t), T.th('成本', t), T.th('现价', t), T.th('币种', t), T.th('市值(本位币)', t), T.th('操作', t))),
-            h('tbody', null, db.holdings.length ? db.holdings.map((ho) => {
-              const ins = insMap.get(ho.instrumentId); const acc = accMap.get(ho.accountId)
-              const price = ho.manualPrice ?? ho.avgCost ?? 0
-              const rate = db.fx[ho.currency] ?? 1
-              const mv = ho.qty * price * rate
-              return h('tr', { key: ho.id },
-                T.td((ins ? ins.name + ' ' + ins.symbol : ho.instrumentId), t),
-                T.td(acc ? acc.name : ho.accountId, t),
-                T.td(String(ho.qty), t),
-                T.td(fmtMoney(ho.avgCost), t),
-                T.td(h('input', { defaultValue: ho.manualPrice ?? '', placeholder: '手填', onBlur: (e) => { const v = e.target.value; if (v !== '' && String(ho.manualPrice ?? '') !== v) call('price.set', { holdingId: ho.id, price: Number(v) }) }, style: { ...T.input(t), width: 78 } }), t),
-                T.td(ho.currency, t),
-                T.td(fmtMoney(mv, db.baseCurrency), t),
-                T.td(h('button', { style: { ...T.btn(t, false), padding: '3px 8px', borderColor: t.red, color: t.red }, onClick: () => { if (window.confirm('删除该持仓？')) call('holding.remove', { id: ho.id }) } }, '删除'), t),
-              )
-            }) : h('tr', null, T.td('还没有持仓', t, { color: t.sub }))),
-          ),
-        ),
-      )
+    function SyncNote({ t, note, onClose }) {
+      if (!note) return null
+      return h('div', { role: note.ok ? 'status' : 'alert', style: { ...T.card(t), color: note.ok ? t.accent : t.red, marginBottom: 14, fontSize: 12.5, display: 'flex', justifyContent: 'space-between', gap: 10 } },
+        h('div', null, note.text, (note.warnings || []).length ? h('details', { style: { color: t.sub, marginTop: 6 } }, h('summary', { style: { cursor: 'pointer' } }, '同步提示 · ' + note.warnings.length + ' 项'), note.warnings.map((w, i) => h('div', { key: i, style: { marginTop: 4 } }, w))) : null),
+        h('button', { style: { ...T.btn(t, false), padding: '2px 8px', minHeight: 26 }, onClick: onClose, 'aria-label': '关闭提示' }, '✕'))
     }
+    const sourceErrorText = e => !e ? '' : typeof e === 'string' ? e : e.message || JSON.stringify(e)
+    const dateTimeText = v => { if (!v) return ''; const d = new Date(v); return Number.isNaN(d.getTime()) ? String(v) : d.toLocaleString('zh-CN', { hour12: false }) }
 
-    function Trades({ t, state, call, busy }) {
-      const db = state.ledger
-      const accMap = new Map(db.accounts.map((a) => [a.id, a]))
-      const insMap = new Map(db.instruments.map((i) => [i.id, i]))
-      const [form, setForm] = React.useState({ accountId: db.accounts[0]?.id || '', symbol: '', side: 'buy', qty: '', price: '', fee: '', date: new Date().toISOString().slice(0, 10), currency: '' })
-      const submit = async () => {
-        if (!form.accountId || !form.symbol.trim()) return
-        await call('trade.add', { trade: { ...form, qty: Number(form.qty) || 0, price: Number(form.price) || 0, fee: Number(form.fee) || 0 } })
-        setForm({ ...form, symbol: '', qty: '', price: '', fee: '' })
-      }
-      return h('div', null,
-        h('div', { style: { ...T.card(t), marginBottom: 14 } },
-          h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 0.8fr 0.7fr 0.6fr 0.7fr 0.6fr 0.9fr 0.7fr auto', gap: 8, alignItems: 'end' } },
-            h('div', null, h('label', { style: T.label(t) }, '账户'), h('select', { value: form.accountId, onChange: (e) => setForm({ ...form, accountId: e.target.value }), style: T.input(t) }, db.accounts.map((a) => h('option', { key: a.id, value: a.id }, a.name)))),
-            h('div', null, h('label', { style: T.label(t) }, '代码'), h('input', { value: form.symbol, onChange: (e) => setForm({ ...form, symbol: e.target.value.trim() }), style: T.input(t) })),
-            h('div', null, h('label', { style: T.label(t) }, '方向'), h('select', { value: form.side, onChange: (e) => setForm({ ...form, side: e.target.value }), style: T.input(t) }, [['buy', '买入'], ['sell', '卖出']].map(([v, n]) => h('option', { key: v, value: v }, n)))),
-            h('div', null, h('label', { style: T.label(t) }, '数量'), h('input', { value: form.qty, onChange: (e) => setForm({ ...form, qty: e.target.value }), style: T.input(t) })),
-            h('div', null, h('label', { style: T.label(t) }, '价格'), h('input', { value: form.price, onChange: (e) => setForm({ ...form, price: e.target.value }), style: T.input(t) })),
-            h('div', null, h('label', { style: T.label(t) }, '费用'), h('input', { value: form.fee, onChange: (e) => setForm({ ...form, fee: e.target.value }), style: T.input(t) })),
-            h('div', null, h('label', { style: T.label(t) }, '日期'), h('input', { type: 'date', value: form.date, onChange: (e) => setForm({ ...form, date: e.target.value }), style: T.input(t) })),
-            h('div', null, h('label', { style: T.label(t) }, '币种'), h('input', { value: form.currency, onChange: (e) => setForm({ ...form, currency: e.target.value.toUpperCase() }), placeholder: '自动', style: T.input(t) })),
-            h('button', { style: T.btn(t, true), disabled: busy, onClick: submit }, '记一笔'),
-          ),
-        ),
-        h('div', { style: T.card(t) },
-          h('table', { style: { width: '100%', borderCollapse: 'collapse' } },
-            h('thead', null, h('tr', null, T.th('日期', t), T.th('账户', t), T.th('标的', t), T.th('方向', t), T.th('数量', t), T.th('价格', t), T.th('金额', t), T.th('操作', t))),
-            h('tbody', null, db.trades.length ? [...db.trades].reverse().map((tr) => {
-              const ins = insMap.get(tr.instrumentId); const acc = accMap.get(tr.accountId)
-              return h('tr', { key: tr.id },
-                T.td(tr.date, t), T.td(acc ? acc.name : tr.accountId, t), T.td(ins ? ins.name + ' ' + ins.symbol : tr.instrumentId, t),
-                T.td(tr.side === 'buy' ? '买入' : '卖出', t, { color: tr.side === 'buy' ? t.red : t.green }),
-                T.td(String(tr.qty), t), T.td(fmtMoney(tr.price), t), T.td(fmtMoney(tr.qty * tr.price), t),
-                T.td(h('button', { style: { ...T.btn(t, false), padding: '3px 8px', borderColor: t.red, color: t.red }, onClick: () => { if (window.confirm('删除这条流水？（不会自动回算持仓）')) call('trade.remove', { id: tr.id }) } }, '删除'), t),
-              )
-            }) : h('tr', null, T.td('还没有流水', t, { color: t.sub }))),
-          ),
-        ),
-      )
-    }
-
-    function Input({ t, state, call, busy }) {
-      const db = state.ledger
-      const [mode, setMode] = React.useState('holdings')
-      const [text, setText] = React.useState('')
+    function AccountForm({ t, account, call, busy, onDone }) {
+      const [form, setForm] = React.useState({ name: account?.name || '', type: account?.type || 'broker', currency: account?.currency || 'CNY', note: account?.note || '' })
       const [msg, setMsg] = React.useState('')
-      const sample = mode === 'holdings'
-        ? '账户名,代码,名称,市场,数量,成本,币种\n华泰证券,600519,贵州茅台,CN,100,1600,CNY\n华泰证券,00700,腾讯控股,HK,200,380,HKD'
-        : '账户名,代码,方向,数量,价格,费用,日期,币种\n华泰证券,600519,buy,100,1600,5,2026-11-06,CNY'
-      const parse = (txt) => {
-        const lines = txt.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
-        const rows = []
-        for (let i = 0; i < lines.length; i++) {
-          const cells = lines[i].split(',').map((c) => c.trim())
-          if (i === 0 && /账户|代码|方向|数量|成本/.test(cells.join(''))) continue // header
-          rows.push(cells)
-        }
-        return rows
+      const submit = async () => {
+        if (!form.name.trim()) { setMsg('请填写账户名'); return }
+        if (!/^[A-Z]{3}$/.test(form.currency)) { setMsg('币种须为三位字母代码，如 CNY / HKD / USD'); return }
+        const r = await call('account.upsert', { account: { ...(account ? { id: account.id } : {}), ...form, name: form.name.trim() } })
+        if (r.ok) onDone(r); else setMsg(r.error?.message || '保存失败')
       }
-      const doImport = async () => {
-        setMsg('')
-        const rows = parse(text)
-        if (!rows.length) { setMsg('没有可导入的数据行'); return }
-        const accByName = new Map(db.accounts.map((a) => [a.name, a]))
-        const payload = []
-        for (const c of rows) {
-          const acc = accByName.get(c[0]); if (!acc) { setMsg('账户不存在：' + c[0] + '（请先在「账户」页添加同名账户）'); return }
-          if (mode === 'holdings') payload.push({ accountId: acc.id, symbol: c[1], name: c[2], market: c[3] || 'CN', qty: Number(c[4]) || 0, avgCost: Number(c[5]) || 0, currency: c[6] || '' })
-          else payload.push({ accountId: acc.id, symbol: c[1], side: c[2] || 'buy', qty: Number(c[3]) || 0, price: Number(c[4]) || 0, fee: Number(c[5]) || 0, date: c[6] || undefined, currency: c[7] || '' })
-        }
-        const r = await call(mode === 'holdings' ? 'import.holdings' : 'import.trades', { rows: payload })
-        if (r.ok) { setMsg('已导入 ' + (r.result?.imported ?? payload.length) + ' 条'); setText('') }
-      }
+      const fld = (label, key, props) => h('label', null, h('span', { style: T.label(t) }, label), h('input', { value: form[key], onChange: e => setForm({ ...form, [key]: key === 'currency' ? e.target.value.toUpperCase() : e.target.value }), style: T.input(t), ...props }))
       return h('div', null,
-        h('div', { style: { ...T.card(t), marginBottom: 14 } },
-          h('div', { style: { display: 'flex', gap: 8, marginBottom: 10 } },
-            h('button', { style: T.btn(t, mode === 'holdings'), onClick: () => setMode('holdings') }, '导入持仓'),
-            h('button', { style: T.btn(t, mode === 'trades'), onClick: () => setMode('trades') }, '导入流水'),
-          ),
-          h('div', { style: { fontSize: 12, color: t.sub, marginBottom: 6 } }, '按 CSV 粘贴（第一行表头可留）。列顺序：'),
-          h('div', { style: { fontSize: 12, color: t.text, marginBottom: 8, fontFamily: 'monospace', whiteSpace: 'pre-wrap' } }, sample.split('\n')[0]),
-          h('textarea', { value: text, onChange: (e) => setText(e.target.value), placeholder: sample, rows: 8, style: { ...T.input(t), fontFamily: 'monospace', fontSize: 12, resize: 'vertical' } }),
-          h('div', { style: { marginTop: 10, display: 'flex', gap: 10, alignItems: 'center' } },
-            h('button', { style: T.btn(t, true), disabled: busy, onClick: doImport }, '开始导入'),
-            h('button', { style: T.btn(t, false), onClick: () => setText(sample) }, '填入示例'),
-            msg ? h('span', { style: { fontSize: 12, color: t.accent } }, msg) : null,
-          ),
-        ),
+        h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 12 } },
+          fld('账户名', 'name', { placeholder: '如 招商银行理财', autoFocus: true }),
+          h('label', null, h('span', { style: T.label(t) }, '类型'), h('select', { value: form.type, onChange: e => setForm({ ...form, type: e.target.value }), style: T.input(t) }, [['broker', '证券账户'], ['fund', '基金账户'], ['bank', '银行 / 现金'], ['credit', '信用卡 / 借款（负债）'], ['hand', '其他手工']].map(([v, n]) => h('option', { key: v, value: v }, n)))),
+          fld('币种', 'currency', { placeholder: 'CNY', maxLength: 3 }),
+          fld('备注', 'note')),
+        msg ? h('div', { role: 'alert', style: { color: t.red, fontSize: 12, marginTop: 10 } }, msg) : null,
+        h('div', { style: { display: 'flex', gap: 10, marginTop: 18 } }, h('button', { style: T.btn(t, true), disabled: busy, onClick: submit }, account ? '保存账户信息' : '创建账户')))
+    }
+
+    function AddAccountModal({ t, state, call, busy, reload, authorizations = [], reauthAuth, onClose, onCreated }) {
+      const [method, setMethod] = React.useState(reauthAuth ? reauthAuth.connector : '')
+      const picked = ADD_METHODS.find(m => m[0] === method)
+      const title = reauthAuth ? '重新授权 · ' + (reauthAuth.label || CONNECTOR_LABEL[reauthAuth.connector] || reauthAuth.connector) : picked ? '新增账户 · ' + picked[1] : '新增账户'
+      const authCount = id => authorizations.filter(a => a.connector === id).length
+      return h(Modal, { t, title, onClose, wide: !!method && method !== 'manual' },
+        reauthAuth ? h(DataSources, { t, state, call, busy, reload, mode: 'wizard', initialChoice: reauthAuth.connector, reauthAuth, authorizations, onDone: r => onCreated(r?.account?.id || r?.source?.accountId) }) :
+        !method ? h('div', null,
+          h('p', { style: { color: t.sub, fontSize: 12, margin: '0 0 6px', lineHeight: 1.8 } }, '选择账户来源。券商来源会完成一次登录 / 授权；同一次登录下的多个子账户都归在同一条授权里，可以分批导入，之后还能回来补导入。'),
+          ADD_GROUPS.map(group => h('section', { key: group.key, style: { marginTop: 18 } },
+            h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, marginBottom: 10, flexWrap: 'wrap' } },
+              h('strong', { style: { fontSize: 12, letterSpacing: .4, color: t.text } }, group.title),
+              h('span', { style: { fontSize: 11, color: t.sub } }, group.note)),
+            h('div', { className: 'wealth-method-grid' }, group.ids.map(id => {
+              const [, name, desc, badge] = ADD_METHODS.find(m => m[0] === id)
+              const count = authCount(id)
+              return h('button', { key: id, onClick: () => setMethod(id), style: { ...T.card(t), textAlign: 'left', cursor: 'pointer', color: t.text, padding: 14 } },
+                h('span', { className: 'wealth-account-badge', style: { width: 30, height: 30, borderRadius: 9, fontSize: 12 } }, badge),
+                h('strong', { style: { display: 'block', fontSize: 13, margin: '10px 0 4px' } }, name),
+                h('span', { style: { color: t.sub, fontSize: 11, lineHeight: 1.5 } }, desc),
+                count ? h('span', { style: { display: 'block', fontSize: 10.5, color: t.accent, marginTop: 6 } }, '已有 ' + count + ' 个授权') : null)
+            }))))) :
+        h('div', null,
+          h('button', { style: { ...T.btn(t, false), marginBottom: 14 }, onClick: () => setMethod('') }, '← 选择其他方式'),
+          method === 'manual' ? h(AccountForm, { t, call, busy, onDone: r => { const before = new Set(state.ledger.accounts.map(a => a.id)); const created = (r.ledger?.accounts || []).find(a => !before.has(a.id)); onCreated(created?.id) } }) :
+          method === 'file' ? h(Input, { t, state, call, busy }) :
+          h(DataSources, { t, state, call, busy, reload, mode: 'wizard', initialChoice: method, authorizations, onDone: r => onCreated(r?.account?.id || r?.source?.accountId) })))
+    }
+
+    function EditAccountModal({ t, state, call, busy, reload, account, source, authorization, onClose }) {
+      return h(Modal, { t, title: '编辑账户 · ' + account.name, onClose, wide: !!source },
+        h(AccountForm, { t, account, call, busy, onDone: onClose }),
+        source ? h('section', { style: { borderTop: '1px solid ' + t.border, marginTop: 22, paddingTop: 16 } },
+          h('strong', { style: { fontSize: 14 } }, '同步连接 · ' + (CONNECTOR_LABEL[source.connector] || source.connector)),
+          authorization ? h('div', { style: { fontSize: 12, color: t.sub, marginTop: 6 } }, '来自授权「' + (authorization.label || authorization.id) + '」。连接参数由授权统一管理；要换账号或重新登录，请回到「账户 → 授权账号」点「重新授权」。') : null,
+          h(DataSources, { t, state, call, busy, reload, mode: 'edit', editSource: source, reauthAuth: authorization, onDone: onClose })) : null)
+    }
+
+    function authImportedSource(auth, sources, account) {
+      const key = auth.connector === 'ths' ? 'portfolioId' : 'brokerAccountId'
+      return sources.find(s => (s.authId || s.id) === auth.id && String(s[key]) === String(account.id) && (auth.connector !== 'ths' || (s.thsBookType || 'common') === (account.thsType || 'common')))
+    }
+    function Authorizations({ t, state, busy, authorizations, sources, onRefresh, onOpenAccount, onReauth, onImported }) {
+      const [working, setWorking] = React.useState('')
+      if (!authorizations.length) return null
+      const run = async (key, fn) => {
+        if (working) return
+        setWorking(key)
+        try { await fn(); await onRefresh() } catch (e) { window.alert(e.message || '操作失败') } finally { setWorking('') }
+      }
+      const thsBook = a => a.thsType === 'ijj' ? '爱基金' : a.thsType === 'manFund' ? '基金账本' : ''
+      const importAccount = auth => account => run('import:' + auth.id + ':' + account.id, async () => {
+        const source = { authId: auth.id, [auth.connector === 'ths' ? 'portfolioId' : 'brokerAccountId']: String(account.id), intervalMinutes: auth.intervalMinutes ?? 15, enabled: true }
+        if (auth.connector === 'ths') source.thsBookType = account.thsType || 'common'
+        const r = await post('sources/connect', { source })
+        if (onImported) onImported(r.account?.id)
+      })
+      return h('section', { style: { ...T.card(t), marginBottom: 16 }, 'aria-label': '授权账号' },
+        h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' } },
+          h('strong', { style: { fontSize: 14 } }, '授权账号 · ' + authorizations.length),
+          h('span', { style: { color: t.sub, fontSize: 11 } }, '一次授权对应一个登录；下面列出它能看到的所有子账户。')),
+        authorizations.map(auth => {
+          const accounts = auth.accounts || []
+          const importedCount = accounts.filter(account => authImportedSource(auth, sources, account)).length
+          const status = auth.lastError ? '授权异常' : auth.credentialsConfigured ? '已授权' : '待重新授权'
+          const statusColor = auth.lastError ? t.red : auth.credentialsConfigured ? t.green : t.accent
+          return h('div', { key: auth.id, style: { borderTop: '1px solid ' + t.border, paddingTop: 14, marginTop: 14 } },
+            h('div', { style: { display: 'flex', gap: 10, alignItems: 'flex-start', flexWrap: 'wrap' } },
+              h('span', { className: 'wealth-account-badge', style: { width: 34, height: 34, borderRadius: 11, fontSize: 12 } }, (CONNECTOR_LABEL[auth.connector] || '授').slice(0, 1)),
+              h('div', { style: { minWidth: 0, flex: 1 } },
+                h('strong', { style: { fontSize: 14 } }, auth.label || (CONNECTOR_LABEL[auth.connector] || auth.connector)),
+                h('div', { style: { fontSize: 11, color: t.sub, marginTop: 3 } },
+                  (CONNECTOR_LABEL[auth.connector] || auth.connector) + ' · ',
+                  h('span', { style: { color: statusColor } }, status),
+                  (auth.authorizedAt ? ' · ' + dateTimeText(auth.authorizedAt) : ''),
+                  ' · ' + (accounts.length ? accounts.length + ' 个账户' : '尚未读取账户'),
+                  importedCount ? ' · 已导入 ' + importedCount : '')),
+              h('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap' } },
+                h('button', { style: { ...T.btn(t, false), padding: '4px 9px', minHeight: 28 }, disabled: busy || !!working, onClick: () => run('scan:' + auth.id, async () => { await post('sources/auth/accounts', { authId: auth.id }) }) }, working === 'scan:' + auth.id ? '读取中…' : '读取账户'),
+                h('button', { style: { ...T.btn(t, false), padding: '4px 9px', minHeight: 28 }, disabled: busy || !!working, onClick: () => onReauth(auth) }, '重新授权'),
+                h('button', { style: { ...T.btn(t, false), padding: '4px 9px', minHeight: 28 }, disabled: busy || !!working, onClick: () => { const label = window.prompt('授权名称', auth.label || ''); if (label && label.trim()) run('rename:' + auth.id, async () => { await post('sources/auth/rename', { authId: auth.id, label: label.trim() }) }) } }, '重命名'),
+                h('button', { style: { ...T.btn(t, false), padding: '4px 9px', minHeight: 28, color: t.red }, disabled: busy || !!working || (auth.sources || []).length > 0, title: (auth.sources || []).length ? '先移除这个授权下的已导入账户' : '移除授权', onClick: () => { if (window.confirm('移除授权「' + auth.label + '」？')) run('remove:' + auth.id, async () => { await post('sources/auth/remove', { authId: auth.id }) }) } }, '移除'))),
+            auth.lastError ? h('div', { role: 'alert', style: { color: t.red, fontSize: 12, marginTop: 8 } }, sourceErrorText(auth.lastError)) : null,
+            accounts.length ? h('div', { style: { marginTop: 10, display: 'grid', gap: 6 } }, accounts.map(account => {
+              const bound = authImportedSource(auth, sources, account)
+              const accountName = bound ? state.ledger.accounts.find(x => x.id === bound.accountId)?.name : null
+              return h('div', { key: String(account.id), style: { display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', padding: '8px 10px', border: '1px solid ' + t.border, borderRadius: 9, background: t.panel } },
+                h('div', { style: { minWidth: 0, flex: 1 } },
+                  h('div', { style: { fontSize: 12 } }, account.name || String(account.id)),
+                  h('div', { style: { fontSize: 10, color: t.sub, marginTop: 2 } }, String(account.id) + (account.currency ? ' · ' + account.currency : '') + (thsBook(account) ? ' · ' + thsBook(account) : ''))),
+                bound ? h('button', { style: { ...T.btn(t, true), padding: '3px 9px', minHeight: 26 }, disabled: busy, onClick: () => onOpenAccount(bound.accountId) }, '已导入 → ' + (accountName || bound.accountId)) :
+                  h('button', { style: { ...T.btn(t, true), padding: '3px 9px', minHeight: 26 }, disabled: busy || !!working, onClick: () => importAccount(auth)(account) }, working === 'import:' + auth.id + ':' + account.id ? '导入中…' : '导入'))
+            })) : h('div', { style: { marginTop: 8, fontSize: 11, color: t.sub } }, '点「读取账户」列出这个授权能读取的全部子账户。'))
+        }))
+    }
+
+    // ---------- accounts (grouped) ----------
+    const ACCOUNT_GROUP_DEFS = [
+      { id: 'cash', label: '现金', hint: '银行、活期与现金' },
+      { id: 'credit', label: '信用', hint: '信用卡与借款' },
+      { id: 'invest', label: '投资', hint: '证券、基金与其他' },
+    ]
+    function accountGroup(type) {
+      if (type === 'credit') return 'credit'
+      if (type === 'bank') return 'cash'
+      return 'invest'
+    }
+    const groupColor = (t, id) => (id === 'credit' ? t.terra : id === 'cash' ? t.green : t.accent)
+
+    function Chevron({ open, color }) {
+      return h('svg', {
+        width: 15, height: 15, viewBox: '0 0 24 24', fill: 'none', stroke: color, strokeWidth: 2,
+        strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true,
+        style: { transform: open ? 'rotate(180deg)' : 'none', transition: 'transform .16s ease', flex: 'none' },
+      }, h('path', { d: 'm6 9 6 6 6-6' }))
+    }
+
+    function NetWorthChart({ t, history, cur }) {
+      const points = history.map((x) => ({ v: x.totalValueBase, label: (x.date || x.at || '').slice(0, 10) }))
+      const vals = points.map((p) => p.v)
+      const lo = Math.min(...vals)
+      const hi = Math.max(...vals)
+      const span = hi - lo || Math.max(hi * .06, 1)
+      const W = 640, H = 195, PL = 48, PR = 14, PT = 14, PB = 28
+      const iw = W - PL - PR
+      const ih = H - PT - PB
+      const x = (i) => PL + (iw * i) / Math.max(1, points.length - 1)
+      const y = (v) => PT + ih - ((v - lo) / span) * ih
+      const path = points.map((p, i) => (i ? 'L' : 'M') + x(i).toFixed(1) + ',' + y(p.v).toFixed(1)).join(' ')
+      const area = path + ' L' + x(points.length - 1) + ',' + (PT + ih) + ' L' + PL + ',' + (PT + ih) + ' Z'
+      const gid = 'zw-nw-' + String(t.accent).replace('#', '')
+      const ticks = [0, .5, 1].map((f) => lo + (hi - lo) * f)
+      const marks = [0, Math.floor((points.length - 1) / 2), points.length - 1].filter((v, i, a) => a.indexOf(v) === i)
+      return h('svg', { viewBox: '0 0 ' + W + ' ' + H, role: 'img', 'aria-label': '净资产历史快照曲线', style: { width: '100%', height: 'auto', display: 'block', marginTop: 4 } },
+        h('defs', null, h('linearGradient', { id: gid, x1: 0, y1: 0, x2: 0, y2: 1 },
+          h('stop', { offset: '0%', stopColor: t.accent, stopOpacity: .22 }),
+          h('stop', { offset: '100%', stopColor: t.accent, stopOpacity: 0 }))),
+        ticks.map((v, i) => h('g', { key: i },
+          h('line', { x1: PL, x2: W - PR, y1: y(v), y2: y(v), stroke: t.border, strokeWidth: 1 }),
+          h('text', { x: PL - 8, y: y(v) + 3.5, textAnchor: 'end', fontSize: 10, fill: t.sub }, fmtCompact(v)))),
+        h('path', { d: area, fill: 'url(#' + gid + ')' }),
+        h('path', { d: path, fill: 'none', stroke: t.accent, strokeWidth: 2.4, strokeLinejoin: 'round', strokeLinecap: 'round' }),
+        points.map((p, i) => h('circle', { key: 'p' + i, cx: x(i), cy: y(p.v), r: 2.8, fill: t.accent, opacity: i === points.length - 1 ? 1 : .5 }, h('title', null, p.label + ' · ' + fmtMoney(p.v, cur)))),
+        marks.map((i) => h('text', { key: 'd' + i, x: x(i), y: H - PB + 18, textAnchor: i === 0 ? 'start' : i === points.length - 1 ? 'end' : 'middle', fontSize: 10, fill: t.sub }, points[i].label.slice(5) || points[i].label)),
       )
+    }
+
+    function AccountsHub({ t, state, call, busy, reload, openAccount }) {
+      const db = state.ledger
+      const [sources, refreshSources, authorizations] = useSources()
+      const sync = useAccountSync(reload, refreshSources)
+      const [modal, setModal] = React.useState(null)
+      const [openGroup, setOpenGroup] = React.useState({ cash: true, credit: true, invest: true })
+      const [expanded, setExpanded] = React.useState('')
+      const cur = state.summary.baseCurrency
+      const summaryRows = state.summary.accounts || []
+      const accounts = db.accounts.map((a) => ({
+        account: a,
+        sa: summaryRows.find((x) => x.accountId === a.id) || { valueBase: 0, costBase: 0, pnlBase: 0, holdings: 0 },
+        group: accountGroup(a.type),
+      }))
+      const groups = ACCOUNT_GROUP_DEFS.map((g) => ({ ...g, items: accounts.filter((a) => a.group === g.id) }))
+      const assets = accounts.filter((a) => a.group !== 'credit').reduce((sum, a) => sum + Math.max(0, a.sa.valueBase || 0), 0)
+      const liabilities = accounts.filter((a) => a.group === 'credit').reduce((sum, a) => sum + Math.abs(a.sa.valueBase || 0), 0)
+      const total = state.summary.totalValueBase || 0
+      const pnl = state.summary.totalPnlBase || 0
+      const history = (state.summary.history || []).filter((x) => x.baseCurrency === cur && Number.isFinite(x.totalValueBase))
+      const insMap = new Map(db.instruments.map((i) => [i.id, i]))
+      const holdingsOf = (id) => db.holdings.filter((ho) => ho.accountId === id)
+      const removeAccount = async (a) => {
+        const src = sources.find((s) => s.accountId === a.id)
+        if (!window.confirm('删除账户「' + a.name + '」及其全部持仓和流水？' + (src ? '它的自动同步连接也会一并移除。' : ''))) return
+        try { if (src) await post('sources/remove', { id: src.id }) } catch (e) { window.alert('移除同步连接失败：' + e.message); return }
+        await call('account.remove', { id: a.id })
+        refreshSources()
+      }
+      const closeModal = () => { setModal(null); refreshSources() }
+      const row = (label, value, color) => h('div', { style: { display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid ' + t.border, fontSize: 12.5 } },
+        h('span', { style: { color: t.sub } }, label),
+        h('strong', { style: { color: color || t.text, fontVariantNumeric: 'tabular-nums' } }, value))
+
+      const renderAccount = ({ account: a, sa }) => {
+        const open = expanded === a.id
+        const gid = accountGroup(a.type)
+        const share = total > 0 ? Math.max(0, Math.min(1, (sa.valueBase || 0) / total)) : 0
+        const src = sources.find((s) => s.accountId === a.id)
+        const failed = src && ['error', 'failed'].includes(src.lastStatus)
+        const authorization = authorizations.find((x) => x.id === (src?.authId || src?.id))
+        const holds = holdingsOf(a.id)
+        return h('div', { key: a.id },
+          h('div', {
+            className: 'wealth-acct-row' + (open ? ' is-open' : ''),
+            role: 'button', tabIndex: 0,
+            onClick: () => setExpanded(open ? '' : a.id),
+            onKeyDown: (e) => { if (e.key === 'Enter') setExpanded(open ? '' : a.id) },
+          },
+            h('div', { className: 'wealth-account-badge', style: { color: groupColor(t, gid) } }, (a.name || '账').slice(0, 1)),
+            h('div', { style: { minWidth: 0 } },
+              h('div', { style: { fontSize: 13.5, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, a.name),
+              h('div', { style: { fontSize: 11.5, color: failed ? t.red : t.sub, marginTop: 2 } },
+                (authorization ? (authorization.label || '已授权') + ' · 同步' : src ? (CONNECTOR_LABEL[src.connector] || src.connector) + ' · 自动同步' : '手动账户') + ' · ' + a.currency + (failed ? ' · 同步失败' : ''))),
+            h('div', { className: 'wealth-alloc' },
+              h('div', { style: { fontSize: 10.5, color: t.sub } }, '占净值 ' + (share * 100).toFixed(1) + '%'),
+              h('div', { className: 'wealth-bar' }, h('i', { style: { width: (share * 100).toFixed(1) + '%', background: groupColor(t, gid) } }))),
+            h('div', { style: { textAlign: 'right', fontVariantNumeric: 'tabular-nums' } },
+              h('div', { style: { fontSize: 14, fontWeight: 750 } }, fmtMoney(sa.valueBase, cur)),
+              h('div', { style: { fontSize: 11, marginTop: 2, color: (sa.pnlBase || 0) >= 0 ? t.green : t.red } }, fmtMoney(sa.pnlBase, cur))),
+            h(Chevron, { open, color: t.sub })),
+          open ? h('div', { className: 'wealth-nested' },
+            h('div', { className: 'wealth-nested-card' },
+              holds.length ? h('table', null,
+                h('thead', null, h('tr', null, ['标的', '数量', '成本', '现价', '市值', '盈亏'].map((label) => T.th(label, t)))),
+                h('tbody', null, holds.map((ho) => {
+                  const ins = insMap.get(ho.instrumentId)
+                  const price = ho.manualPrice ?? ho.avgCost ?? 0
+                  const rate = ho.currency === db.baseCurrency ? 1 : (db.fx[ho.currency] ?? 1)
+                  const mv = ho.qty * price * rate
+                  const gain = (price - (ho.avgCost || 0)) * ho.qty * rate
+                  return h('tr', { key: ho.id },
+                    T.td(h('div', null,
+                      h('div', { style: { fontWeight: 700 } }, ins?.name || ho.instrumentId),
+                      h('small', { style: { color: t.sub } }, (ins?.symbol || '') + ' · ' + (ho.currency || ''))), t),
+                    T.td(String(ho.qty), t),
+                    T.td(fmtMoney(ho.avgCost), t),
+                    T.td(fmtMoney(price), t),
+                    T.td(fmtMoney(mv, db.baseCurrency), t),
+                    T.td(fmtMoney(gain), t, { color: gain >= 0 ? t.green : t.red, fontWeight: 650 }))
+                }))) : h('div', { style: { padding: '10px 2px', fontSize: 12.5, color: t.sub } }, '这个账户还没有持仓')),
+            h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 } },
+              h('button', { style: T.btn(t, false), onClick: (e) => { e.stopPropagation(); openAccount(a.id) } }, '详情'),
+              src ? h('button', { style: T.btn(t, true), disabled: busy || !!sync.syncing, onClick: (e) => { e.stopPropagation(); sync.run(a) } }, sync.syncing === a.id ? '同步中…' : '⟳ 同步') : null,
+              h('button', { style: T.btn(t, false), onClick: (e) => { e.stopPropagation(); setModal({ kind: 'edit', account: a }) } }, '编辑'),
+              h('button', { style: { ...T.btn(t, false), color: t.red }, onClick: (e) => { e.stopPropagation(); removeAccount(a) } }, '删除'),
+              h('span', { style: { alignSelf: 'center', fontSize: 11, color: t.sub } }, (sa.holdings || 0) + ' 项持仓 · ' + holds.length + ' 条展开明细'))) : null,
+        )
+      }
+
+      return h('div', null,
+        h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 16 } },
+          h('div', { style: { fontSize: 12.5, color: t.sub } }, db.accounts.length + ' 个账户 · 点账户行展开持仓明细'),
+          h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' } },
+            h('button', { style: T.btn(t, false), disabled: busy, onClick: () => setModal({ kind: 'auths' }) }, '授权账号' + (authorizations.length ? ' · ' + authorizations.length : '')),
+            h('button', { style: T.btn(t, true), disabled: busy, onClick: () => setModal({ kind: 'add' }) }, '＋ 新增账户'))),
+        h(SyncNote, { t, note: sync.note, onClose: () => sync.setNote(null) }),
+        h('div', { className: 'wealth-acct-layout' },
+          h('div', { style: { display: 'flex', flexDirection: 'column', gap: 14, minWidth: 0 } },
+            h('section', { className: 'wealth-hero', 'aria-label': '净资产' },
+              h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' } },
+                h('div', null,
+                  h('div', { style: { fontSize: 10.5, letterSpacing: 1.6, fontWeight: 750, color: t.sub } }, 'NET WORTH · 净资产'),
+                  h('div', { className: 'wealth-asset-value' }, fmtMoney(total), h('small', null, cur)),
+                  h('div', { style: { display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginTop: -4, fontSize: 12.5 } },
+                    h('span', { style: { padding: '4px 11px', borderRadius: 999, fontWeight: 700, fontVariantNumeric: 'tabular-nums', background: (pnl >= 0 ? t.green : t.red) + '18', color: pnl >= 0 ? t.green : t.red } },
+                      (pnl >= 0 ? '▲ ' : '▼ ') + fmtMoney(Math.abs(pnl), cur) + ' · ' + (state.summary.totalCostBase > 0 ? fmtPct(pnl / state.summary.totalCostBase) : '—')),
+                    h('span', { style: { color: t.sub } }, '浮动盈亏')))),
+              h('div', { className: 'wealth-metrics', style: { paddingTop: 14 } },
+                h('div', null, h('span', { style: T.label(t) }, '资产合计'), h('strong', null, fmtMoney(assets, cur))),
+                h('div', null, h('span', { style: T.label(t) }, '负债合计'), h('strong', { style: { color: liabilities ? t.terra : t.text } }, fmtMoney(liabilities, cur))),
+                h('div', null, h('span', { style: T.label(t) }, '账户 / 持仓'), h('strong', null, db.accounts.length + ' / ' + db.holdings.length))),
+              history.length > 1
+                ? h('div', { style: { borderTop: '1px solid ' + t.border, paddingTop: 10 } },
+                  h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 11.5, color: t.sub, marginBottom: 4 } },
+                    h('span', null, '历史快照 · ' + history.length + ' 天'),
+                    h('span', null, '曲线含出入金与汇率影响')),
+                  h(NetWorthChart, { t, history, cur }))
+                : h('div', { style: { borderTop: '1px solid ' + t.border, paddingTop: 12, fontSize: 12, color: t.sub } }, '至少两个日期的快照后，这里显示净资产走势。')),
+            groups.map((g) => {
+              const gTotal = g.items.reduce((sum, a) => sum + (a.sa.valueBase || 0), 0)
+              const gShow = g.id === 'credit' ? Math.abs(gTotal) : gTotal
+              const gPnl = g.items.reduce((sum, a) => sum + (a.sa.pnlBase || 0), 0)
+              const open = openGroup[g.id]
+              return h('section', { key: g.id, style: T.card(t) },
+                h('div', {
+                  role: 'button', tabIndex: 0,
+                  style: { display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', flexWrap: 'wrap' },
+                  onClick: () => setOpenGroup((v) => ({ ...v, [g.id]: !v[g.id] })),
+                  onKeyDown: (e) => { if (e.key === 'Enter') setOpenGroup((v) => ({ ...v, [g.id]: !v[g.id] })) },
+                },
+                  h(Chevron, { open, color: t.sub }),
+                  h('span', { style: { width: 9, height: 9, borderRadius: 999, background: groupColor(t, g.id), flex: 'none' } }),
+                  h('strong', { style: { fontSize: 15, fontWeight: 750 } }, g.label),
+                  h('span', { style: { fontSize: 11.5, color: t.sub } }, g.items.length + ' 个账户 · ' + g.hint),
+                  h('div', { style: { flex: 1 } }),
+                  h('div', { style: { textAlign: 'right' } },
+                    h('div', { style: { fontSize: 16, fontWeight: 780, fontVariantNumeric: 'tabular-nums', color: g.id === 'credit' ? t.terra : t.text } }, fmtMoney(gShow, cur)),
+                    h('div', { style: { fontSize: 11, color: gPnl >= 0 ? t.green : t.red } }, fmtMoney(gPnl, cur)))),
+                !open ? null
+                  : g.items.length === 0
+                    ? h('div', { style: { padding: '16px 6px', fontSize: 12.5, color: t.sub } }, '这一组还没有账户')
+                    : h('div', { style: { marginTop: 4 } }, g.items.map(renderAccount)),
+              )
+            }),
+          ),
+          h('aside', { className: 'wealth-summary', style: T.card(t) },
+            h('div', { style: { fontSize: 15, fontWeight: 750 } }, '资产构成'),
+            h('div', { style: { fontSize: 11.5, color: t.sub, marginTop: 2, marginBottom: 14 } }, '按账户类别 · ' + cur),
+            groups.map((g) => {
+              const val = g.items.reduce((sum, a) => sum + (g.id === 'credit' ? Math.abs(a.sa.valueBase || 0) : Math.max(0, a.sa.valueBase || 0)), 0)
+              const base = assets + liabilities
+              const pct = base > 0 ? val / base * 100 : 0
+              return h('div', { key: g.id, style: { marginBottom: 13 } },
+                h('div', { style: { display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5 } },
+                  h('span', { style: { width: 9, height: 9, borderRadius: 999, background: groupColor(t, g.id), flex: 'none' } }),
+                  h('span', { style: { flex: 1, fontWeight: 650 } }, g.label),
+                  h('span', { style: { fontVariantNumeric: 'tabular-nums', color: t.sub } }, pct.toFixed(1) + '%')),
+                h('div', { style: { display: 'flex', justifyContent: 'space-between', fontSize: 11.5, color: t.sub, marginTop: 2 } },
+                  h('span', null, fmtMoney(val, cur)), h('span', null, g.items.length + ' 账户')),
+                h('div', { className: 'wealth-bar', style: { marginTop: 5 } }, h('i', { style: { width: pct.toFixed(1) + '%', background: groupColor(t, g.id) } })))
+            }),
+            h('div', { style: { marginTop: 6 } },
+              row('资产合计', fmtMoney(assets, cur)),
+              row('负债合计', fmtMoney(liabilities, cur)),
+              row('净资产', fmtMoney(total, cur))),
+            h('div', { style: { marginTop: 14, fontSize: 11, color: t.sub, lineHeight: 1.7 } }, '信用类账户按绝对值计入负债；现金 / 投资类计入资产。同步连接与授权在「新增账户」中管理。'))
+        ),
+        modal?.kind === 'add' ? h(AddAccountModal, { t, state, call, busy, reload, authorizations, onClose: closeModal, onCreated: (id) => { closeModal(); if (id) openAccount(id) } }) : null,
+        modal?.kind === 'reauth' ? h(AddAccountModal, { t, state, call, busy, reload, authorizations, reauthAuth: modal.auth, onClose: closeModal, onCreated: (id) => { closeModal(); if (id) openAccount(id) } }) : null,
+        modal?.kind === 'auths' ? h(Modal, { t, title: '授权账号', onClose: closeModal, wide: true },
+          authorizations.length
+            ? h(Authorizations, { t, state, busy, authorizations, sources, onRefresh: refreshSources, onOpenAccount: (id) => { setModal(null); openAccount(id) }, onReauth: (auth) => setModal({ kind: 'reauth', auth }), onImported: () => { reload(); refreshSources() } })
+            : h('p', { style: { color: t.sub, fontSize: 13, lineHeight: 1.8, margin: '4px 0 18px' } }, '还没有授权。点「新增账户」选择同花顺、富途、长桥或 IB，完成一次登录后，它会作为一条授权出现在这里，下面列出这次登录能看到的全部子账户。'),
+          h('div', { style: { display: 'flex', gap: 10, marginTop: 8 } },
+            h('button', { style: T.btn(t, true), onClick: () => setModal({ kind: 'add' }) }, '＋ 新增账户'),
+            h('button', { style: T.btn(t, false), onClick: closeModal }, '关闭'))) : null,
+        modal?.kind === 'edit' ? h(EditAccountModal, { t, state, call, busy, reload, account: modal.account, source: sources.find((s) => s.accountId === modal.account.id), authorization: authorizations.find((x) => x.id === (sources.find((s) => s.accountId === modal.account.id)?.authId)), onClose: closeModal }) : null)
+    }
+    function AccountDetail({ t, state, call, busy, reload, accountId, back }) {
+      const db = state.ledger, cur = state.summary.baseCurrency
+      const account = db.accounts.find(a => a.id === accountId)
+      const [sources, refreshSources, authorizations] = useSources()
+      const source = sources.find(s => s.accountId === accountId)
+      const sync = useAccountSync(reload, refreshSources)
+      const [sub, setSub] = React.useState('holdings'), [editing, setEditing] = React.useState(false)
+      const sa = state.summary.accounts.find(x => x.accountId === accountId) || {}
+      const hs = db.historySync?.[accountId]
+      const subs = [['holdings', '持仓'], ['trades', '流水'], ['symbols', '个股'], ['analysis', '分析'], ['backfill', '补录账单']]
+      const metric = (label, value, color) => h('div', null, h('span', { style: T.label(t) }, label), h('strong', { style: { color, fontSize: typeof value === 'string' && value.length > 12 ? 12 : undefined } }, value))
+      return h('div', null,
+        h('button', { style: { ...T.btn(t, false), marginBottom: 14 }, onClick: back }, '← 全部账户'),
+        h('section', { className: 'wealth-hero', 'aria-label': '账户概况' },
+          h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', alignItems: 'flex-start' } },
+            h('div', null,
+              h('span', { style: { color: t.sub, fontSize: 12 } }, (source ? (CONNECTOR_LABEL[source.connector] || source.connector) + ' · 自动同步' : '手动账户') + ' · ' + account.currency),
+              h('div', { className: 'wealth-asset-value', style: { margin: '6px 0 8px' } }, fmtMoney(sa.valueBase), h('small', null, cur))),
+            h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' } },
+              source ? h('button', { style: T.btn(t, true), disabled: busy || !!sync.syncing, onClick: () => sync.run(account) }, sync.syncing ? '同步中…' : '⟳ 同步到最新') : null,
+              h('button', { style: T.btn(t, false), disabled: busy, onClick: () => setEditing(true) }, '编辑'))),
+          h('div', { className: 'wealth-metrics', style: { paddingBottom: 12 } },
+            metric('持仓成本', fmtMoney(sa.costBase, cur)),
+            metric('浮动盈亏', fmtMoney(sa.pnlBase, cur), (sa.pnlBase || 0) >= 0 ? t.green : t.red),
+            metric('最近同步', source ? (source.lastSuccessAt ? dateTimeText(source.lastSuccessAt) : '尚未同步') : '手动维护'),
+            metric('流水已同步至', hs?.lastTo || (source ? '尚未同步' : '—')))),
+        source && ['error', 'failed'].includes(source.lastStatus) && source.lastError ? h('div', { role: 'alert', style: { ...T.card(t), color: t.red, marginBottom: 14, fontSize: 12 } }, '上次同步失败：' + sourceErrorText(source.lastError)) : null,
+        h(SyncNote, { t, note: sync.note, onClose: () => sync.setNote(null) }),
+        h('nav', { className: 'wealth-subtabs', 'aria-label': '账户视图' }, subs.map(([id, name]) => h('button', { key: id, className: 'wealth-subtab', 'aria-current': sub === id ? 'page' : undefined, onClick: () => setSub(id) }, name))),
+        sub === 'holdings' ? h(Holdings, { t, state, call, busy, accountId }) :
+        sub === 'trades' ? h(Trades, { t, state, call, busy, accountId, onBackfill: () => setSub('backfill') }) :
+        sub === 'symbols' ? h(SymbolLedger, { t, state, accountId }) :
+        sub === 'analysis' ? h(Analysis, { t, state, fixedAccounts: [accountId], onBackfill: () => setSub('backfill') }) :
+        h(HistoryImport, { t, state, busy, reload, initialAccountId: accountId, lockAccount: true }),
+        editing ? h(EditAccountModal, { t, state, call, busy, reload, account, source, authorization: authorizations.find(x => x.id === (source?.authId || source?.id)), onClose: () => { setEditing(false); refreshSources() } }) : null)
+    }
+
+    function Holdings({ t, state, call, busy, accountId }) {
+      const db = state.ledger
+      const accMap = new Map(db.accounts.map((a) => [a.id, a]))
+      const insMap = new Map(db.instruments.map((i) => [i.id, i]))
+      const blank = () => ({ accountId: accountId || db.accounts[0]?.id || '', symbol: '', name: '', market: 'CN', assetClass: 'stock', sector: '', style: '', qty: '', avgCost: '', currency: '', manualPrice: '' })
+      const [form, setForm] = React.useState(null), [editing, setEditing] = React.useState(false), [msg, setMsg] = React.useState(''), [acctFilter, setAcctFilter] = React.useState('')
+      const [group, setGroup] = React.useState('account')
+      const open = (f, isEdit) => { setForm(f); setEditing(!!isEdit); setMsg('') }
+      const submit = async () => {
+        if (!form.accountId || !form.symbol.trim()) { setMsg('请选择账户并填写代码'); return }
+        const r = await call('holding.upsert', { holding: { ...form, currency: form.currency || undefined, qty: form.qty, avgCost: form.avgCost, manualPrice: form.manualPrice === '' ? null : form.manualPrice } })
+        if (!r.ok) { setMsg(r.error?.message || '保存失败'); return }
+        const ins = r.ledger.instruments.find(i => i.symbol === form.symbol && i.market === form.market)
+        if (ins && (ins.assetClass !== form.assetClass || (form.name && ins.name !== form.name) || (form.sector || '') !== (ins.sector || '') || (form.style || '') !== (ins.style || ''))) {
+          const meta = await call('instrument.upsert', { instrument: { id: ins.id, name: form.name || form.symbol, assetClass: form.assetClass, ...(form.sector.trim() ? { sector: form.sector.trim() } : {}), ...(form.style ? { style: form.style } : {}) } })
+          if (!meta.ok) { setMsg(meta.error?.message || '标的信息保存失败'); return }
+        }
+        setForm(null)
+      }
+      const list = db.holdings.filter(ho => accountId ? ho.accountId === accountId : (!acctFilter || ho.accountId === acctFilter))
+      const fld = (label, key, props = {}) => h('label', null, h('span', { style: T.label(t) }, label), h('input', { value: form[key], disabled: props.disabled, placeholder: props.placeholder, onChange: e => setForm({ ...form, [key]: props.upper ? e.target.value.toUpperCase() : props.trim ? e.target.value.trim() : e.target.value }), style: T.input(t) }))
+      const sel = (label, key, options, disabled) => h('label', null, h('span', { style: T.label(t) }, label), h('select', { value: form[key], disabled, onChange: e => setForm({ ...form, [key]: e.target.value }), style: T.input(t) }, options.map(([v, n]) => h('option', { key: v, value: v }, n))))
+      const styleLabel = key => ({ growth: '成长', value: '价值', blend: '均衡', other: '其他' })[key] || '未分类'
+      const groupKey = ho => {
+        const ins = insMap.get(ho.instrumentId)
+        if (group === 'account' && !accountId) return accMap.get(ho.accountId)?.name || ho.accountId
+        if (group === 'sector') return (ins?.sector || '').trim() || '未分类'
+        if (group === 'style') return ins?.style ? styleLabel(ins.style) : '未分类'
+        if (group === 'market') return ins?.market || '—'
+        return ho.currency || '—'
+      }
+      const groups = []
+      for (const ho of list) {
+        const key = groupKey(ho)
+        let g = groups.find(x => x.key === key)
+        if (!g) { g = { key, rows: [], mv: 0 }; groups.push(g) }
+        const ins = insMap.get(ho.instrumentId)
+        const rate = ho.currency === db.baseCurrency ? 1 : db.fx[ho.currency]
+        if (Number.isFinite(rate) && rate > 0) g.mv += ho.qty * (ho.manualPrice ?? ho.avgCost ?? 0) * rate
+        g.rows.push([ho, ins])
+      }
+      const totalMv = groups.reduce((s, g) => s + g.mv, 0)
+      return h('div', null,
+        h('div', { style: T.card(t) },
+          h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' } },
+            h('strong', null, (accountId ? '账户持仓' : '全部持仓') + ' · ' + list.length),
+            h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
+              accountId ? null : h('select', { value: acctFilter, onChange: (e) => setAcctFilter(e.target.value), 'aria-label': '按账户筛选', style: { ...T.input(t), minHeight: 30, width: 180, fontSize: 12 } },
+                h('option', { value: '' }, '全部账户'),
+                db.accounts.map((a) => h('option', { key: a.id, value: a.id }, a.name))),
+              h('select', { 'aria-label': '持仓分组', value: group, onChange: e => setGroup(e.target.value), style: { ...T.input(t), minHeight: 30, width: 'auto', fontSize: 12 } },
+                (accountId ? [['sector', '按行业'], ['style', '按风格'], ['market', '按市场'], ['currency', '按币种']] : [['account', '按账户'], ['sector', '按行业'], ['style', '按风格'], ['market', '按市场'], ['currency', '按币种']]).map(([v, n]) => h('option', { key: v, value: v }, n))),
+              h('button', { style: T.btn(t, true), disabled: busy || !db.accounts.length, onClick: () => open(blank()) }, '＋ 添加持仓'))),
+          h('table', { style: { width: '100%', borderCollapse: 'collapse' } },
+            h('thead', null, h('tr', null, T.th('标的', t), accountId ? null : T.th('账户', t), T.th('数量', t), T.th('成本', t), T.th('现价', t), T.th('币种', t), T.th('市值(本位币)', t), T.th('操作', t))),
+            h('tbody', null, list.length ? groups.map((g) => [
+              h('tr', { key: 'g:' + g.key }, T.td(h('span', { style: { fontWeight: 650, fontSize: 12 } }, g.key, h('small', { style: { display: 'block', color: t.sub, fontWeight: 400 } }, g.rows.length + ' 项 · ' + fmtMoney(g.mv, db.baseCurrency) + (totalMv ? ' · ' + (g.mv / totalMv * 100).toFixed(1) + '%' : ''))), t, { colSpan: accountId ? 7 : 8 })),
+              g.rows.map(([ho, ins]) => {
+                const acc = accMap.get(ho.accountId)
+                const price = ho.manualPrice ?? ho.avgCost ?? 0
+                const rate = ho.currency === db.baseCurrency ? 1 : db.fx[ho.currency]
+                const mv = Number.isFinite(rate) && rate > 0 ? ho.qty * price * rate : null
+                return h('tr', { key: ho.id },
+                  T.td(h('span', null, (ins ? ins.name + ' ' + ins.symbol : ho.instrumentId), ins?.sector ? h('small', { style: { display: 'block', color: t.sub } }, ins.sector + (ins.style ? ' · ' + styleLabel(ins.style) : '')) : null), t),
+                  accountId ? null : T.td(acc ? acc.name : ho.accountId, t),
+                  T.td(String(ho.qty), t),
+                  T.td(fmtMoney(ho.avgCost), t),
+                  T.td(h('input', { defaultValue: ho.manualPrice ?? '', placeholder: '手填', title: '直接修改现价，离开输入框保存', onBlur: (e) => { const v = e.target.value; if (v !== '' && String(ho.manualPrice ?? '') !== v) call('price.set', { holdingId: ho.id, price: Number(v) }) }, style: { ...T.input(t), width: 78 } }), t),
+                  T.td(ho.currency, t),
+                  T.td(fmtMoney(mv, db.baseCurrency), t),
+                  T.td(h('span', null,
+                    h('button', { style: { ...T.btn(t, false), padding: '3px 8px', marginRight: 6 }, disabled: busy, onClick: () => open({ accountId: ho.accountId, symbol: ins?.symbol || '', name: ins?.name || '', market: ins?.market || 'CN', assetClass: ins?.assetClass || 'stock', sector: ins?.sector || '', style: ins?.style || '', qty: String(ho.qty), avgCost: String(ho.avgCost ?? ''), currency: ho.currency || '', manualPrice: ho.manualPrice == null ? '' : String(ho.manualPrice) }, true) }, '编辑'),
+                    h('button', { style: { ...T.btn(t, false), padding: '3px 8px', borderColor: t.red, color: t.red }, disabled: busy, onClick: () => { if (window.confirm('删除该持仓？')) call('holding.remove', { id: ho.id }) } }, '删除')), t))
+              }),
+            ]) : h('tr', null, T.td('还没有持仓', t, { color: t.sub }))))),
+        form ? h(Modal, { t, title: editing ? '编辑持仓' : '添加持仓', onClose: () => setForm(null) },
+          h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12 } },
+            accountId ? null : sel('账户', 'accountId', db.accounts.map(a => [a.id, a.name]), editing),
+            fld('代码', 'symbol', { placeholder: '600519', disabled: editing, trim: true }),
+            fld('名称', 'name', { placeholder: '贵州茅台' }),
+            sel('市场', 'market', ['CN', 'HK', 'US', 'SG', 'FUND', 'OTHER'].map(x => [x, x]), editing),
+            sel('资产类别', 'assetClass', [['stock', '股票'], ['fund', '基金'], ['etf', 'ETF'], ['cash', '现金'], ['bond', '债券'], ['crypto', '数字资产'], ['other', '其他']]),
+            fld('行业（可选）', 'sector', { placeholder: '如 白酒 / 银行 / 半导体', trim: true }),
+            sel('风格（可选）', 'style', [['', '未分类'], ['growth', '成长'], ['value', '价值'], ['blend', '均衡'], ['other', '其他']]),
+            fld('数量', 'qty'), fld('成本价', 'avgCost'), fld('现价（手填，可空）', 'manualPrice'), fld('币种', 'currency', { placeholder: '自动', upper: true })),
+          editing ? h('p', { style: { fontSize: 11, color: t.sub, marginTop: 10 } }, '代码与市场决定持仓身份，如需更换请删除后重新添加。自动同步的账户下次同步可能覆盖手工修改。') : null,
+          msg ? h('div', { role: 'alert', style: { color: t.red, fontSize: 12, marginTop: 10 } }, msg) : null,
+          h('div', { style: { display: 'flex', gap: 10, marginTop: 18 } }, h('button', { style: T.btn(t, true), disabled: busy, onClick: submit }, editing ? '保存' : '添加'), h('button', { style: T.btn(t, false), onClick: () => setForm(null) }, '取消'))) : null)
+    }
+
+    const HISTORY_KINDS = { buy: '买入', sell: '卖出', dividend: '分红', interest: '利息', deposit: '入金', withdrawal: '出金', tax: '税费', fee: '费用', cash: '现金变动', cash_in: '现金转入', cash_out: '现金转出', transfer: '转账 / 转托管', transfer_in: '转入', transfer_out: '转出', security_in: '证券转入', security_out: '证券转出', repo: '回购', repo_open: '回购开仓', repo_close: '回购到期', repo_interest: '回购利息', ipo: '新股', ipo_subscription: '新股申购', ipo_allotment: '新股配售', ipo_refund: '新股退款', split: '拆股', corporate_action: '公司行动', other: '其他' }
+    const historyKind = row => HISTORY_KINDS[row.kind] || row.kind || '其他'
+    const historyValue = (value, missing = '—') => value === null || value === undefined || value === '' ? missing : String(value)
+    const isRepo = row => /repo|回购|逆回购/i.test((row.kind || '') + ' ' + (row.originalType || ''))
+    const historyStatus = status => ({ new: '新增', duplicate: '重复 · 跳过', conflict: '冲突 · 待修正', outside: '区间外 · 跳过' })[status] || status || '已归档'
+    function HistoryTable({ t, rows, showStatus, showAccount, showAction }) {
+      return h('div', { style: { overflowX: 'auto', marginTop: 12 } }, h('table', { style: { width: '100%', borderCollapse: 'collapse', minWidth: 1100 } },
+        h('thead', null, h('tr', null, [...(showAccount ? ['账户'] : []), '日期 / 时间', '类型 / 原始类型', '代码 / 名称', '数量', '价格 / 利率', '原始金额', '净现金', '费用', '币种', showStatus ? '状态' : '来源', ...(showAccount || showAction ? ['操作'] : [])].map(label => T.th(label, t)))),
+        h('tbody', null, rows.map((row, index) => h('tr', { key: row.id || index },
+          showAccount ? T.td(row.accountName || row.accountId, t) : null,
+          T.td(h('span', { style: { whiteSpace: 'nowrap' } }, row.date || '—', row.time ? h('small', { style: { display: 'block', color: t.sub } }, row.time) : null), t),
+          T.td(h('span', null, historyKind(row), h('small', { style: { display: 'block', color: t.sub } }, row.originalType || '—')), t),
+          T.td(h('span', null, row.symbol || '—', h('small', { style: { display: 'block', color: t.sub } }, [row.name, row.market].filter(Boolean).join(' · '))), t),
+          T.td(historyValue(row.qty), t), T.td((isRepo(row) ? '利率 ' : '') + historyValue(row.price), t), T.td(historyValue(row.grossAmount), t), T.td(historyValue(row.cashAmount), t), T.td(historyValue(row.fee, '未知'), t), T.td(row.currency || '未知', t),
+          T.td(showStatus ? h('span', { style: { color: row.status === 'conflict' ? t.red : row.status === 'new' ? t.accent : t.sub } }, historyStatus(row.status), h('small', { style: { display: 'block', color: t.sub } }, [row.sheet, row.row != null ? '第 ' + row.row + ' 行' : ''].filter(Boolean).join(' · '))) : row.provenance || '—', t), showAccount || showAction ? T.td(row.action || '同步归档', t) : null)))))
+    }
+
+    function ledgerEvents(db, accountId) {
+      const accMap = new Map(db.accounts.map((a) => [a.id, a]))
+      const insMap = new Map(db.instruments.map((i) => [i.id, i]))
+      return [...(db.trades || []).filter(tr => !accountId || tr.accountId === accountId).map(tr => {
+        const ins = insMap.get(tr.instrumentId), gross = Number(tr.qty) * Number(tr.price)
+        const knownFee = tr.fee !== null && tr.fee !== undefined && tr.fee !== ''
+        return { ...tr, legacyId: tr.id, id: 'trade:' + tr.id, kind: tr.side, symbol: ins?.symbol || tr.symbol, name: ins?.name || tr.name, market: ins?.market || tr.market, currency: tr.currency || accMap.get(tr.accountId)?.currency, grossAmount: tr.grossAmount ?? gross, cashAmount: tr.cashAmount ?? (knownFee && ['buy', 'sell'].includes(tr.side) ? (tr.side === 'buy' ? -gross : gross) - Number(tr.fee) : null), provenance: [tr.source?.provider || (typeof tr.source === 'string' ? tr.source : ''), tr.source?.externalId].filter(Boolean).join(' · ') || '手工记账' }
+      }), ...(db.historyEvents || []).filter(row => !accountId || row.accountId === accountId).map(row => ({ ...row, id: 'history:' + row.id, provenance: [row.provider || '文件回补', row.batchId ? '批次 ' + row.batchId : '', row.sheet, row.row != null ? '第 ' + row.row + ' 行' : '', row.importedAt ? '导入于 ' + row.importedAt : ''].filter(Boolean).join(' · ') }))]
+        .map(row => ({ ...row, accountName: accMap.get(row.accountId)?.name }))
+        .sort((a, b) => (String(b.date || '') + (b.time || '')).localeCompare(String(a.date || '') + (a.time || '')))
+    }
+
+    function Trades({ t, state, call, busy, accountId, onBackfill, openAccount }) {
+      const db = state.ledger
+      const blank = () => ({ accountId: accountId || db.accounts[0]?.id || '', symbol: '', market: 'CN', side: 'buy', qty: '', price: '', fee: '', date: new Date().toLocaleDateString('en-CA'), currency: '' })
+      const [form, setForm] = React.useState(null), [msg, setMsg] = React.useState('')
+      const [page, setPage] = React.useState(0), [query, setQuery] = React.useState(''), [kind, setKind] = React.useState('')
+      const all = ledgerEvents(db, accountId)
+      const q = query.trim().toLowerCase()
+      const events = all.filter(r => (!kind || r.kind === kind) && (!q || [r.symbol, r.name, r.originalType, r.note, r.accountName].some(v => String(v || '').toLowerCase().includes(q))))
+        .map(row => row.legacyId ? { ...row, action: h('button', { style: { ...T.btn(t, false), color: t.red }, disabled: busy, onClick: () => { if (window.confirm('删除这条手工流水？（不会自动回算持仓）')) call('trade.remove', { id: row.legacyId }) } }, '删除') } : row)
+      const kinds = [...new Set(all.map(r => r.kind).filter(Boolean))]
+      const pages = Math.max(1, Math.ceil(events.length / 100)), shownPage = Math.min(page, pages - 1)
+      const submit = async () => {
+        if (!form.accountId || !form.symbol.trim()) { setMsg('请选择账户并填写代码'); return }
+        const r = await call('trade.add', { trade: { ...form, currency: form.currency || undefined, qty: form.qty, price: form.price, fee: form.fee === '' ? 0 : form.fee } })
+        if (r.ok) setForm(null); else setMsg(r.error?.message || '保存失败')
+      }
+      const fld = (label, key, props = {}) => h('label', null, h('span', { style: T.label(t) }, label), h('input', { type: props.type, value: form[key], placeholder: props.placeholder, onChange: e => setForm({ ...form, [key]: props.upper ? e.target.value.toUpperCase() : e.target.value }), style: T.input(t) }))
+      const sel = (label, key, options) => h('label', null, h('span', { style: T.label(t) }, label), h('select', { value: form[key], onChange: e => setForm({ ...form, [key]: e.target.value }), style: T.input(t) }, options.map(([v, n]) => h('option', { key: v, value: v }, n))))
+      return h('div', null,
+        h('div', { style: T.card(t) },
+          h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' } },
+            h('strong', null, (accountId ? '账户流水' : '全部流水') + ' · ' + events.length + (events.length !== all.length ? ' / ' + all.length : '')),
+            h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' } },
+              onBackfill ? h('button', { style: T.btn(t, false), disabled: busy, onClick: onBackfill }, '补录账单') : null,
+              h('button', { style: T.btn(t, true), disabled: busy || !db.accounts.length, onClick: () => { setMsg(''); setForm(blank()) } }, '＋ 记一笔'))),
+          h('div', { style: { display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 12 } },
+            h('input', { value: query, onChange: e => { setQuery(e.target.value); setPage(0) }, placeholder: '搜索代码 / 名称 / 类型', 'aria-label': '搜索流水', style: { ...T.input(t), maxWidth: 260 } }),
+            h('select', { value: kind, onChange: e => { setKind(e.target.value); setPage(0) }, 'aria-label': '流水类型', style: { ...T.input(t), maxWidth: 170 } }, h('option', { value: '' }, '全部类型'), kinds.map(k => h('option', { key: k, value: k }, HISTORY_KINDS[k] || k)))),
+          h('p', { style: { color: t.sub, fontSize: 12 } }, accountId ? '自动同步的账户点「同步」即补齐全部历史流水；来源接口没有的记录（如银证转账）可在「补录账单」导入。' : '各账户流水由账户「同步」自动更新。金额按原币展示，费用缺失为未知；流水只归档，不改变当前持仓。'),
+          events.length ? h(HistoryTable, { t, rows: events.slice(shownPage * 100, (shownPage + 1) * 100), showAccount: !accountId, showAction: true }) : h('p', { style: { color: t.sub } }, all.length ? '没有符合条件的流水' : '还没有流水'),
+          pages > 1 ? h('div', { style: { display: 'flex', gap: 10, alignItems: 'center', marginTop: 12 } }, h('button', { style: T.btn(t, false), disabled: shownPage === 0, onClick: () => setPage(shownPage - 1) }, '上一页'), h('span', { style: { color: t.sub, fontSize: 12 } }, (shownPage + 1) + ' / ' + pages + ' 页 · 每页 100 条'), h('button', { style: T.btn(t, false), disabled: shownPage >= pages - 1, onClick: () => setPage(shownPage + 1) }, '下一页')) : null),
+        form ? h(Modal, { t, title: '记一笔交易', onClose: () => setForm(null) },
+          h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12 } },
+            accountId ? null : sel('账户', 'accountId', db.accounts.map(a => [a.id, a.name])),
+            fld('代码', 'symbol', { placeholder: '00700' }), sel('市场', 'market', ['CN', 'HK', 'US', 'SG', 'FUND', 'OTHER'].map(x => [x, x])), sel('方向', 'side', [['buy', '买入'], ['sell', '卖出']]),
+            fld('数量', 'qty'), fld('价格', 'price'), fld('费用', 'fee', { placeholder: '0' }), fld('日期', 'date', { type: 'date' }), fld('币种', 'currency', { placeholder: '自动', upper: true })),
+          msg ? h('div', { role: 'alert', style: { color: t.red, fontSize: 12, marginTop: 10 } }, msg) : null,
+          h('div', { style: { display: 'flex', gap: 10, marginTop: 18 } }, h('button', { style: T.btn(t, true), disabled: busy, onClick: submit }, '记一笔'), h('button', { style: T.btn(t, false), onClick: () => setForm(null) }, '取消'))) : null)
+    }
+
+    function SymbolLedger({ t, state, accountId }) {
+      const db = state.ledger
+      const [open, setOpen] = React.useState(''), [query, setQuery] = React.useState('')
+      const groups = new Map()
+      for (const r of ledgerEvents(db, accountId)) {
+        if (!r.symbol) continue
+        const k = r.symbol + '|' + (r.market || '')
+        let g = groups.get(k)
+        if (!g) groups.set(k, g = { key: k, symbol: r.symbol, name: r.name, market: r.market, currency: r.currency, rows: [], buys: 0, sells: 0, buyQty: 0, sellQty: 0, buyCash: 0, sellCash: 0, income: 0, unknown: 0, first: r.date, last: r.date })
+        g.rows.push(r); if (!g.name && r.name) g.name = r.name
+        const qty = Number(r.qty) || 0, cash = typeof r.cashAmount === 'number' && Number.isFinite(r.cashAmount) ? r.cashAmount : null
+        if (r.kind === 'buy') { g.buys++; g.buyQty += qty; if (cash !== null) g.buyCash -= cash; else g.unknown++ }
+        else if (r.kind === 'sell') { g.sells++; g.sellQty += qty; if (cash !== null) g.sellCash += cash; else g.unknown++ }
+        else if (['dividend', 'interest', 'tax', 'fee'].includes(r.kind) && cash !== null) g.income += cash
+        if (r.date && r.date < g.first) g.first = r.date
+        if (r.date && r.date > g.last) g.last = r.date
+      }
+      const insMap = new Map(db.instruments.map(i => [i.id, i]))
+      const heldQty = g => db.holdings.filter(ho => (!accountId || ho.accountId === accountId) && insMap.get(ho.instrumentId)?.symbol === g.symbol).reduce((s, ho) => s + (Number(ho.qty) || 0), 0)
+      const q = query.trim().toLowerCase()
+      const list = [...groups.values()].filter(g => !q || (g.symbol + ' ' + (g.name || '')).toLowerCase().includes(q)).sort((a, b) => String(b.last || '').localeCompare(String(a.last || '')))
+      const n = v => (Math.round(v * 100) / 100).toLocaleString('zh-CN')
+      return h('div', { style: T.card(t) },
+        h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' } },
+          h('strong', null, '个股买卖 · ' + list.length + ' 只'),
+          h('input', { value: query, onChange: e => setQuery(e.target.value), placeholder: '搜索代码 / 名称', 'aria-label': '搜索个股', style: { ...T.input(t), maxWidth: 240 } })),
+        h('p', { style: { color: t.sub, fontSize: 12 } }, '按标的汇总该账户的历史买卖与分红税费。净现金 = 卖出 + 分红税费 − 买入；仍持有的部分不计入，缺少金额的记录不参与求和。点击一行查看逐笔明细。'),
+        !list.length ? h('p', { style: { color: t.sub } }, '还没有可汇总的个股流水。') :
+        h('div', { style: { overflowX: 'auto' } }, h('table', { style: { width: '100%', borderCollapse: 'collapse', minWidth: 860 } },
+          h('thead', null, h('tr', null, ['标的', '买入', '卖出', '买入金额', '卖出金额', '分红税费', '净现金', '当前持有', '区间'].map(x => T.th(x, t)))),
+          h('tbody', null, list.flatMap(g => {
+            const net = g.sellCash + g.income - g.buyCash, held = heldQty(g)
+            const row = h('tr', { key: g.key, style: { cursor: 'pointer', background: open === g.key ? t.soft : undefined }, onClick: () => setOpen(open === g.key ? '' : g.key) },
+              T.td(h('span', null, (open === g.key ? '▾ ' : '▸ ') + g.symbol, h('small', { style: { display: 'block', color: t.sub } }, [g.name, g.market, g.currency].filter(Boolean).join(' · '))), t),
+              T.td(g.buys + ' 笔 · ' + n(g.buyQty), t), T.td(g.sells + ' 笔 · ' + n(g.sellQty), t),
+              T.td(n(g.buyCash), t), T.td(n(g.sellCash), t), T.td(n(g.income), t),
+              T.td(h('span', { style: { color: net >= 0 ? t.green : t.red } }, n(net), g.unknown ? h('small', { style: { display: 'block', color: t.terra } }, g.unknown + ' 笔缺金额') : null), t),
+              T.td(held ? n(held) : '已清仓', t, { color: held ? t.text : t.sub }), T.td((g.first || '—') + ' → ' + (g.last || '—'), t, { fontSize: 11.5, color: t.sub }))
+            return open === g.key ? [row, h('tr', { key: g.key + ':d' }, h('td', { colSpan: 9, style: { padding: '0 0 14px', borderBottom: '1px solid ' + t.border } }, h(HistoryTable, { t, rows: g.rows.slice(0, 300), showAction: false }), g.rows.length > 300 ? h('p', { style: { fontSize: 11, color: t.sub } }, '仅显示最近 300 笔') : null))] : [row]
+          })))))
+    }
+
+    function HistoryImport({ t, state, busy, reload, initialAccountId, lockAccount }) {
+      const [accountId, setAccountId] = React.useState(initialAccountId || '')
+      const [method, setMethod] = React.useState('file'), [file, setFile] = React.useState(null), [text, setText] = React.useState('')
+      const [currency, setCurrency] = React.useState(''), [from, setFrom] = React.useState(''), [to, setTo] = React.useState(''), [sheet, setSheet] = React.useState('')
+      const [workbook, setWorkbook] = React.useState(null), [preview, setPreview] = React.useState(null), [page, setPage] = React.useState(0)
+      const [caps, setCaps] = React.useState(null), [error, setError] = React.useState(''), [success, setSuccess] = React.useState(''), [working, setWorking] = React.useState('')
+      const generation = React.useRef(0), mounted = React.useRef(true), committing = React.useRef(false), fileInput = React.useRef(null)
+      React.useEffect(() => { mounted.current = true; return () => { mounted.current = false; generation.current++ } }, [])
+      React.useEffect(() => {
+        let live = true
+        fetch('/portfolio/api/history/capabilities', { headers: { accept: 'application/json' } }).then(async r => { const data = await r.json(); if (!r.ok || !data.ok) throw new Error(data.error?.message || '无法读取回补能力'); if (live) setCaps(data) }).catch(e => { if (live) setError(e.message) })
+        return () => { live = false }
+      }, [])
+      const reset = () => { generation.current++; setPreview(null); setPage(0); setError(''); setSuccess(''); setWorking('') }
+      React.useEffect(() => { reset(); setAccountId(initialAccountId || '') }, [initialAccountId])
+      const existing = state.ledger.accounts.find(a => a.id === accountId)
+      const capability = caps?.accounts?.find(a => a.accountId === accountId)
+      const apiAvailable = !!capability?.apiAvailable
+      const maxBytes = Math.min(5 * 1024 * 1024, Number(caps?.limits?.maxFileBytes) || 5 * 1024 * 1024)
+      const frozen = busy || working === 'commit'
+      const change = setter => e => { if (committing.current) return; reset(); setter(e.target.value) }
+      const summarySheet = name => /持仓|已平仓|已清仓|清仓|汇总|汇總|holding|position|closed|summary/i.test(name) && !/交易记录|交易紀錄|transaction/i.test(name)
+      const chooseFile = async e => {
+        if (committing.current) return
+        const picked = e.target.files?.[0]; e.target.value = ''; if (!picked) return
+        reset(); setFile(null); setText(''); setSheet(''); setWorkbook(null)
+        const version = generation.current, current = () => mounted.current && generation.current === version
+        if (picked.size > maxBytes) { setError('文件超过 ' + (maxBytes / 1024 / 1024).toFixed(1) + ' MiB，请拆分后导入'); return }
+        if (!/\.(xlsx|csv|tsv|txt)$/i.test(picked.name)) { setError('请选择 XLSX、CSV 或 TSV 文件'); return }
+        setWorking('read')
+        try {
+          const bytes = new Uint8Array(await picked.arrayBuffer()); if (!current()) return
+          if (/\.xlsx$/i.test(picked.name)) {
+            let binary = ''; for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+            setFile({ fileName: picked.name, fileBase64: window.btoa(binary), size: picked.size })
+          } else {
+            let content = new TextDecoder('utf-8').decode(bytes)
+            if (content.includes('\ufffd')) content = new TextDecoder('gb18030').decode(bytes)
+            setText(content); setFile({ fileName: picked.name, size: picked.size })
+          }
+        } catch (e) { if (current()) setError('读取文件失败：' + e.message) }
+        finally { if (current()) setWorking('') }
+      }
+      const inspect = async () => {
+        if (frozen || working || !existing || !caps) return
+        reset()
+        if (method === 'api' && !apiAvailable) { setError(capability?.description || '此账户暂不支持 API 历史回补，请使用文件导入'); return }
+        if (method === 'api' && (!from || !to)) { setError('API 回补需要填写开始和结束日期'); return }
+        if (from && to && from > to) { setError('开始日期不能晚于结束日期'); return }
+        if (method === 'file' && !file?.fileBase64 && !text.trim()) { setError('请选择文件或粘贴表格'); return }
+        if (method === 'file' && !file?.fileBase64 && new TextEncoder().encode(text).length > maxBytes) { setError('文本超过文件大小上限，请拆分后导入'); return }
+        if (method === 'file' && sheet && summarySheet(sheet)) { setError('持仓 / 已平仓汇总不是交易流水，请选择交易记录工作表'); return }
+        const version = generation.current, current = () => mounted.current && generation.current === version
+        setWorking('preview')
+        try {
+          const r = await post('history/preview', { accountId, method, ...(from ? { from } : {}), ...(to ? { to } : {}), ...(method === 'file' ? { ...(file?.fileBase64 ? { fileBase64: file.fileBase64 } : { text }), ...(file?.fileName ? { fileName: file.fileName } : {}), ...(sheet ? { sheet } : {}), ...(currency ? { defaultCurrency: currency } : {}) } : {}) })
+          if (!current()) return
+          if (r.selectedSheet && summarySheet(r.selectedSheet)) throw new Error('服务返回了汇总工作表，请改选交易记录后重新预览')
+          setPreview(r); setWorkbook({ sheets: r.sheets || [], ignoredSheets: r.ignoredSheets || [] }); setSheet(r.selectedSheet || sheet); setPage(0)
+        } catch (e) { if (current()) setError(e.message) }
+        finally { if (current()) setWorking('') }
+      }
+      const rows = preview?.rows || [], counts = preview?.summary || {}
+      const conflicts = Math.max(Number(counts.conflict) || 0, rows.filter(row => row.status === 'conflict').length)
+      const newCount = counts.new ?? rows.filter(row => row.status === 'new').length
+      const invalid = (preview?.errors || []).length > 0 || conflicts > 0
+      const commit = async () => {
+        if (committing.current || frozen || working || !preview?.token || invalid || !newCount || !existing) return
+        committing.current = true; setWorking('commit'); setError('')
+        const version = generation.current, current = () => mounted.current && generation.current === version
+        try {
+          const r = await post('history/commit', { token: preview.token })
+          if (!current()) { await reload(); return }
+          setPreview(null); setText(''); setFile(null); setWorkbook(null); setSheet('')
+          setSuccess('历史流水已归档：新增 ' + (r.result?.imported ?? 0) + ' 条，跳过重复 ' + (r.result?.duplicates ?? 0) + ' 条' + (r.result?.batchId ? ' · 批次 ' + r.result.batchId : '') + '。当前持仓未变。')
+          await reload()
+        } catch (e) { if (current()) { setError(e.message + '；请重新预览后再导入'); setPreview(null) } }
+        finally { committing.current = false; if (current()) setWorking('') }
+      }
+      const pages = Math.max(1, Math.ceil(rows.length / 100)), observedFrom = counts.observedFrom || preview?.coverage?.observedFrom, observedTo = counts.observedTo || preview?.coverage?.observedTo
+      const batches = (state.ledger.historyBatches || []).filter(batch => batch.accountId === accountId).slice().reverse()
+      const field = (label, value, setter) => h('label', null, h('span', { style: T.label(t) }, label), h('input', { type: 'date', value, disabled: frozen, onChange: change(setter), style: T.input(t) }))
+      return h('div', null,
+        h('section', { style: { ...T.card(t), marginBottom: 18 }, 'aria-label': '补充历史流水' },
+          h('strong', { style: { fontSize: 17, fontWeight: 600 } }, lockAccount ? '补录账单' : '让历史，也回到账本'),
+          h('p', { style: { color: t.sub, fontSize: 12, lineHeight: 1.8 } }, lockAccount ? '「同步」已自动读取来源接口能提供的全部流水。这里用于补录接口没有的记录（如银证转账），上传券商导出的账单文件，先预览再归档；不改变当前持仓，金额按原币照录。' : '选择已有账户，先预览、再归档。仅补充历史流水，不创建或绑定账户，也不改变当前持仓。原始金额按文件或来源原币照录，不做汇率换算。'),
+          h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 12 } },
+            lockAccount ? null : h('label', null, h('span', { style: T.label(t) }, '已有账户'), h('select', { value: accountId, disabled: frozen, onChange: change(setAccountId), style: T.input(t), 'aria-label': '历史回补账户' }, h('option', { value: '' }, '请选择已有账户'), state.ledger.accounts.map(a => h('option', { key: a.id, value: a.id }, a.name + ' · ' + a.currency)))),
+            field(method === 'api' ? '开始日期（必填）' : '开始日期（可留空）', from, setFrom), field(method === 'api' ? '结束日期（必填）' : '结束日期（可留空）', to, setTo)),
+          !state.ledger.accounts.length ? h('p', { style: { color: t.sub } }, '尚无已有账户，请先到数据源页导入账户，再补充历史。') : null,
+          h('div', { style: { display: 'flex', gap: 10, marginTop: 18, flexWrap: 'wrap' } }, h('button', { style: T.btn(t, method === 'file'), disabled: frozen, 'aria-pressed': method === 'file', onClick: () => { if (!committing.current) { reset(); setMethod('file') } } }, '文件回补'), h('button', { style: T.btn(t, method === 'api'), disabled: frozen || !apiAvailable, title: capability?.description || '先选择支持历史 API 的已有账户', 'aria-pressed': method === 'api', onClick: () => { reset(); setMethod('api') } }, 'API 回补')),
+          h('p', { style: { color: t.sub, fontSize: 12 } }, !caps ? '正在读取各账户回补能力…' : capability?.description || '此账户没有可用历史 API，可用券商导出文件补充历史流水。'),
+          method === 'file' ? h('div', null,
+            h('p', { style: { color: t.sub, fontSize: 12 } }, '支持 XLSX / CSV / TSV，最大 ' + (maxBytes / 1024 / 1024).toFixed(1) + ' MiB' + (caps?.limits?.maxRows ? '、' + caps.limits.maxRows + ' 行' : '') + '。日期均留空时读取全部可用流水。XLSX 优先选择「交易记录」；持仓和已平仓汇总不作为流水导入。源文件保持原样。'),
+            h('div', { style: { display: 'flex', alignItems: 'end', gap: 12, flexWrap: 'wrap', marginBottom: 12 } },
+              h('button', { style: T.btn(t, false), disabled: frozen, onClick: () => fileInput.current?.click() }, working === 'read' ? '正在读取…' : '选择 XLSX / CSV / TSV'), h('input', { ref: fileInput, type: 'file', accept: '.xlsx,.csv,.tsv,.txt', disabled: frozen, style: { display: 'none' }, onChange: chooseFile }),
+              file ? h('span', { style: { fontSize: 12, color: t.sub } }, file.fileName, ' · ', Math.ceil(file.size / 1024), ' KiB') : null,
+              h('label', { style: { minWidth: 190 } }, h('span', { style: T.label(t) }, '文件缺少币种列时使用'), h('select', { value: currency, disabled: frozen, onChange: change(setCurrency), style: T.input(t), 'aria-label': '历史回补默认币种' }, [['','请选择（不自动推断）'],['CNY','CNY 人民币'],['HKD','HKD 港币'],['USD','USD 美元'],['CNH','CNH 离岸人民币']].map(([v, label]) => h('option', { key: v, value: v }, label)))),
+              (workbook?.sheets || []).length > 1 ? h('label', null, h('span', { style: T.label(t) }, '交易工作表'), h('select', { value: sheet, disabled: frozen, onChange: change(setSheet), style: T.input(t), 'aria-label': '历史回补工作表' }, workbook.sheets.map(name => h('option', { key: name, value: name, disabled: summarySheet(name) }, name + (summarySheet(name) ? '（汇总，不导入）' : ''))))) : null),
+            !file?.fileBase64 ? h('textarea', { value: text, disabled: frozen, onChange: e => { reset(); setFile(null); setWorkbook(null); setSheet(''); setText(e.target.value) }, rows: 6, placeholder: '也可粘贴含表头的 CSV / TSV 流水', 'aria-label': '历史流水文本', style: { ...T.input(t), fontFamily: 'monospace', resize: 'vertical' } }) : null,
+            h('small', { style: { display: 'block', color: t.sub, marginTop: 8 } }, '币种列存在时保留原币；没有币种列时必须明确选择。不会根据港股代码或账户币种推断港元。')) : h('p', { style: { color: t.sub, fontSize: 12 } }, 'API 按所选账户能力读取，需要明确日期。来源可能限制可查历史；实际返回记录区间不代表完整覆盖。'),
+          h('button', { style: { ...T.btn(t, true), marginTop: 16 }, disabled: frozen || !!working || !existing || !caps || (method === 'api' && !apiAvailable), onClick: inspect }, working === 'preview' ? '正在预览…' : '读取并预览')),
+        error ? h('div', { role: 'alert', style: { ...T.card(t), color: t.red, marginBottom: 14 } }, error) : null,
+        success ? h('div', { role: 'status', style: { ...T.card(t), color: t.accent, marginBottom: 14 } }, success) : null,
+        preview ? h('section', { style: T.card(t), 'aria-label': '历史流水只读预览' },
+          h('strong', { style: { fontSize: 16 } }, '只读预览 · ' + (counts.total ?? rows.length) + ' 条'),
+          h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 18, marginTop: 14 } }, [['new','新增'],['duplicate','重复'],['conflict','冲突'],['outside','区间外']].map(([key,label]) => h('span', { key, style: { color: key === 'conflict' && conflicts ? t.red : t.sub } }, label + ' ', h('strong', { style: { color: key === 'conflict' && conflicts ? t.red : t.text } }, counts[key] ?? rows.filter(row => row.status === key).length)))),
+          h('p', { style: { color: t.sub, fontSize: 12 } }, '类型分布：' + Object.entries(counts.byKind || rows.reduce((all,row) => { all[row.kind || 'other'] = (all[row.kind || 'other'] || 0) + 1; return all }, {})).map(([kind,count]) => (HISTORY_KINDS[kind] || kind) + ' ' + count).join(' · ')),
+          h('p', { style: { color: t.sub, fontSize: 12 } }, '实际记录区间：' + (observedFrom || '无记录') + ' ～ ' + (observedTo || '无记录') + '。仅描述此次可见记录，不代表完整历史覆盖。'),
+          preview.coverage?.note ? h('p', { style: { color: t.sub, fontSize: 12 } }, preview.coverage.note) : null,
+          (preview.ignoredSheets || []).length ? h('p', { style: { color: t.sub, fontSize: 12 } }, '未导入工作表：' + preview.ignoredSheets.join('、')) : null,
+          (preview.errors || []).map((item,i) => h('div', { key: 'e' + i, role: 'alert', style: { color: t.red, fontSize: 12, marginTop: 6 } }, (item.row != null ? '第 ' + item.row + ' 行 ' : '') + (item.field ? item.field + '：' : '') + item.message)),
+          (preview.warnings || []).length ? h('details', { style: { color: t.terra, fontSize: 12, marginTop: 10 } }, h('summary', { style: { cursor: 'pointer' } }, '导入提示 · ' + preview.warnings.length + ' 项（展开核对）'), preview.warnings.map((item,i) => h('div', { key: 'w' + i, style: { marginTop: 6 } }, typeof item === 'string' ? item : item.message))) : null,
+          h('small', { style: { display: 'block', color: t.sub, marginTop: 10 } }, '费用未提供时显示「未知」；回购价格为利率。未知业务类型保留为其他，不丢弃原始类型。'),
+          h(HistoryTable, { t, rows: rows.slice(page * 100, (page + 1) * 100), showStatus: true }),
+          h('div', { style: { display: 'flex', gap: 10, alignItems: 'center', marginTop: 14 } }, h('button', { style: T.btn(t, false), disabled: page === 0, onClick: () => setPage(page - 1) }, '上一页'), h('span', { style: { color: t.sub, fontSize: 12 } }, (page + 1) + ' / ' + pages + ' 页 · 每页 100 条'), h('button', { style: T.btn(t, false), disabled: page >= pages - 1, onClick: () => setPage(page + 1) }, '下一页')),
+          invalid ? h('p', { style: { color: t.red, fontSize: 12 } }, '有错误或冲突，请修正后重新预览；本次不能导入。') : !newCount ? h('p', { style: { color: t.sub, fontSize: 12 } }, '没有新增记录，无需归档；重复和区间外记录已标出。') : null,
+          h('button', { style: { ...T.btn(t, true), marginTop: 18 }, disabled: frozen || !!working || invalid || !preview.token || !newCount || !existing, onClick: commit }, working === 'commit' ? '正在归档…' : '确认归档 ' + newCount + ' 条历史流水'),
+          h('small', { style: { display: 'block', color: t.sub, marginTop: 8 } }, '重复和区间外记录会跳过。始终只归档，不修改当前持仓。')) : null,
+        batches.length ? h('details', { style: { ...T.card(t), marginTop: 18 } }, h('summary', { style: { cursor: 'pointer', fontWeight: 600 } }, '此账户回补记录 · ' + batches.length + ' 批次'), batches.map((batch,i) => h('div', { key: batch.id || batch.batchId || i, style: { marginTop: 14, color: t.sub, fontSize: 12 } }, h('strong', { style: { color: t.text } }, batch.id || batch.batchId || '历史批次'), ' · 新增 ' + (batch.imported ?? batch.result?.imported ?? '未知') + ' · 重复 ' + (batch.duplicates ?? batch.result?.duplicates ?? '未知'), h('div', null, '请求区间：' + (batch.requestedFrom || batch.coverage?.requestedFrom || batch.request?.from || '未指定') + ' ～ ' + (batch.requestedTo || batch.coverage?.requestedTo || batch.request?.to || '未指定')), h('div', null, '实际记录：' + (batch.observedFrom || batch.coverage?.observedFrom || batch.summary?.observedFrom || '未知') + ' ～ ' + (batch.observedTo || batch.coverage?.observedTo || batch.summary?.observedTo || '未知') + ' · 非完整覆盖证明')))) : null)
+    }
+
+    function DataSources({ t, state, call, busy, reload, openAccounts, openHistory, mode, initialChoice, editSource, reauthAuth, authorizations = [], onDone }) {
+      const embedded = !!mode, reauth = reauthAuth || null
+      const options = [
+        ['manual', '文件导入', 'CSV / TSV 或粘贴表格', '↥'],
+        ['ths', '同花顺', '独立登录 · 人民币投资账本', '同'],
+        ['futu', '富途', '官方 MCP 浏览器授权 · 支持本机 OpenD', '富'],
+        ['longbridge', '长桥', '官方 MCP 授权码连接', '长'],
+        ['ib', 'Interactive Brokers', '官方 Client Portal Gateway', 'IB'],
+        ['custom', '高级 API / MCP', '标准化快照接口或只读工具', '⌘'],
+      ]
+      const emptyForm = connector => ({ name: '', connector, transport: connector === 'custom' ? 'http' : 'native', lbInterface: 'mcp', futuInterface: 'mcp', accountId: '', portfolioId: '', thsBookType: 'common', brokerAccountId: '', intervalMinutes: '15', enabled: true, host: '127.0.0.1', port: '33333', tls: false, tradeEnvironment: 'REAL', tradeMarket: 'HK', currency: 'HKD', gatewayUrl: 'https://localhost:5000/v1/api', trustLocalGateway: false, mcpEndpoint: '', url: '', toolName: '', args: '{}', credentialRef: '' })
+      const [choice, setChoice] = React.useState(reauth ? reauth.connector : (initialChoice || 'manual'))
+      const [form, setForm] = React.useState(() => {
+        if (reauth) return { ...emptyForm(reauth.connector), ...(reauth.config || {}), name: reauth.label || '', lbInterface: reauth.connector === 'longbridge' ? (reauth.transport === 'mcp' ? 'mcp' : 'sdk') : 'mcp', futuInterface: reauth.connector === 'futu' ? (reauth.transport === 'mcp' ? 'mcp' : 'sdk') : 'mcp', intervalMinutes: String(reauth.intervalMinutes ?? 15) }
+        return emptyForm(initialChoice && initialChoice !== 'manual' ? initialChoice : 'ths')
+      })
+      const [credentials, setCredentials] = React.useState({}), [sources, setSources] = React.useState([])
+      const [loading, setLoading] = React.useState(true), [working, setWorking] = React.useState(''), [error, setError] = React.useState(''), [message, setMessage] = React.useState('')
+      const [accounts, setAccounts] = React.useState([]), [warnings, setWarnings] = React.useState([]), [discovered, setDiscovered] = React.useState(false)
+      const [login, setLogin] = React.useState(null)
+      const [imported, setImported] = React.useState(null)
+      const [auth, setAuth] = React.useState(reauth || null)
+      const [authFromList, setAuthFromList] = React.useState(false)
+      const lock = React.useRef(false), loginStart = React.useRef(0), generation = React.useRef(0), mounted = React.useRef(true), loginAttempt = React.useRef(0), adopted = React.useRef(0)
+      React.useEffect(() => { mounted.current = true; return () => { mounted.current = false; generation.current++; loginAttempt.current++ } }, [])
+      const get = async path => { const r = await fetch('/portfolio/api/' + path, { headers: { accept: 'application/json' } }); const data = await r.json(); if (!r.ok || !data.ok) throw new Error(data.error?.message || '读取失败'); return data }
+      const accept = r => { if (mounted.current) setSources(r.sources || []) }
+      React.useEffect(() => {
+        let live = true
+        get('sources').then(r => { if (live) accept(r) }).catch(e => { if (live) setError(e.message) }).finally(() => { if (live) setLoading(false) })
+        const timer = setInterval(() => { if (!document.hidden && !lock.current) get('sources').then(r => { if (live && !lock.current) accept(r) }).catch(() => {}) }, 15000)
+        return () => { live = false; clearInterval(timer) }
+      }, [])
+      React.useEffect(() => {
+        if (!login || !['opening', 'waiting'].includes(login.status) || choice !== 'ths') return
+        let live = true, inflight = false
+        const attempt = loginAttempt.current, version = generation.current
+        const current = () => live && mounted.current && attempt === loginAttempt.current && version === generation.current
+        const timer = setInterval(async () => {
+          if (inflight || !current()) return
+          if (Date.now() - loginStart.current > 600000) { clearInterval(timer); setLogin({ status: 'error', message: '登录等待已超时，请重新发起。' }); return }
+          inflight = true
+          try { const r = await get('sources/login/status'); if (current()) setLogin({ status: r.status, message: r.message }) }
+          catch (e) { if (current()) setLogin({ status: 'error', message: e.message }) }
+          finally { inflight = false }
+        }, 2000)
+        return () => { live = false; clearInterval(timer) }
+      }, [login?.status, choice])
+      React.useEffect(() => {
+        if (choice !== 'futu' || form.futuInterface !== 'mcp' || !['opening', 'waiting'].includes(login?.status)) return
+        let live = true, inflight = false
+        const attempt = loginAttempt.current, version = generation.current
+        const current = () => live && mounted.current && attempt === loginAttempt.current && version === generation.current
+        const timer = setInterval(async () => {
+          if (inflight || !current()) return
+          inflight = true
+          try { const r = await get('sources/futu/mcp/status'); if (current() && r.status !== 'waiting') setLogin({ status: r.status, message: r.message }) }
+          catch (e) { /* keep waiting; transient errors stay silent */ }
+          finally { inflight = false }
+        }, 2000)
+        return () => { live = false; clearInterval(timer) }
+      }, [login?.status, choice, form.futuInterface])
+      const startFutuMcp = () => { if (disabled || lock.current) return; invalidate(); loginAttempt.current++; const attempt = loginAttempt.current; return act('futu-mcp', async current => { await post('sources/futu/mcp/start', { authId: auth?.id || reauth?.id }); if (!current() || attempt !== loginAttempt.current) return; const s = await get('sources/futu/mcp/status'); if (current()) setLogin({ status: s.status, message: s.message, authorizeUrl: s.authorizeUrl }) }) }
+      const disabled = busy || loading || !!working
+      const act = async (key, fn) => { if (lock.current || busy || loading || !mounted.current) return; const version = generation.current; const current = () => mounted.current && generation.current === version; lock.current = true; setWorking(key); setError(''); setMessage(''); try { await fn(current) } catch(e) { if (current()) setError(e.message || '操作失败') } finally { lock.current = false; if (mounted.current) setWorking('') } }
+      const invalidate = () => { generation.current++; setLogin(null); setAccounts([]); setDiscovered(false); setWarnings([]); setImported(null) }
+      const update = (key, value) => { setForm(old => ({ ...old, [key]: value, ...(['host','port','tls','tradeEnvironment','tradeMarket','currency','gatewayUrl','trustLocalGateway','lbInterface','futuInterface'].includes(key) ? { portfolioId: '', brokerAccountId: '' } : {}) })); if (['host','port','tls','tradeEnvironment','tradeMarket','currency','gatewayUrl','trustLocalGateway','lbInterface','futuInterface'].includes(key)) { invalidate(); if (!reauth) setAuth(null) } }
+      const choose = id => { if (disabled) return; setChoice(id); setForm(emptyForm(id)); setCredentials({}); invalidate(); if (!reauth) setAuth(null); setAuthFromList(false); setError(''); setMessage(''); setLogin(null) }
+      const cleanCredentials = () => Object.fromEntries(Object.entries(credentials).filter(([, value]) => typeof value === 'string' && value.trim()))
+      const config = () => {
+        const mcp = (choice === 'longbridge' && form.lbInterface === 'mcp') || (choice === 'futu' && form.futuInterface === 'mcp')
+        const source = { id: form.id, name: form.name.trim(), connector: choice, transport: choice === 'custom' ? form.transport : (mcp ? 'mcp' : 'native'), accountId: form.accountId, intervalMinutes: Number(form.intervalMinutes), enabled: !!form.enabled }
+        if (choice === 'ths') { source.portfolioId = form.portfolioId; source.thsBookType = form.thsBookType || 'common' }
+        if (['futu','longbridge','ib'].includes(choice)) source.brokerAccountId = choice === 'longbridge' && mcp ? 'main' : form.brokerAccountId
+        if (mcp && form.mcpEndpoint.trim()) source.mcpEndpoint = form.mcpEndpoint.trim().replace(/\/+$/,'')
+        if (choice === 'futu' && !mcp) Object.assign(source, { host: form.host.trim(), port: Number(form.port), tls: !!form.tls, tradeEnvironment: form.tradeEnvironment, tradeMarket: form.tradeMarket, currency: form.currency })
+        if (choice === 'futu' && mcp && form.currency) source.currency = form.currency
+        if (choice === 'ib') Object.assign(source, { gatewayUrl: form.gatewayUrl.trim(), trustLocalGateway: !!form.trustLocalGateway })
+        if (choice === 'custom') { if (form.transport === 'http') Object.assign(source, { url: form.url.trim(), credentialRef: form.credentialRef.trim() || undefined }); else { let args; try { args = JSON.parse(form.args) } catch (_) { throw new Error('工具参数须为有效 JSON 对象') }; if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('工具参数须为 JSON 对象'); Object.assign(source, { toolName: form.toolName.trim(), args }) } }
+        return source
+      }
+      const payload = source => { const creds = cleanCredentials(); return { source, ...(Object.keys(creds).length ? { credentials: creds } : {}) } }
+      const transportOf = () => choice === 'custom' ? form.transport : (((choice === 'longbridge' && form.lbInterface === 'mcp') || (choice === 'futu' && form.futuInterface === 'mcp')) ? 'mcp' : 'native')
+      const authSettings = () => {
+        const out = {}
+        if (choice === 'futu' && form.futuInterface === 'mcp') { if (form.mcpEndpoint.trim()) out.mcpEndpoint = form.mcpEndpoint.trim().replace(/\/+$/,''); if (form.currency) out.currency = form.currency }
+        if (choice === 'futu' && form.futuInterface !== 'mcp') Object.assign(out, { host: form.host.trim(), port: Number(form.port), tls: !!form.tls, tradeEnvironment: form.tradeEnvironment, tradeMarket: form.tradeMarket, currency: form.currency })
+        if (choice === 'longbridge' && form.lbInterface === 'mcp' && form.mcpEndpoint.trim()) out.mcpEndpoint = form.mcpEndpoint.trim().replace(/\/+$/,'')
+        if (choice === 'ib') Object.assign(out, { gatewayUrl: form.gatewayUrl.trim(), trustLocalGateway: !!form.trustLocalGateway })
+        return out
+      }
+      const occupied = a => state.ledger.holdings.some(x => x.accountId === a.id) || state.ledger.trades.some(x => x.accountId === a.id) || (state.ledger.historyEvents || []).some(x => x.accountId === a.id)
+      const eligible = a => !sources.some(s => s.accountId === a.id && s.id !== form.id) && (choice !== 'ths' || a.currency === 'CNY') && (sources.some(s => s.id === form.id && s.accountId === a.id) || !occupied(a))
+      // One login = one authorization. Every account listed under it is imported through this same record.
+      const requestAuth = async (extra = {}) => {
+        const creds = { ...cleanCredentials(), ...extra }
+        const body = { auth: { authId: auth?.id || reauth?.id, connector: choice, transport: transportOf(), label: form.name.trim() || auth?.label || undefined, config: authSettings() }, ...(Object.keys(creds).length ? { credentials: creds } : {}) }
+        const created = await post('sources/auth/create', body)
+        const saved = created.auth || (created.authorizations || []).find(a => body.auth.authId ? a.id === body.auth.authId : a.connector === choice)
+        if (!saved) throw new Error('授权已保存，但未返回授权信息')
+        const found = await post('sources/auth/accounts', { authId: saved.id })
+        const latest = await get('sources')
+        const refreshed = (latest.authorizations || []).find(a => a.id === saved.id) || saved
+        return { auth: refreshed, accounts: found.accounts || [], warnings: found.warnings || [], sources: latest }
+      }
+      const applyAuth = out => {
+        setAuth(out.auth)
+        setSources(out.sources.sources || [])
+        setAccounts(out.accounts)
+        setWarnings(out.warnings)
+        setDiscovered(true)
+        setCredentials({})
+        adopted.current = loginAttempt.current
+      }
+      const adopt = () => act('adopt', async current => { const out = await requestAuth(); if (current()) applyAuth(out) })
+      const discover = () => act('accounts', async current => {
+        if (!auth && ['ths','futu'].includes(choice)) {
+          if (choice === 'ths' && login?.status !== 'ready') throw new Error('请先完成同花顺浏览器登录')
+          if (choice === 'futu' && form.futuInterface === 'mcp' && login?.status !== 'ready') throw new Error('请先完成富途浏览器授权')
+        }
+        if (!auth && choice === 'longbridge' && form.lbInterface === 'mcp' && !credentials.mcpToken) throw new Error('请先在 open.longbridge.com/connect 生成授权码并点击兑换')
+        const out = await requestAuth()
+        if (!current()) return
+        applyAuth(out)
+        if (!out.accounts.length) setMessage('授权已保存，但没有读到账户，请检查登录、凭据和连接设置。')
+      })
+      const startLogin = () => { if (disabled || lock.current) return; invalidate(); setForm(old => ({ ...old, portfolioId: '', brokerAccountId: '' })); loginAttempt.current++; const attempt = loginAttempt.current; return act('login', async current => { const r = await post('sources/login/start', { authId: auth?.id || reauth?.id || undefined, sourceId: form.id || undefined }); if (!current() || attempt !== loginAttempt.current) return; loginStart.current = Date.now(); setLogin({ status: r.status || 'opening', message: r.message }); }) }
+      React.useEffect(() => {
+        if (!['ths','futu'].includes(choice) || login?.status !== 'ready' || !loginAttempt.current || adopted.current === loginAttempt.current || working || loading || busy || lock.current) return
+        if (choice === 'futu' && form.futuInterface !== 'mcp') return
+        adopted.current = loginAttempt.current
+        adopt()
+      }, [choice, login?.status, working, loading, busy, form.futuInterface])
+      const selected = accounts.find(a => String(a.id) === String(form[choice === 'ths' ? 'portfolioId' : 'brokerAccountId']))
+      const boundSource = account => {
+        if (typeof account.imported === 'boolean') return account.imported ? sources.find(s => s.id === account.sourceId) || { id: account.sourceId, accountId: account.accountId, name: account.accountName || account.name, connector: choice, transport: 'native' } : undefined
+        return sources.find(s => s.connector === choice && String(s[choice === 'ths' ? 'portfolioId' : 'brokerAccountId']) === String(account.id) && (choice !== 'ths' || (s.thsBookType || 'common') === (account.thsType || 'common')) && (choice !== 'futu' || (s.tradeEnvironment || 'REAL') === form.tradeEnvironment))
+      }
+      const openImported = source => act('open-source', async current => { const r = await get('sources'); if (!current()) return; accept(r); const latest = r.sources?.find(s => s.id === source.id); if (latest) edit(latest); else throw new Error('此账户状态已变化，请重新读取账户列表') })
+      const formFromAuth = target => ({ ...emptyForm(target.connector), ...(target.config || {}), name: target.label || '', lbInterface: target.connector === 'longbridge' ? (target.transport === 'mcp' ? 'mcp' : 'sdk') : 'mcp', futuInterface: target.connector === 'futu' ? (target.transport === 'mcp' ? 'mcp' : 'sdk') : 'mcp', intervalMinutes: String(target.intervalMinutes ?? 15) })
+      // Reuse a saved login instead of forcing another browser authorization.
+      const pickAuthorization = target => act('pick-auth', async current => {
+        const found = await post('sources/auth/accounts', { authId: target.id })
+        if (!current()) return
+        setForm(formFromAuth(target))
+        setAuth({ ...target, accounts: found.accounts || target.accounts || [] })
+        setAccounts(found.accounts || [])
+        setWarnings(found.warnings || [])
+        setDiscovered(true)
+        setAuthFromList(true)
+        setLogin(null)
+        setCredentials({})
+      })
+      const [lbCode, setLbCode] = React.useState('')
+      const exchangeLbCode = () => act('lb-exchange', async current => {
+        const code = String(lbCode || '').trim()
+        if (!code) throw new Error('请先在 open.longbridge.com/connect 生成授权码并粘贴到输入框')
+        const r = await fetch('/portfolio/api/sources/longbridge/mcp/exchange', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code, endpoint: form.mcpEndpoint.trim() || undefined }) })
+        const data = await r.json().catch(() => ({}))
+        if (!r.ok || !data.ok) throw new Error(data.error?.message || '授权码兑换失败')
+        const out = await requestAuth({ mcpToken: data.token })
+        if (!current()) return
+        setLbCode('')
+        applyAuth(out)
+      })
+      const selectAccount = account => { update(choice === 'ths' ? 'portfolioId' : 'brokerAccountId', String(account.id)); if (choice === 'ths') update('thsBookType', account.thsType || 'common'); if (!form.id) update('accountId', '') }
+      const connect = () => act('connect', async current => {
+        if (!auth) throw new Error('请先完成授权并读取账户')
+        if (!selected || !discovered) throw new Error('请先明确选择一个来源账户')
+        if (boundSource(selected)) throw new Error('此来源账户已导入，可以继续导入这个授权下的其他账户')
+        const interval = Number(form.intervalMinutes)
+        if (form.intervalMinutes === '' || !Number.isInteger(interval) || (interval !== 0 && (interval < 5 || interval > 1440))) throw new Error('同步间隔须为 0 或 5–1440 的整数分钟')
+        const source = { authId: auth.id, [choice === 'ths' ? 'portfolioId' : 'brokerAccountId']: String(selected.id), intervalMinutes: interval, enabled: !!form.enabled }
+        if (choice === 'ths') source.thsBookType = selected.thsType || form.thsBookType || 'common'
+        const r = await post('sources/connect', { source })
+        if (!current()) return
+        setCredentials({}); setImported(r.account || null); setForm(old => ({ ...old, portfolioId: '', brokerAccountId: '' }))
+        setMessage(r.alreadyImported ? '此账户已经导入，可以继续导入这个授权下的其他账户。' : '已导入「' + (r.account?.name || selected.name) + '」。可以继续导入这个授权下的其他账户，或点「完成」。')
+        const latest = await get('sources')
+        if (!current()) return
+        const refreshed = (latest.authorizations || []).find(a => a.id === auth.id)
+        if (refreshed) setAuth(refreshed)
+        setSources(latest.sources || [])
+        const found = await post('sources/auth/accounts', { authId: auth.id })
+        if (!current()) return
+        setAccounts(found.accounts || []); setWarnings(found.warnings || [])
+        await reload()
+      })
+      const save = () => act('save', async current => {
+        if (!form.name.trim()) throw new Error('请填写连接名称')
+        const account = state.ledger.accounts.find(a => a.id === form.accountId)
+        if (!account || !eligible(account)) throw new Error('请选择可绑定的专用空账户；可先到「账户」页创建')
+        if (choice !== 'custom' && !(choice === 'ths' ? form.portfolioId : form.brokerAccountId)) throw new Error('请先读取来源账户，并明确选择要同步的账户')
+        const interval = Number(form.intervalMinutes)
+        if (form.intervalMinutes === '' || !Number.isInteger(interval) || (interval !== 0 && (interval < 5 || interval > 1440))) throw new Error('同步间隔须为 0 或 5–1440 的整数分钟')
+        if (choice === 'futu' && form.futuInterface !== 'mcp' && (!form.host.trim() || !Number.isInteger(Number(form.port)) || Number(form.port) < 1 || Number(form.port) > 65535)) throw new Error('请填写 OpenD 地址和有效端口')
+        if (choice === 'custom' && form.transport === 'http') { let u; try { u = new URL(form.url.trim()) } catch (_) { throw new Error('请填写有效的快照接口 URL') }; if (!['http:','https:'].includes(u.protocol) || u.username || u.password) throw new Error('接口仅支持 HTTP(S)，地址内不可含凭据'); if (form.credentialRef && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(form.credentialRef)) throw new Error('凭据引用须为环境变量名称') }
+        if (choice === 'custom' && form.transport === 'mcp' && !form.toolName.trim()) throw new Error('请填写完整的只读 MCP 工具名')
+        const r = await post('sources/save', payload(config())); if (!current()) return; accept(r); setCredentials({}); setForm(emptyForm(choice)); invalidate(); setMessage('连接已保存。'); if (onDone) onDone(r)
+      })
+      const edit = source => { setChoice(source.connector); setForm({ ...emptyForm(source.connector), ...source, lbInterface: source.connector === 'longbridge' ? (source.transport === 'mcp' ? 'mcp' : 'sdk') : emptyForm(source.connector).lbInterface, futuInterface: source.connector === 'futu' ? (source.transport === 'mcp' ? 'mcp' : 'sdk') : emptyForm(source.connector).futuInterface, args: JSON.stringify(source.args || {}, null, 2), intervalMinutes: String(source.intervalMinutes || 0) }); setCredentials({}); invalidate(); setLogin(null); setMessage('凭据留空将保留已保存的凭据。'); setError('') }
+      React.useEffect(() => { if (mode === 'edit' && editSource) edit(editSource) }, [])
+      const safeSource = source => {
+        const allowed = ['id','name','connector','transport','accountId','intervalMinutes','enabled','portfolioId','thsBookType','host','port','tls','tradeEnvironment','tradeMarket','currency','brokerAccountId','mcpEndpoint','gatewayUrl','trustLocalGateway','url','toolName','args','credentialRef']
+        return Object.fromEntries(allowed.filter(key => source[key] !== undefined).map(key => [key,source[key]]))
+      }
+      const sync = source => act('sync:' + source.id, async current => { await post('sources/sync', { id: source.id }); if (!current()) return; await reload(); if (!current()) return; const r = await get('sources'); if (!current()) return; accept(r); setMessage('「' + source.name + '」已同步，请核对来源警告与行情日期。') })
+      const toggle = source => act('toggle:' + source.id, async current => { const r = await post('sources/save', { source: { ...safeSource(source), enabled: !source.enabled } }); if (!current()) return; accept(r); setMessage(source.enabled ? '自动同步已停止。' : '连接已启用；间隔 0 为仅手动同步。') })
+      const remove = source => { if (!window.confirm('移除「' + source.name + '」连接？已同步的账户数据会保留。')) return; act('remove:' + source.id, async current => { await post('sources/remove', { id: source.id }); if (!current()) return; const r = await get('sources'); if (!current()) return; accept(r); if (form.id === source.id) { setForm(emptyForm(choice)); setCredentials({}); invalidate() }; setMessage('连接已移除，账户数据已保留。') }) }
+      const warningText = w => typeof w === 'string' ? w : w?.message || JSON.stringify(w)
+      const dateText = value => { if (!value) return '尚无记录'; const d = new Date(value); return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleString('zh-CN') }
+      const loginText = (status, message, labels) => { const label = (labels || {})[status] || status || ''; return label + (message && message !== label ? ' · ' + message : '') }
+      const field = (label, key, props) => h('label', null, h('span', { style: T.label(t) }, label), h('input', { value: form[key] || '', onChange: e => update(key, e.target.value), disabled, style: T.input(t), ...props }))
+      const secret = (label, key) => h('label', null, h('span', { style: T.label(t) }, label), h('input', { type: 'password', value: credentials[key] || '', onChange: e => { setCredentials(old => ({ ...old, [key]: e.target.value })); invalidate(); setForm(old => ({ ...old, portfolioId: '', brokerAccountId: '' })) }, placeholder: form.id ? '留空保留已保存凭据' : '仅发送到本机服务端', autoComplete: 'new-password', spellCheck: false, disabled, style: T.input(t) }))
+      const selectField = (label, key, values) => h('label', null, h('span', { style: T.label(t) }, label), h('select', { value: form[key], onChange: e => update(key, e.target.value), disabled, style: T.input(t) }, values.map(([value, name]) => h('option', { key: value, value }, name))))
+      const check = (label, key) => h('label', { style: { display: 'flex', alignItems: 'center', gap: 7, color: t.sub, fontSize: 12 } }, h('input', { type: 'checkbox', checked: !!form[key], disabled, onChange: e => update(key, e.target.checked) }), label)
+      const accountKey = choice === 'ths' ? 'portfolioId' : 'brokerAccountId'
+      const thsBookLabel = a => a.thsType === 'ijj' ? '爱基金' : a.thsType === 'manFund' ? '基金账本' : null
+      const descriptions = {
+        ths: '独立于其他 DSH 插件。浏览器登录后，由本机服务保存登录状态；支持人民币沪深股票 / ETF 投资账本，以及爱基金等基金账本。',
+        futu: '两种接入：官方 MCP（推荐）在浏览器完成富途授权，插件自动读取持仓、余额与流水，无需安装 OpenD；或本机 OpenD 直连（需启用 WebSocket，核对交易环境、市场和资金币种）。不需要其他 DSH 插件。',
+        longbridge: '官方 MCP 接入：在 open.longbridge.com/connect 生成一次性授权码，兑换后自动读取持仓、余额与流水；也可改用 OpenAPI 凭据（App Key / Secret / Access Token）。不需要其他 DSH 插件。',
+        ib: '需先启动并登录官方 IB Client Portal Gateway。本插件使用其账户接口；本地自签名证书须明确勾选信任。',
+        custom: '高级选项：连接标准化持仓快照接口或已有只读 MCP 工具。请勿将密钥写入 URL 或工具参数。',
+      }
+      return h('div', { className: 'wealth-source-panel' },
+        embedded ? null : h('p', { style: { color: t.sub, fontSize: 12, lineHeight: 1.8, margin: '0 0 12px' } }, '把分散的资产，带回同一个视野。四种券商来源均原生接入；也可随时手动导入。'),
+        embedded ? null : h('div', { className: 'wealth-source-options' }, options.map(([id, name, description, badge]) => h('button', { key: id, disabled, 'aria-pressed': choice === id, onClick: () => choose(id), style: { ...T.card(t), textAlign: 'left', cursor: 'pointer', color: t.text, padding: 15, minWidth: 0, borderColor: choice === id ? t.accent : t.border, background: choice === id ? t.soft : t.card } }, h('span', { className: 'wealth-account-badge', style: { width: 30, height: 30, borderRadius: 9, fontSize: 12 } }, badge), h('strong', { style: { display: 'block', fontSize: 12, margin: '12px 0 5px' } }, name), h('span', { style: { color: t.sub, fontSize: 10, lineHeight: 1.6 } }, description)))),
+        error ? h('div', { role: 'alert', style: { ...T.card(t), color: t.red, marginBottom: 12 } }, error) : null,
+        message ? h('div', { role: 'status', style: { ...T.card(t), color: t.accent, marginBottom: 12, fontSize: 12 } }, message) : null,
+        auth ? h('div', { style: { ...T.card(t), borderColor: t.green, marginBottom: 12, background: t.panel } },
+          h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
+            h('strong', { style: { color: t.green, fontSize: 13 } }, authFromList ? '✓ 已选择已有授权' : '✓ 授权成功'),
+            h('span', { style: { fontSize: 12 } }, auth.label || CONNECTOR_LABEL[auth.connector] || auth.connector),
+            h('span', { style: { fontSize: 11, color: t.sub } }, (auth.authorizedAt ? dateTimeText(auth.authorizedAt) + ' · ' : '') + (accounts.length ? accounts.length + ' 个账户' : '尚未读取账户'))),
+          h('div', { style: { fontSize: 11, color: t.sub, marginTop: 6 } }, authFromList ? '这是之前保存的登录，可以直接导入它的子账户；要换账号请点下面的「重新授权」。' : '这个登录会保留在「账户 → 授权账号」；以后可以直接导入它的其他子账户，不需要重新授权。')) : null,
+        loading ? h('p', { role: 'status', style: { color: t.sub } }, '正在读取连接…') : null,
+        choice === 'manual' ? h(Input, { t, state, call, busy: disabled, openHistory }) : h('section', { style: { ...T.card(t), marginBottom: 22 }, 'aria-label': '数据源连接配置' },
+          h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' } }, h('strong', { style: { fontSize: 15 } }, (form.id ? '编辑连接 · ' : '连接 · ') + options.find(x => x[0] === choice)?.[1]), form.id && !embedded ? h('button', { style: T.btn(t, false), disabled, onClick: () => choose(choice) }, '取消编辑') : null),
+          h('p', { style: { color: t.sub, fontSize: 12, lineHeight: 1.8 } }, descriptions[choice]),
+          choice !== 'custom' && !form.id && !reauth && authorizations.some(a => a.connector === choice) ? h('div', { style: { border: '1px solid ' + t.border, borderRadius: 12, padding: 12, margin: '14px 0 0', background: t.panel }, 'aria-label': '已有授权' },
+            h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 8, flexWrap: 'wrap' } },
+              h('strong', { style: { fontSize: 12 } }, '已有授权 · ' + authorizations.filter(a => a.connector === choice).length),
+              h('span', { style: { fontSize: 11, color: t.sub } }, '直接用上次的登录导入，不必重新授权')),
+            authorizations.filter(a => a.connector === choice).map(a => {
+              const list = a.accounts || []
+              const importedCount = list.filter(account => authImportedSource(a, sources, account)).length
+              const active = auth?.id === a.id
+              const stateText = a.lastError ? '授权异常' : a.credentialsConfigured ? '已授权' : '待重新授权'
+              return h('div', { key: a.id, style: { display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', padding: '8px 10px', border: '1px solid ' + (active ? t.accent : t.border), borderRadius: 9, background: active ? t.soft : t.card, marginTop: 6 } },
+                h('div', { style: { minWidth: 0, flex: 1 } },
+                  h('div', { style: { fontSize: 12 } }, a.label || CONNECTOR_LABEL[a.connector] || a.connector),
+                  h('div', { style: { fontSize: 10.5, color: t.sub, marginTop: 2 } }, stateText + ' · ' + (list.length ? list.length + ' 个账户' : '尚未读取账户') + (importedCount ? ' · 已导入 ' + importedCount : ''))),
+                h('button', { style: { ...T.btn(t, false), padding: '3px 9px', minHeight: 26 }, disabled: disabled || active, onClick: () => pickAuthorization(a) }, working === 'pick-auth' ? '读取中…' : active ? '当前授权' : '使用此授权'))
+            })) : null,
+          choice !== 'custom' && !form.id ? h('div', { style: { display: 'flex', gap: 18, flexWrap: 'wrap', fontSize: 12, color: t.sub, margin: '18px 0' }, 'aria-label': '导入步骤' }, h('strong', { style: { color: !discovered ? t.accent : t.sub } }, '1 登录 / 授权'), h('strong', { style: { color: discovered && !selected ? t.accent : t.sub } }, '2 选择来源账户'), h('strong', { style: { color: selected ? t.accent : t.sub } }, '3 导入账户')) : null,
+          form.id || choice === 'custom' ? h('div', { className: 'wealth-source-fields', style: { marginTop: 16 } },
+            field('连接名称', 'name', { placeholder: '如 我的港股账户', maxLength: 120 }),
+            form.id ? h('div', null, h('span', { style: T.label(t) }, '已导入账户'), h('div', { style: { paddingTop: 8, fontSize: 12 } }, state.ledger.accounts.find(a => a.id === form.accountId)?.name || form.accountId)) : h('label', null, h('span', { style: T.label(t) }, '使用账户'), h('select', { value: form.accountId, disabled, onChange: e => update('accountId', e.target.value), style: T.input(t) }, h('option', { value: '' }, '请选择专用空账户'), state.ledger.accounts.filter(eligible).map(a => h('option', { key: a.id, value: a.id }, a.name + ' · ' + a.currency)))),
+            field('自动同步间隔（分钟）', 'intervalMinutes', { type: 'number', min: 0, max: 1440, placeholder: '0 = 手动；5–1440' })) : null,
+          choice === 'custom' && !form.id ? h('div', { style: { marginTop: 12, color: t.sub, fontSize: 11 } }, '高级接口使用专用空账户。', h('button', { disabled, onClick: openAccounts, style: { ...T.btn(t, false), marginLeft: 8 } }, '创建本地账户 ↗')) : null,
+          choice === 'ths' ? h('div', { style: { marginTop: 18 } },
+            h('div', { className: 'wealth-source-actions', style: { alignItems: 'center' } }, h('button', { style: T.btn(t, false), disabled: disabled || ['opening','waiting'].includes(login?.status), onClick: startLogin }, ['opening','waiting'].includes(login?.status) ? '等待浏览器登录…' : login?.status === 'ready' || auth ? '重新登录' : '浏览器登录'), h('span', { style: { color: login?.status === 'error' ? t.red : t.sub, fontSize: 11 }, role: 'status' }, login ? loginText(login.status, login.message, { opening: '正在打开登录窗口', waiting: '请在登录窗口完成登录', ready: '登录已就绪，可读取账本', error: '登录未完成' }) : '登录状态由本机服务保存')),
+            h('details', { style: { marginTop: 12, fontSize: 12, color: t.sub } }, h('summary', { style: { cursor: 'pointer' } }, '手动 Cookie（可选备用方式）'), h('div', { style: { marginTop: 10 } }, secret('同花顺 Cookie', 'cookie')))) : null,
+          choice === 'futu' ? h('div', { style: { marginTop: 18 } },
+            selectField('接入方式', 'futuInterface', [['mcp','官方 MCP（浏览器授权，推荐）'],['sdk','本机 OpenD（WebSocket）']]),
+            form.futuInterface === 'mcp' ? h('div', { style: { marginTop: 12 } },
+              h('div', { className: 'wealth-source-fields' }, field('MCP 地址（可选，默认官方 mcp.futunn.com）', 'mcpEndpoint', { placeholder: 'https://mcp.futunn.com', autoComplete: 'off' }), selectField('资金币种（无标的资金流水用，可选）', 'currency', [['HKD','HKD 港币'],['USD','USD 美元'],['CNH','CNH 离岸人民币']])),
+              h('div', { className: 'wealth-source-actions', style: { alignItems: 'center' } },
+                h('button', { style: T.btn(t, false), disabled: disabled || ['opening','waiting'].includes(login?.status), onClick: startFutuMcp }, working === 'futu-mcp' ? '正在打开授权…' : ['opening','waiting'].includes(login?.status) ? '等待浏览器授权…' : login?.status === 'ready' || auth || credentials.mcpToken ? '重新授权' : '浏览器授权'),
+                h('span', { style: { color: login?.status === 'error' ? t.red : login?.status === 'ready' ? t.accent : t.sub, fontSize: 11 }, role: 'status' }, login ? loginText(login.status, login.message, { opening: '正在打开授权页面', waiting: '请在浏览器完成富途授权', ready: '富途授权已保存，可读取账户', error: '授权未完成' }) : credentials.mcpToken ? '✓ 已获得 MCP Token' : '授权后会自动读取持仓、余额与流水')),
+              login?.authorizeUrl && ['opening','waiting'].includes(login.status) ? h('p', { style: { marginTop: 8, fontSize: 11 } }, h('a', { href: login.authorizeUrl, target: '_blank', rel: 'noreferrer', style: { color: t.accent } }, '如果没有自动打开，点这里完成富途授权 ↗')) : null,
+              h('details', { style: { marginTop: 10, fontSize: 12, color: t.sub } }, h('summary', { style: { cursor: 'pointer' } }, '手动粘贴 Token（可选备用方式）'), h('div', { style: { marginTop: 10 } }, secret('MCP Token', 'mcpToken')))) :
+            h('div', { className: 'wealth-source-fields', style: { marginTop: 12 } }, field('OpenD 主机', 'host'), field('WebSocket 端口', 'port', { type: 'number', min: 1, max: 65535 }), selectField('交易环境', 'tradeEnvironment', [['REAL','真实账户'],['SIMULATE','模拟账户']]), selectField('交易市场', 'tradeMarket', [['HK','香港 HK'],['US','美国 US'],['CN','沪深 CN']]), selectField('资金币种', 'currency', [['HKD','HKD 港币'],['USD','USD 美元'],['CNH','CNH 离岸人民币']]), secret('OpenD WebSocket Key（可选）', 'websocketKey'), check('通过 TLS 连接 OpenD', 'tls'))) : null,
+          choice === 'longbridge' ? h('div', { style: { marginTop: 18 } },
+            selectField('接入方式', 'lbInterface', [['mcp','官方 MCP（授权码，推荐）'],['sdk','OpenAPI 凭据（App Key / Secret / Token）']]),
+            form.lbInterface === 'mcp' ? h('div', { style: { marginTop: 12 } },
+              h('div', { className: 'wealth-source-fields' }, field('MCP 地址（可选，默认官方 mcp.longbridge.com）', 'mcpEndpoint', { placeholder: 'https://mcp.longbridge.com', autoComplete: 'off' })),
+              h('div', { className: 'wealth-source-fields', style: { marginTop: 10 } }, h('label', null, h('span', { style: T.label(t) }, '长桥授权码'), h('input', { value: lbCode, onChange: e => { setLbCode(e.target.value); invalidate() }, placeholder: '在 open.longbridge.com/connect 生成，10 分钟内有效', autoComplete: 'off', spellCheck: false, disabled, style: T.input(t) }))),
+              h('div', { className: 'wealth-source-actions', style: { alignItems: 'center' } },
+                h('button', { style: T.btn(t, false), disabled, onClick: exchangeLbCode }, working === 'lb-exchange' ? '兑换中…' : credentials.mcpToken || auth ? '重新兑换授权码' : '兑换授权码'),
+                credentials.mcpToken ? h('span', { style: { color: t.accent, fontSize: 11 } }, '✓ 已获得 MCP Token') : h('span', { style: { color: t.sub, fontSize: 11 } }, '在 open.longbridge.com/connect 生成授权码后兑换')),
+              h('details', { style: { marginTop: 10, fontSize: 12, color: t.sub } }, h('summary', { style: { cursor: 'pointer' } }, '手动粘贴 Token（可选备用方式）'), h('div', { style: { marginTop: 10 } }, secret('MCP Token', 'mcpToken')))) :
+            h('div', { className: 'wealth-source-fields', style: { marginTop: 18 } }, secret('App Key', 'appKey'), secret('App Secret', 'appSecret'), secret('Access Token', 'accessToken'))) : null,
+          choice === 'ib' ? h('div', { className: 'wealth-source-fields', style: { marginTop: 18 } }, field('Client Portal Gateway URL', 'gatewayUrl', { type: 'url' }), check('信任本机 Gateway 的自签名证书', 'trustLocalGateway')) : null,
+          choice !== 'custom' ? h('div', { style: { marginTop: 18 } },
+            h('button', { style: T.btn(t, false), disabled: disabled || ['opening','waiting'].includes(login?.status), onClick: discover }, (working === 'accounts' || working === 'adopt') ? '读取中…' : auth ? '读取/更新账户' : choice === 'ths' ? '登录并读取账本' : '授权并读取账户'),
+            form.id ? h('div', { style: { marginTop: 12, color: t.sub, fontSize: 12 } }, '来源账户：' + form[accountKey]) : null,
+            discovered ? h('fieldset', { style: { border: 0, padding: 0, margin: '18px 0 0', minWidth: 0 } }, h('legend', { style: { fontWeight: 600, marginBottom: 10 } }, '2 选择来源账户'), accounts.length ? accounts.map(a => {
+              const bound = boundSource(a), boundName = state.ledger.accounts.find(x => x.id === bound?.accountId)?.name || bound?.name
+              return h('div', { key: a.id, style: { border: '1px solid ' + (String(form[accountKey]) === String(a.id) ? t.accent : t.border), borderRadius: 10, padding: 12, marginBottom: 8, background: String(form[accountKey]) === String(a.id) ? t.soft : t.card } },
+                h('label', { style: { display: 'flex', gap: 9, alignItems: 'center', cursor: bound && bound.id !== form.id ? 'default' : 'pointer' } }, h('input', { type: 'radio', name: 'wealth-source-account', value: String(a.id), checked: String(form[accountKey]) === String(a.id), disabled: disabled || (!!bound && bound.id !== form.id), onChange: () => selectAccount(a) }), h('span', null, h('strong', { style: { fontSize: 12 } }, a.name || a.id), h('span', { style: { display: 'block', fontSize: 11, color: t.sub } }, String(a.id) + (a.currency ? ' · ' + a.currency : '') + (a.broker ? ' · ' + a.broker : '') + (thsBookLabel(a) ? ' · ' + thsBookLabel(a) : ''))), bound ? h('span', { style: { marginLeft: 'auto', color: t.accent, fontSize: 11 } }, '已导入 · ' + boundName) : null),
+                bound ? h('div', { style: { marginTop: 9, display: 'flex', gap: 8 } }, embedded ? null : h('button', { style: T.btn(t, false), disabled, onClick: () => openImported(bound) }, '查看连接配置'), h('button', { style: T.btn(t, false), disabled, onClick: () => onDone ? onDone({ account: { id: bound.accountId } }) : openAccounts && openAccounts() }, '查看账户 ↗'), openHistory ? h('button', { style: T.btn(t, false), disabled: disabled || !bound.accountId, onClick: () => openHistory(bound.accountId) }, '补充历史流水') : null) : null)
+            }) : h('p', { style: { color: t.sub, fontSize: 12 } }, '暂无可用来源账户，请检查授权和连接设置。')) : null,
+            h('small', { style: { display: 'block', color: t.sub, fontSize: 10, marginTop: 8 } }, '凭据仅发送到本机服务端；编辑时留空保留。来源账户需要明确选择。'), warnings.map((w,i) => h('div', { key: i, style: { fontSize: 11, color: t.sub, marginTop: 7 } }, warningText(w)))) : h('div', { style: { marginTop: 18 } }, selectField('接入方式', 'transport', [['http','HTTP 标准快照接口'],['mcp','DSH 只读 MCP 工具']]), h('div', { style: { marginTop: 12 } }, form.transport === 'http' ? h('div', { className: 'wealth-source-fields' }, field('快照接口 URL', 'url', { type: 'url', placeholder: 'http://127.0.0.1:端口/snapshot' }), field('Bearer 凭据环境变量名（可选）', 'credentialRef', { autoComplete: 'off' })) : h('div', null, field('完整只读 MCP 工具名', 'toolName'), h('label', null, h('span', { style: { ...T.label(t), marginTop: 12 } }, '工具参数（JSON）'), h('textarea', { value: form.args, disabled, onChange: e => update('args', e.target.value), rows: 4, style: T.input(t), spellCheck: false }))))),
+           choice !== 'custom' && !form.id && selected && !boundSource(selected) ? h('section', { style: { borderTop: '1px solid ' + t.border, marginTop: 22, paddingTop: 18 }, 'aria-label': '导入账户' },
+             h('strong', { style: { fontSize: 14 } }, '3 导入账户'),
+             h('p', { style: { fontSize: 13, color: t.text } }, selected.name || selected.id, h('span', { style: { color: t.sub, marginLeft: 8, fontSize: 12 } }, selected.currency || (choice === 'futu' ? form.currency : state.ledger.baseCurrency))),
+             h('p', { style: { fontSize: 12, color: t.sub } }, '账户、当前持仓和来源能提供的全部历史流水将一起导入，之后点账户上的「同步」即可更新到最新。'),
+             h('details', { style: { marginTop: 14, fontSize: 12, color: t.sub } }, h('summary', { style: { cursor: 'pointer' } }, '自动更新设置'), h('div', { style: { marginTop: 12 } }, field('更新间隔（分钟）', 'intervalMinutes', { type: 'number', min: 0, max: 1440, placeholder: '0 = 手动；5–1440' })), h('div', { style: { marginTop: 12 } }, check('启用自动更新', 'enabled'))),
+             h('button', { style: { ...T.btn(t, true), marginTop: 18 }, disabled, onClick: connect }, working === 'connect' ? '正在导入账户和持仓…' : '导入此账户')) : null,
+          auth && !form.id ? h('div', { className: 'wealth-source-actions', style: { marginTop: 18, alignItems: 'center' } },
+            h('button', { style: T.btn(t, true), disabled, onClick: () => onDone ? onDone({ account: imported }) : (openAccounts && openAccounts()) }, imported ? '完成，查看账户' : '完成'),
+            h('small', { style: { color: t.sub } }, auth.accounts?.length ? '这个授权下共 ' + auth.accounts.length + ' 个账户，可继续选择导入。' : '可稍后回到「账户 → 授权账号」补导入。')) : null,
+          choice === 'custom' || form.id ? h('div', { className: 'wealth-source-actions', style: { marginTop: 20, alignItems: 'center' } }, h('button', { style: T.btn(t, true), disabled, onClick: save }, working === 'save' ? '保存中…' : form.id ? '保存连接' : '添加连接'), check('启用连接', 'enabled'), h('small', { style: { color: t.sub } }, 'DSH 运行时执行自动同步')) : null),
+        imported && !embedded ? h('button', { style: { ...T.btn(t, true), marginBottom: 16 }, disabled, onClick: openAccounts }, '查看导入的账户 ↗') : null,
+        embedded ? null : h('section', { style: { marginTop: 24 }, 'aria-label': '已配置的数据源' },
+          h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 } }, h('strong', { style: { fontWeight: 600 } }, '已连接 · ' + sources.length), h('button', { style: T.btn(t, false), disabled, onClick: () => act('refresh', async () => accept(await get('sources'))) }, '刷新状态')),
+          !sources.length ? h('div', { style: T.card(t) }, h('div', { style: { color: t.sub, fontSize: 12 } }, '还没有自动数据源。选择上方来源，开始连接你的投资账户。')) : sources.map(source => {
+            const account = state.ledger.accounts.find(a => a.id === source.accountId)
+            const status = ({ never:'尚未同步',success:'同步成功',ok:'同步成功',error:'同步失败',failed:'同步失败',syncing:'同步中',partial:'部分成功',warning:'有警告' })[source.lastStatus] || source.lastStatus || '尚未同步'
+            return h('article', { key: source.id, style: { ...T.card(t), marginBottom: 12 } },
+              h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', marginBottom: 16 } }, h('div', null, h('strong', null, source.name), h('div', { style: { color: t.sub, fontSize: 11, marginTop: 5 } }, (options.find(x => x[0] === source.connector)?.[1] || source.connector) + ' · ' + source.transport + ' → ' + (account?.name || '账户不存在'))), h('span', { style: { color: t.sub, fontSize: 11 } }, !source.enabled ? '已停用' : source.intervalMinutes > 0 ? '每 ' + source.intervalMinutes + ' 分钟' : '仅手动同步')),
+              h('div', { className: 'wealth-source-meta' }, [['状态',status],['上次成功',dateText(source.lastSuccessAt)],['上次尝试',dateText(source.lastAttemptAt)],['上游上传',dateText(source.uploadedAt)],['行情日期',source.quoteDate || '来源未提供'],['凭据',source.credentialsConfigured ? '已配置' : '未配置 / 无需凭据']].map(([label,value]) => h('div', { key: label }, h('span', { style: T.label(t) }, label), h('span', { style: { fontSize: 11 } }, value)))),
+              source.lastError ? h('div', { role: 'alert', style: { color: t.red, fontSize: 12, marginTop: 10 } }, warningText(source.lastError)) : null,
+              (source.warnings || []).map((w,i) => h('div', { key: i, style: { color: t.sub, fontSize: 11, marginTop: 7 } }, warningText(w))),
+              h('div', { className: 'wealth-source-actions', style: { marginTop: 16 } }, h('button', { style: T.btn(t, true), disabled: disabled || source.lastStatus === 'syncing', onClick: () => sync(source) }, working === 'sync:' + source.id ? '同步中…' : '立即同步'), h('button', { style: T.btn(t, false), disabled: disabled || !account, onClick: () => openHistory(source.accountId) }, '补充历史流水'), h('button', { style: T.btn(t, false), disabled, onClick: () => edit(source) }, '编辑配置'), h('button', { style: T.btn(t, false), disabled, onClick: () => toggle(source) }, source.enabled ? '停用' : '启用'), h('button', { style: { ...T.btn(t, false), color: t.red }, disabled, onClick: () => remove(source) }, '移除')))
+          })))
+    }
+    function Input({ t, state, call, busy, openHistory }) {
+      const [mode,setMode] = React.useState('holdings'), [source,setSource] = React.useState('generic'), [accountId,setAccountId] = React.useState(''), [text,setText] = React.useState(''), [preview,setPreview] = React.useState(null), [msg,setMsg] = React.useState(''), [loading,setLoading] = React.useState(false), [applyHoldings,setApplyHoldings] = React.useState(false)
+      const invalidate = fn => e => { fn(e.target.value); setPreview(null); setMsg('') }
+      const inspect = async () => { setLoading(true);setMsg('');try {setPreview(await post('import/preview',{text,mode,source,accountId}))}catch(e){setMsg(e.message)}finally{setLoading(false)} }
+      const commit = async () => { const r=await call('import.'+mode,{rows:preview.rows,source,applyHoldings});if(r.ok){setMsg('已导入 '+(r.result?.imported ?? preview.rows.length)+' 条，跳过 '+(r.result?.skipped || 0)+' 条重复记录');setPreview(null);setText('')} }
+      const sample = mode==='holdings' ? '账户名,代码,名称,市场,数量,成本,币种,现价,资产类别\n我的账户,00700,腾讯控股,HK,200,380,HKD,410,stock' : '账户名,代码,方向,数量,价格,费用,日期,币种,市场\n我的账户,00700,买入,200,380,5,2026-11-06,HKD,HK'
+      return h('div', {style:T.card(t)},
+        h('div',{style:{fontSize:17,fontWeight:650,marginBottom:6}},'CSV / TSV 导入工具'), h('p',{style:{color:t.sub,fontSize:12,lineHeight:1.8}},'这里可导入持仓快照和旧版买卖 CSV / TSV。已有账户的 XLSX、现金、税费、回购、新股或转账记录，请在账户详情的「补录账单」中导入；不规则文字可交给右侧资产助手整理。'), openHistory ? h('button', {style:{...T.btn(t,false),marginBottom:12},disabled:busy,onClick:()=>openHistory(accountId)},'前往历史回补 ↗') : null,
+        h('div',{style:{display:'flex',gap:10,flexWrap:'wrap',marginBottom:12}},h('select',{'aria-label':'导入类型',value:mode,onChange:invalidate(setMode),style:{...T.input(t),width:130}},h('option',{value:'holdings'},'持仓快照'),h('option',{value:'trades'},'交易流水')),h('select',{'aria-label':'数据来源',value:source,onChange:invalidate(setSource),style:{...T.input(t),width:170}},[['generic','通用 / 其他海外券商'],['ths','同花顺投资账本'],['aifund','爱基金'],['futu','富途导出文件'],['longbridge','长桥导出文件']].map(([v,n])=>h('option',{key:v,value:v},n))),h('select',{'aria-label':'导入账户',value:accountId,onChange:invalidate(setAccountId),style:{...T.input(t),width:190}},h('option',{value:''},'从账户列识别'),state.ledger.accounts.map(a=>h('option',{key:a.id,value:a.id},a.name)))),
+        h('label',{style:{...T.btn(t,false),display:'inline-block',marginBottom:12}},'选择 CSV / TSV 文件',h('input',{type:'file',accept:'.csv,.tsv,.txt',style:{display:'none'},onChange:async e=>{const file=e.target.files?.[0];if(!file)return;if(file.size>3000000){setMsg('文件超过 3 MB，请拆分后导入');return}const buffer=await file.arrayBuffer();let content=new TextDecoder('utf-8').decode(buffer);if(content.includes('\ufffd'))content=new TextDecoder('gb18030').decode(buffer);setText(content);setPreview(null);setMsg('已读取 '+file.name)}})),
+        h('textarea',{'aria-label':'导入数据',value:text,onChange:invalidate(setText),placeholder:sample,rows:10,style:{...T.input(t),fontFamily:'monospace',resize:'vertical'}}),
+        mode==='trades' ? h('label',{style:{display:'block',fontSize:12,color:t.sub,marginTop:10}},h('input',{type:'checkbox',checked:applyHoldings,onChange:e=>setApplyHoldings(e.target.checked)}),' 同时更新持仓（历史流水默认仅存档；已有持仓快照时保持不勾选）') : null,
+        h('div',{style:{display:'flex',gap:10,marginTop:12}},h('button',{style:T.btn(t,true),disabled:loading||busy||!text.trim(),onClick:inspect},loading?'识别中…':'识别并预览'),h('button',{style:T.btn(t,false),onClick:()=>{setText(sample);setPreview(null)}},'查看格式示例')),
+        msg?h('div',{role:'status',style:{marginTop:12,fontSize:13,color:t.accent}},msg):null,
+        preview?h('div',{style:{marginTop:18}},h('strong',null,'导入预览 · '+preview.rows.length+' 条有效记录'),(preview.errors||[]).map((e,i)=>h('div',{key:'e'+i,role:'alert',style:{color:t.red,fontSize:12,marginTop:6}},'第 '+e.row+' 行：'+e.message)),(preview.warnings||[]).map((w,i)=>h('div',{key:'w'+i,style:{color:t.sub,fontSize:12,marginTop:6}},w.message)),h('div',{style:{overflowX:'auto',maxHeight:300,marginTop:10}},h('table',{style:{width:'100%',borderCollapse:'collapse'}},h('thead',null,h('tr',null,['账户','代码 / 市场','数量','成本 / 价格','币种'].map(l=>T.th(l,t)))),h('tbody',null,preview.rows.slice(0,100).map((r,i)=>h('tr',{key:i},T.td(state.ledger.accounts.find(a=>a.id===r.accountId)?.name||r.accountId,t),T.td(r.symbol+' / '+r.market,t),T.td(r.qty,t),T.td(mode==='holdings'?r.avgCost:r.price,t),T.td(r.currency,t)))))),h('button',{style:{...T.btn(t,true),marginTop:12},disabled:busy||loading||!preview.rows.length||preview.errors.length>0,onClick:commit},'确认导入 '+preview.rows.length+' 条'),h('small',{style:{display:'block',marginTop:8,color:t.sub}},'持仓按账户和标的更新；错误行修正后再导入。预览最多展示 100 条。')):null)
+    }
+
+    async function post(path, body) {
+      const r = await fetch('/portfolio/api/' + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+      const data = await r.json()
+      if (!r.ok || !data.ok) throw new Error(data.error?.message || '请求失败')
+      return data
+    }
+
+    function DashboardCharts({ t, state, call, busy }) {
+      const s = state.summary, cur = s.baseCurrency
+      const [group, setGroup] = React.useState('accounts')
+      const history = (s.history || []).filter(x => x.baseCurrency === cur && Number.isFinite(x.totalValueBase))
+      const values = history.map(x => x.totalValueBase)
+      const lo = Math.min(...values), hi = Math.max(...values), span = hi - lo || Math.max(hi * .05, 1)
+      const points = values.map((v, i) => [(i / Math.max(1, values.length - 1)) * 560 + 20, 155 - ((v - lo) / span) * 120])
+      const rows = (group === 'accounts' ? s.accounts.map(a => ({ label: state.ledger.accounts.find(x => x.id === a.accountId)?.name || a.accountId, value: a.valueBase })) : (s[group] || []).map(a => ({ label: group === 'currencies' ? a.currency : ({ stock: '股票', fund: '基金', etf: 'ETF', cash: '现金', bond: '债券', crypto: '数字资产', other: '其他' }[a.assetClass] || a.assetClass), value: a.valueBase }))).filter(a => a.value > 0)
+      const total = rows.reduce((sum, a) => sum + Math.max(0, a.value), 0)
+      const colors = t.cat || [t.accent, t.terra, t.green]
+      let offset = 0
+      const segments = rows.filter(a => a.value > 0).map((a, i) => { const start = offset; offset += a.value / total * 100; return colors[i % colors.length] + ' ' + start + '% ' + offset + '%' })
+      return h('div', { className: 'wealth-charts' },
+        h('section', { style: T.card(t), 'aria-label': '资产趋势' },
+          h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 } }, h('strong', { style: { fontSize: 13, fontWeight: 600 } }, '资产轨迹'), h('button', { style: T.btn(t, false), disabled: busy, onClick: () => call('state') }, '记录今日快照')),
+          history.length > 1 ? h('svg', { viewBox: '0 0 600 200', role: 'img', 'aria-label': history.map(x => (x.date || x.at || '') + ': ' + x.totalValueBase + ' ' + cur).join('；'), style: { width: '100%', height: 240, display: 'block' } },
+            [35, 95, 155].map(y => h('line', { key: y, x1: 20, y1: y, x2: 580, y2: y, stroke: t.border, strokeDasharray: '4 5' })),
+            h('polygon', { points: '20,160 ' + points.map(p => p.join(',')).join(' ') + ' 580,160', fill: t.accent, opacity: .08 }), h('polyline', { points: points.map(p => p.join(',')).join(' '), fill: 'none', stroke: t.accent, strokeWidth: 2.5, strokeLinejoin: 'round', strokeLinecap: 'round' }),
+            points.map((p, i) => h('circle', { key: i, cx: p[0], cy: p[1], r: 3, fill: t.accent }, h('title', null, (history[i].date || history[i].at || '') + ' · ' + fmtMoney(values[i], cur)))),
+            h('text', { x: 20, y: 190, fill: t.sub, fontSize: 11 }, (history[0].date || history[0].at || '').slice(0, 10)), h('text', { x: 580, y: 190, textAnchor: 'end', fill: t.sub, fontSize: 11 }, (history.at(-1).date || history.at(-1).at || '').slice(0, 10))) : h('div', { style: { height: 210, display: 'grid', placeContent: 'center', color: t.sub, fontSize: 13, textAlign: 'center', gap: 8 } }, h('span', { className: 'wealth-empty-mark', style: { margin: '0 auto 6px' } }, '⌁'), h('span', { style: { fontSize: 14, color: t.text } }, history.length ? '第一份快照，已经就位' : '你的资产故事，从这里开始'), h('small', null, '至少两个日期的快照后显示趋势')),
+          h('small', { style: { color: t.sub, fontSize: 11 } }, '每日保存时记录估值快照；曲线包含出入金、交易及汇率影响，不代表投资收益率。')),
+        h('section', { style: T.card(t), 'aria-label': '资产分布' },
+          h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 18 } }, h('strong', { style: { fontSize: 13, fontWeight: 600 } }, '资产配置'), h('select', { 'aria-label': '分布维度', value: group, onChange: e => setGroup(e.target.value), style: { ...T.input(t), width: 115 } }, [['accounts','按账户'],['assetClasses','按资产类别'],['currencies','按币种']].map(([v,l]) => h('option', { key: v, value: v }, l)))),
+          h('div', { style: { display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap' } },
+            h('div', { role: 'img', 'aria-label': '资产占比分布', style: { width: 108, height: 108, borderRadius: '50%', background: segments.length ? 'conic-gradient(' + segments.join(',') + ')' : t.border, display: 'grid', placeItems: 'center', flexShrink: 0 } }, h('div', { style: { width: 80, height: 80, background: t.card, borderRadius: '50%', display: 'grid', placeContent: 'center', textAlign: 'center', fontSize: 12, color: t.sub } }, h('strong', { style: { color: t.text, fontSize: 20 } }, rows.filter(a => a.value > 0).length), '项配置')),
+            h('div', { style: { flex: 1, minWidth: 100 } }, rows.length ? rows.map((a,i) => h('div', { key: i, style: { marginBottom: 10, fontSize: 12 } }, h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 8 } }, h('span', null, a.label), h('strong', null, (total ? Math.max(0,a.value) / total * 100 : 0).toFixed(1) + '%')), h('div', { style: { color: t.sub, marginTop: 3 } }, fmtMoney(a.value, cur)))) : h('span', { style: { color: t.sub, fontSize: 12 } }, '导入持仓后显示分布')))))
+    }
+
+    function Chat({ t, state, reload, busy }) {
+      const [messages, setMessages] = React.useState([]), [text, setText] = React.useState(''), [sending, setSending] = React.useState(false), [error, setError] = React.useState(''), [model, setModel] = React.useState(null)
+      const end = React.useRef(null)
+      React.useEffect(() => { fetch('/portfolio/api/model').then(r=>r.json()).then(r=>setModel(r.model)).catch(()=>{}) }, [])
+      React.useEffect(() => { end.current?.scrollIntoView({ block: 'nearest' }) }, [messages, sending])
+      const send = async (message) => {
+        if (!message.trim() || sending) return
+        setSending(true); setError(''); setText('')
+        const history = messages.map(m => ({ role: m.role, text: m.text })).slice(-12)
+        setMessages(old => [...old, { role: 'user', text: message }])
+        try { const r = await post('chat', { message, history }); setMessages(old => [...old, { role: 'assistant', text: r.reply, ops: r.ops, revision: r.revision, model: r.model }]) }
+        catch(e) { setError(e.message); setText(message) } finally { setSending(false) }
+      }
+      const apply = async (m, index) => {
+        setSending(true); setError('')
+        try { await post('chat/apply', { ops: m.ops, revision: m.revision }); setMessages(old=>old.map((x,i)=>i===index?{...x,applied:true}:x)); await reload() }
+        catch(e) { setError(e.message) } finally { setSending(false) }
+      }
+      return h('aside', { className: 'wealth-chat', style: { borderColor: t.border, background: t.panel, display: 'flex', flexDirection: 'column', padding: '25px 18px 18px' }, 'aria-label': '资产助手' },
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: 9, marginBottom: 9 } }, h('span', { className: 'wealth-account-badge', style: { width: 30, height: 30, borderRadius: 10 } }, '✧'), h('strong', { style: { fontSize: 14, fontWeight: 600 } }, '资产助手'), h('span', { style: { marginLeft: 'auto', fontSize: 9, color: t.sub, letterSpacing: 1 } }, 'AI')), h('div', { title: model?.label || model?.model || '', style: { color: t.sub, fontSize: 10, marginBottom: 20, padding: '7px 9px', border: '1px solid ' + t.border, borderRadius: 8, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, h('span', { style: { color: model ? t.green : t.sub } }, '● '), model ? (model.label || model.model) : '在 DSH 设置默认模型'),
+        h('div', { style: { flex: 1, overflowY: 'auto', minHeight: 80 } },
+          messages.length ? messages.map((m,i)=>h('div', { key:i, style:{ padding: 11, borderRadius: 9, marginBottom: 12, background: m.role === 'user' ? t.card : 'transparent', border: '1px solid '+t.border, fontSize:13, lineHeight:1.75, whiteSpace:'pre-wrap', overflowWrap:'anywhere' } }, h('small', {style:{color:t.sub}}, m.role==='user'?'你':'资产助手'), h('div',null,m.text), m.ops?.length ? h('details', { style:{fontSize:11,marginTop:8} }, h('summary',null,'待写入 '+m.ops.length+' 项变更'), h('pre',{style:{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}},JSON.stringify(m.ops,null,2))) : null, m.ops?.length ? h('button',{style:{...T.btn(t,true),marginTop:8},disabled:sending||busy||m.applied,onClick:()=>apply(m,i)},m.applied?'已写入账本':'应用这些变更') : null)) : h('div', {className:'wealth-chat-intro',style:{color:t.sub,fontSize:12,lineHeight:1.9}}, h('span',{style:{fontSize:28,color:t.terra}},'✧'), h('h3',{style:{color:t.text}},'看见数字背后的全貌'), h('p',null,'一起核对资产、梳理持仓，或把一段交易记录整理入账。写入前，你会看到具体变更。'), ['我的资产分布如何？','哪些持仓还缺少现价？','帮我核对各账户币种和汇率'].map(q=>h('button',{key:q,style:{...T.btn(t,false),display:'block',marginTop:9,textAlign:'left',width:'100%',fontSize:11,padding:'10px 11px',background:t.card,borderRadius:10},onClick:()=>send(q),disabled:sending},q))),
+          sending ? h('div',{role:'status',style:{fontSize:12,color:t.sub}},'正在处理…') : null, h('div',{ref:end})),
+        error ? h('div',{role:'alert',style:{color:t.red,fontSize:12,marginBottom:8}},error) : null,
+        h('form',{onSubmit:e=>{e.preventDefault();send(text)},style:{marginTop:12}},h('textarea',{'aria-label':'向资产助手提问',value:text,onChange:e=>setText(e.target.value),placeholder:'问账本，或粘贴需要整理的数据…',rows:3,maxLength:30000,style:{...T.input(t),resize:'vertical'},onKeyDown:e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();send(text)}}}),h('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,marginTop:8}},h('kbd',{style:{fontSize:10,color:t.sub,background:t.panel,borderRadius:999,padding:'3px 7px',fontFamily:'inherit'}},'Ctrl / ⌘ + Enter'),h('button',{type:'submit',disabled:sending||!text.trim(),style:{...T.btn(t,true),fontSize:12}},sending ? '思考中…' : '发送 ↗'))))
     }
 
     // ---------- sidebar panel takeover (same pattern as market-clock) ----------

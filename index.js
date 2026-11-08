@@ -5,6 +5,14 @@
  * The AI (资产管家 / any agent) edits the same store through cli.mjs.
  */
 import { load, save, applyOp, summarize, OpError } from './store.mjs'
+import { previewImport } from './importer.mjs'
+import { modelInfo, chatTurn, applyChatOps } from './chat.mjs'
+import { createSyncService } from './sync.mjs'
+import { createCredentialStore } from './credentials.mjs'
+import { createThsLogin } from './ths-login.mjs'
+import { createFutuLogin } from './futu-login.mjs'
+import { createHistoryService } from './history.mjs'
+import { analyze, scopeLedger } from './analytics.mjs'
 
 export const name = 'dsh-wealth'
 export const inject = ['webServer']
@@ -54,7 +62,69 @@ function trusted(req, ctx) {
   return false
 }
 
-export function apply(ctx) {
+export function apply(ctx, config = {}) {
+  const vault = config.syncOptions?.credentials || createCredentialStore()
+  const sync = createSyncService(ctx, { ...config.syncOptions, credentials:vault })
+  const history = createHistoryService({sources:()=>sync.list().sources,readSourceHistory:sync.readHistory,...config.historyOptions})
+  ctx.effect(()=>()=>history.dispose(), 'dsh-wealth: historical import previews')
+  const syncHistory = async (accountId, opts) => {
+    try {
+      const history_ = await history.syncAccount(accountId, opts)
+      const db = load()
+      return { history: history_, ledger: db, summary: summarize(db), analysis: analyze(db) }
+    } catch (error) {
+      return { historyError: String(error?.message || error) }
+    }
+  }
+  let loginTarget = null
+  const login = createThsLogin({ onCookie:cookie=>sync.acceptThsLogin(loginTarget,cookie) })
+  const loginStatus = () => {
+    const current = login.status()
+    const status = current.status === 'saved' ? 'ready' : ['failed','timeout','cleanup_pending','disposed'].includes(current.status) ? 'error' : ['starting','acquiring'].includes(current.status) ? 'waiting' : 'idle'
+    return { status, message:current.message }
+  }
+  ctx.effect(() => () => login.dispose(), 'dsh-wealth: own THS login lifecycle')
+  // Futu official MCP uses browser OAuth (no auth-code). The loopback listener
+  // captures the callback and stores the token set under `pending-futu-mcp`.
+  let futuLoginSlot = null, futuLoginTarget = null
+  const futuLogin = () => {
+    if (!futuLoginSlot) {
+      futuLoginSlot = createFutuLogin({ onToken: async t => {
+        const fields = { mcpToken: t.mcpToken }
+        if (t.refreshToken) fields.refreshToken = t.refreshToken
+        if (t.clientId) fields.clientId = t.clientId
+        // Scope the captured token to the login it was requested for, so a flow
+        // started for one account can never be consumed by another.
+        vault.set(futuLoginTarget ? 'pending-futu-mcp:' + futuLoginTarget : 'pending-futu-mcp','futu',fields)
+      } })
+    }
+    return futuLoginSlot
+  }
+  const futuStatus = () => {
+    const current = futuLogin().status()
+    const status = current.status === 'ready' ? 'ready' : ['error','timeout','disposed'].includes(current.status) ? 'error' : ['starting','waiting','acquiring'].includes(current.status) ? 'waiting' : 'idle'
+    return { status, message:current.message, ...(current.authorizeUrl ? {authorizeUrl:current.authorizeUrl} : {}) }
+  }
+  ctx.effect(() => () => futuLoginSlot?.dispose(), 'dsh-wealth: own Futu MCP login lifecycle')
+  ctx.effect(() => {
+    // 持仓按来源间隔刷新；历史流水每 6 小时增量补一次（从上次水位回看 30 天，去重归档）。
+    const historyDue = () => {
+      const state = load().historySync || {}
+      return sync.list().sources.filter(s => s.enabled !== false && s.accountId && s.lastStatus === 'ok' && (!state[s.accountId]?.at || Date.now() - Date.parse(state[s.accountId].at) > 6 * 3600 * 1000))
+    }
+    const attempted = new Map()
+    const run = () => sync.tick().then(async () => {
+      for (const s of historyDue()) {
+        if (Date.now() - (attempted.get(s.accountId) || 0) < 6 * 3600 * 1000) continue
+        attempted.set(s.accountId, Date.now())
+        await history.syncAccount(s.accountId).catch(() => {})
+      }
+    }).catch(() => { /* per-source failures are persisted */ })
+    const timer = setInterval(run, 60000)
+    timer.unref?.()
+    queueMicrotask(run)
+    return () => { clearInterval(timer); sync.dispose() }
+  }, 'dsh-wealth: automatic source refresh')
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
     path: '/portfolio',
@@ -67,8 +137,111 @@ export function apply(ctx) {
         if (path === 'api/state' || path === 'api/summary') {
           if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
           const db = load()
-          send(res, 200, { ok: true, ledger: db, summary: summarize(db) })
+          send(res, 200, { ok: true, ledger: db, summary: summarize(db), analysis: analyze(db) })
           return
+        }
+        if (path === 'api/analysis') {
+          if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
+          const ids = String(url.searchParams.get('accounts') || '').split(',').map(s => s.trim()).filter(Boolean)
+          const db = load()
+          send(res, 200, { ok: true, accounts: ids, analysis: analyze(ids.length ? scopeLedger(db, ids) : db) })
+          return
+        }
+        if (path === 'api/sources/login/status') {
+          if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
+          send(res,200,{ok:true,...loginStatus()}); return
+        }
+        if (path === 'api/sources/login/start' || path === 'api/sources/accounts') {
+          if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
+          const body = JSON.parse(await readBody(req))
+          if (path.endsWith('/start')) {
+            const target = body.authId || body.sourceId || null
+            if (body.authId && !sync.list().authorizations.some(a=>a.id === body.authId && a.connector === 'ths')) throw new OpError('bad-request','同花顺授权不存在')
+            if (!body.authId && target && !sync.list().sources.some(s=>s.id === target && s.connector === 'ths')) throw new OpError('bad-request','同花顺连接不存在')
+            if (['starting','acquiring'].includes(login.status().status)) throw new OpError('bad-request','登录正在进行，请先完成当前登录')
+            loginTarget = target
+            await login.start(); send(res,200,{ok:true,...loginStatus()}); return
+          }
+          const found = body.authId ? await sync.listAuthAccounts(body.authId, body.credentials) : await sync.listAccounts(body.source,body.credentials)
+          send(res,200,{ok:true,...found}); return
+        }
+        if (['api/sources/auth/create','api/sources/auth/accounts','api/sources/auth/rename','api/sources/auth/remove'].includes(path)) {
+          if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
+          const body = JSON.parse(await readBody(req))
+          if (path.endsWith('/create')) { send(res,200,{ok:true,...await sync.createAuthorization(body.auth || body.source || body, body.credentials)}); return }
+          if (path.endsWith('/accounts')) { send(res,200,{ok:true,...await sync.listAuthAccounts(body.authId, body.credentials)}); return }
+          if (path.endsWith('/rename')) { send(res,200,{ok:true,...sync.renameAuthorization(body.authId, body.label)}); return }
+          send(res,200,{ok:true,...sync.removeAuthorization(body.authId)}); return
+        }
+        if (path === 'api/sources' || path === 'api/sources/ths/portfolios') {
+          if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
+          send(res, 200, { ok: true, ...(path === 'api/sources' ? sync.list() : await sync.listThsPortfolios()) }); return
+        }
+        if (path === 'api/sources/futu/mcp/status') {
+          if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
+          send(res,200,{ok:true,...futuStatus()}); return
+        }
+        if (path === 'api/sources/futu/mcp/start') {
+          if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
+          const body = JSON.parse(await readBody(req).catch(()=> '{}') || '{}')
+          // Only a known Futu authorization may claim the captured token.
+          const target = body.authId ? sync.list().authorizations.find(a => a.id === body.authId && a.connector === 'futu') : null
+          futuLoginTarget = target ? target.id : null
+          await futuLogin().start(); send(res,200,{ok:true,...futuStatus()}); return
+        }
+        if (path === 'api/sources/longbridge/mcp/exchange') {
+          if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
+          const body = JSON.parse(await readBody(req))
+          const { exchangeLongbridgeMcpCode } = await import('./lb-mcp.mjs')
+          const { token } = await exchangeLongbridgeMcpCode(body.code, { endpoint: body.endpoint })
+          // 一码一 Token：不落盘，由前端随 credentials 提交，经 vault 加密保存。
+          send(res, 200, { ok: true, token })
+          return
+        }
+        if (['api/sources/save','api/sources/sync','api/sources/remove','api/sources/connect'].includes(path)) {
+          if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
+          const body = JSON.parse(await readBody(req))
+          if (path.endsWith('/connect') && body.account?.mode === 'existing') throw new OpError('bad-request','来源账户直接导入，无需绑定其他账户')
+          const result = path.endsWith('/connect') ? await sync.connectSource(body.source,body.credentials) : path.endsWith('/save') ? sync.saveSource(body.source,body.credentials) : path.endsWith('/sync') ? await sync.sync(body.id) : sync.removeSource(body.id)
+          // 导入或同步后自动把历史流水补到最新（无需选择区间）；流水失败不影响持仓结果。
+          if (path.endsWith('/connect') || path.endsWith('/sync')) {
+            const accountId = result.account?.id || sync.list().sources.find(s=>s.id===body.id)?.accountId
+            if (accountId) Object.assign(result, await syncHistory(accountId))
+          }
+          send(res, 200, { ok: true, ...result }); return
+        }
+        if (path === 'api/accounts/sync') {
+          if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
+          const body = JSON.parse(await readBody(req))
+          const source = sync.list().sources.find(s=>s.accountId===body.accountId)
+          if (!source) throw new OpError('bad-request','该账户是手动账户，没有可同步的来源')
+          const result = await sync.sync(source.id)
+          Object.assign(result, await syncHistory(body.accountId, { full: body.full === true }))
+          send(res, 200, { ok: true, ...result }); return
+        }
+        if (path === 'api/history/capabilities') {
+          if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
+          send(res,200,{ok:true,...history.capabilities()});return
+        }
+        if (path === 'api/history/preview' || path === 'api/history/commit') {
+          if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
+          const body = JSON.parse(await readBody(req,8*1024*1024))
+          const result = path.endsWith('/preview') ? await history.preview(body) : history.commit(body)
+          send(res,200,{ok:true,...result});return
+        }
+        if (path === 'api/model') {
+          if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
+          send(res, 200, { ok: true, model: modelInfo(ctx) }); return
+        }
+        if (['api/import/preview', 'api/chat', 'api/chat/apply'].includes(path)) {
+          if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
+          const body = JSON.parse(await readBody(req))
+          const db = load()
+          if (path === 'api/import/preview') { send(res, 200, { ok: true, ...previewImport(body, db) }); return }
+          if (path === 'api/chat') { send(res, 200, { ok: true, ...await chatTurn(ctx, body, db) }); return }
+          const applied = applyChatOps(db, body)
+          save(applied.ledger)
+          send(res, 200, { ok: true, ledger: applied.ledger, summary: summarize(applied.ledger), analysis: analyze(applied.ledger), result: applied.result }); return
         }
         if (path === 'api/op') {
           if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
@@ -82,7 +255,7 @@ export function apply(ctx) {
           try {
             const result = applyOp(db, op, payload)
             save(db)
-            send(res, 200, { ok: true, op, result, ledger: db, summary: summarize(db) })
+            send(res, 200, { ok: true, op, result, ledger: db, summary: summarize(db), analysis: analyze(db) })
           } catch (error) {
             const code = error instanceof OpError ? error.code : 'internal'
             send(res, code === 'not-found' ? 404 : code === 'bad-request' ? 400 : 500, { ok: false, op, error: { code, message: error.message } })
@@ -91,7 +264,9 @@ export function apply(ctx) {
         }
         res.writeHead(404); res.end('not found')
       } catch (error) {
-        try { send(res, 500, { ok: false, error: { code: 'internal', message: String(error && error.message || error) } }) } catch { res.destroy() }
+        const code = error instanceof OpError ? error.code : error instanceof SyntaxError ? 'bad-json' : 'internal'
+        const status = code === 'not-found' ? 404 : ['bad-request', 'bad-json'].includes(code) ? 400 : 500
+        try { send(res, status, { ok: false, error: { code, message: String(error && error.message || error) } }) } catch { res.destroy() }
       }
     },
   }), 'dsh-portfolio: /portfolio routes')

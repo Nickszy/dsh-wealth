@@ -4,6 +4,7 @@ import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync, copyFil
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
+import { isFlowKind, KIND_NAMES, normalizeStyle } from './model.mjs'
 
 export const DATA_DIR = process.env.DSH_PORTFOLIO_DIR || join(homedir(), '.dsh', 'data', 'dsh-portfolio')
 export const DATA_FILE = join(DATA_DIR, 'ledger.json')
@@ -11,11 +12,14 @@ export const DATA_FILE = join(DATA_DIR, 'ledger.json')
 const EMPTY = () => ({
   version: 1,
   baseCurrency: 'CNY',
-  fx: { CNY: 1, HKD: 0.92, USD: 7.15 },
+  fx: { CNY: 1 },
   accounts: [],
   instruments: [],
   holdings: [],
   trades: [],
+  historyEvents: [],
+  historyBatches: [],
+  snapshots: [],
   updatedAt: null,
 })
 
@@ -26,7 +30,8 @@ export function load() {
   if (!existsSync(DATA_FILE)) return EMPTY()
   try {
     const db = JSON.parse(readFileSync(DATA_FILE, 'utf8'))
-    return { ...EMPTY(), ...db }
+    // Never invent default rates for currencies absent from an existing ledger.
+    return { ...EMPTY(), ...db, fx: db.fx || { [db.baseCurrency || 'CNY']: 1 }, snapshots: db.snapshots || [] }
   } catch (error) {
     // keep the broken file for inspection, start clean
     try { copyFileSync(DATA_FILE, DATA_FILE + '.corrupt-' + Date.now()) } catch { /* ignore */ }
@@ -37,6 +42,20 @@ export function load() {
 export function save(db) {
   ensureDir()
   db.updatedAt = new Date().toISOString()
+  const summary = summarize(db)
+  const snapshot = {
+    date: db.updatedAt.slice(0, 10), recordedAt: db.updatedAt, baseCurrency: summary.baseCurrency,
+    totalValueBase: summary.totalValueBase, totalCostBase: summary.totalCostBase,
+    totalPnlBase: summary.totalPnlBase, excludedCount: summary.excludedCount,
+    warnings: summary.warnings, accounts: summary.accounts,
+    assetClasses: summary.assetClasses, currencies: summary.currencies,
+    sectors: summary.sectors, styles: summary.styles,
+  }
+  // A day can contain different reporting currencies; never overwrite another unit.
+  db.snapshots ||= []
+  const previous = db.snapshots.findIndex((s) => s.date === snapshot.date && s.baseCurrency === snapshot.baseCurrency)
+  if (previous < 0) db.snapshots.push(snapshot)
+  else db.snapshots[previous] = snapshot
   const tmp = DATA_FILE + '.tmp'
   writeFileSync(tmp, JSON.stringify(db, null, 2), 'utf8')
   try { if (existsSync(DATA_FILE)) copyFileSync(DATA_FILE, DATA_FILE + '.bak') } catch { /* ignore */ }
@@ -45,7 +64,34 @@ export function save(db) {
 }
 
 const uid = (prefix) => prefix + '_' + randomUUID().slice(0, 8).toUpperCase()
-const toNum = (v) => { if (v === null || v === undefined || v === '') return null; const n = Number(v); return Number.isFinite(n) ? n : null }
+function numeric(value, field, { optional = false, nullable = false, positive = false } = {}) {
+  if (value === undefined && optional) return undefined
+  if (value === null && nullable) return null
+  if ((typeof value !== 'number' && typeof value !== 'string') || String(value).trim() === '') {
+    throw new OpError('bad-request', field + ' 必须是有效数字')
+  }
+  const number = Number(value)
+  if (!Number.isFinite(number) || (positive ? number <= 0 : number < 0)) {
+    throw new OpError('bad-request', field + (positive ? ' 必须是有限正数' : ' 必须是有限非负数'))
+  }
+  return number
+}
+const ASSET_CLASSES = new Set(['stock', 'fund', 'etf', 'cash', 'bond', 'crypto', 'other'])
+function assetClass(value) {
+  const normalized = String(value).trim().toLowerCase()
+  if (!ASSET_CLASSES.has(normalized)) throw new OpError('bad-request', '不支持的 assetClass: ' + value)
+  return normalized
+}
+function requiredCurrency(value) {
+  if (typeof value !== 'string' || !value.trim()) throw new OpError('bad-request', '缺少 currency')
+  return value.trim().toUpperCase()
+}
+function tradeKey(trade) {
+  if (trade.externalId !== undefined && trade.externalId !== null && trade.externalId !== '') {
+    return JSON.stringify(['external', trade.accountId, trade.source || '', String(trade.externalId)])
+  }
+  return JSON.stringify(['trade', trade.accountId, trade.instrumentId, trade.side, Number(trade.qty), Number(trade.price), Number(trade.fee || 0), trade.currency, trade.date, trade.source || ''])
+}
 const nowISO = () => new Date().toISOString()
 
 function normCurrency(c, fallback) {
@@ -78,7 +124,7 @@ function resolveInstrument(db, ref, { create = true } = {}) {
     symbol,
     name: String(ref.name || symbol).trim(),
     market: market || 'CN',
-    assetClass: String(ref.assetClass || guessAssetClass(symbol, ref.assetClass)).trim(),
+    assetClass: assetClass(ref.assetClass || guessAssetClass(symbol)),
     currency: normCurrency(ref.currency, defaultCurrencyOfMarket(market)),
     note: String(ref.note || ''),
     createdAt: nowISO(),
@@ -102,8 +148,14 @@ function defaultCurrencyOfMarket(market) {
 // Apply a trade to the matching holding (buy = increase qty & weighted avg cost; sell = decrease qty).
 function applyTradeToHolding(db, trade) {
   let holding = findHolding(db, trade.accountId, trade.instrumentId)
-  const qty = toNum(trade.qty) || 0
-  const price = toNum(trade.price) || 0
+  const { qty, price } = trade
+  if (trade.side === 'sell' && (!holding || qty > holding.qty)) throw new OpError('bad-request', '卖出数量超过持仓')
+  if (holding && holding.currency !== trade.currency) throw new OpError('bad-request', '流水币种必须与持仓币种一致')
+  const currentQty = holding ? numeric(holding.qty, 'holding.qty') : 0
+  const currentCost = holding ? numeric(holding.avgCost, 'holding.avgCost') : 0
+  const totalQty = currentQty + qty
+  const totalCost = currentQty * currentCost + qty * price
+  if (trade.side === 'buy' && (!Number.isFinite(totalQty) || !Number.isFinite(totalCost))) throw new OpError('bad-request', '买入后持仓数值超出可计算范围')
   if (!holding) {
     holding = {
       id: uid('POS'), accountId: trade.accountId, instrumentId: trade.instrumentId,
@@ -112,8 +164,7 @@ function applyTradeToHolding(db, trade) {
     db.holdings.push(holding)
   }
   if (trade.side === 'buy') {
-    const totalQty = holding.qty + qty
-    if (totalQty > 0) holding.avgCost = ((holding.qty * holding.avgCost) + (qty * price)) / totalQty
+    if (totalQty > 0) holding.avgCost = totalCost / totalQty
     holding.qty = totalQty
   } else if (trade.side === 'sell') {
     holding.qty = Math.max(0, holding.qty - qty)
@@ -155,12 +206,41 @@ export function applyOp(db, op, payload = {}) {
       db.accounts = db.accounts.filter((a) => a.id !== id)
       db.holdings = db.holdings.filter((h) => h.accountId !== id)
       db.trades = db.trades.filter((t) => t.accountId !== id)
+      if (Array.isArray(db.historyEvents)) db.historyEvents = db.historyEvents.filter(e => e.accountId !== id)
+      if (Array.isArray(db.historyBatches)) db.historyBatches = db.historyBatches.filter(b => b.accountId !== id)
+      if (db.historySync && typeof db.historySync === 'object') delete db.historySync[id]
       return { removed: id }
     }
 
     case 'instrument.upsert': {
       const p = payload.instrument || payload
-      const instrument = resolveInstrument(db, { ...p, instrumentId: p.id }, { create: true })
+      const changes = {}
+      if (p.assetClass !== undefined) changes.assetClass = assetClass(p.assetClass)
+      if (p.currency !== undefined) changes.currency = requiredCurrency(p.currency)
+      if (p.sector !== undefined) {
+        // 行业是自由文本（各市场行业表不同），仅做长度与空白约束；空字符串表示清除。
+        const sector = String(p.sector).trim()
+        if (sector.length > 24) throw new OpError('bad-request', '行业名称过长（≤24 字）')
+        changes.sector = sector || null
+      }
+      if (p.style !== undefined) {
+        const style = normalizeStyle(p.style)
+        if (p.style && !style) throw new OpError('bad-request', 'style 须为 growth|value|blend|other（成长/价值/均衡/其他）')
+        changes.style = style
+      }
+      for (const key of ['symbol', 'name', 'market', 'note']) {
+        if (p[key] !== undefined) {
+          const value = String(p[key]).trim()
+          if (!value && key !== 'note') throw new OpError('bad-request', key + ' 不能为空')
+          changes[key] = key === 'market' ? value.toUpperCase() : value
+        }
+      }
+      const instrument = resolveInstrument(db, { ...p, instrumentId: p.id || p.instrumentId }, { create: true })
+      const symbol = changes.symbol ?? instrument.symbol
+      const market = changes.market ?? instrument.market
+      if (db.instruments.some((i) => i.id !== instrument.id && i.symbol === symbol && i.market === market)) throw new OpError('bad-request', '相同市场已有此标的代码')
+      Object.assign(instrument, changes)
+      instrument.updatedAt = nowISO()
       return { instrument }
     }
 
@@ -168,21 +248,25 @@ export function applyOp(db, op, payload = {}) {
       const p = payload.holding || payload
       if (!p.accountId) throw new OpError('bad-request', '缺少 accountId')
       if (!findAccount(db, p.accountId)) throw new OpError('not-found', '账户不存在: ' + p.accountId)
+      const qty = numeric(p.qty, 'qty', { optional: true })
+      const avgCost = numeric(p.avgCost, 'avgCost', { optional: true })
+      const manualPrice = numeric(p.manualPrice, 'manualPrice', { optional: true, nullable: true })
       const instrument = resolveInstrument(db, p, { create: true })
       let holding = p.id ? db.holdings.find((h) => h.id === p.id) : findHolding(db, p.accountId, instrument.id)
+      if (p.id && (!holding || holding.accountId !== p.accountId || holding.instrumentId !== instrument.id)) throw new OpError('bad-request', '持仓 id 与账户或标的不匹配')
       if (holding) {
-        if (p.qty !== undefined) holding.qty = toNum(p.qty) || 0
-        if (p.avgCost !== undefined) holding.avgCost = toNum(p.avgCost) || 0
-        if (p.manualPrice !== undefined) holding.manualPrice = toNum(p.manualPrice)
+        if (qty !== undefined) holding.qty = qty
+        if (avgCost !== undefined) holding.avgCost = avgCost
+        if (manualPrice !== undefined) holding.manualPrice = manualPrice
         if (p.currency !== undefined) holding.currency = normCurrency(p.currency, holding.currency)
         if (p.note !== undefined) holding.note = String(p.note)
         holding.updatedAt = nowISO()
       } else {
         holding = {
           id: uid('POS'), accountId: p.accountId, instrumentId: instrument.id,
-          qty: toNum(p.qty) || 0, avgCost: toNum(p.avgCost) || 0,
+          qty: qty ?? 0, avgCost: avgCost ?? 0,
           currency: normCurrency(p.currency, instrument.currency),
-          manualPrice: toNum(p.manualPrice), note: String(p.note || ''), updatedAt: nowISO(),
+          manualPrice: manualPrice ?? null, note: String(p.note || ''), updatedAt: nowISO(),
         }
         db.holdings.push(holding)
       }
@@ -200,17 +284,29 @@ export function applyOp(db, op, payload = {}) {
       const p = payload.trade || payload
       if (!p.accountId) throw new OpError('bad-request', '缺少 accountId')
       if (!findAccount(db, p.accountId)) throw new OpError('not-found', '账户不存在: ' + p.accountId)
-      const instrument = resolveInstrument(db, p, { create: true })
-      const side = (p.side === 'sell' ? 'sell' : 'buy')
+      const side = p.side === undefined ? 'buy' : p.side
+      if (side !== 'buy' && side !== 'sell') throw new OpError('bad-request', 'side 必须是 buy 或 sell')
+      const qty = numeric(p.qty, 'qty', { positive: true })
+      const price = numeric(p.price, 'price')
+      const fee = numeric(p.fee === undefined ? 0 : p.fee, 'fee')
+      if (!Number.isFinite(qty * price + fee)) throw new OpError('bad-request', '流水金额超出可计算范围')
+      if (payload.applyHoldings !== undefined && typeof payload.applyHoldings !== 'boolean') throw new OpError('bad-request', 'applyHoldings 必须为布尔值')
+      const date = String(p.date || new Date().toISOString().slice(0, 10))
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date)) || new Date(date).toISOString().slice(0, 10) !== date) throw new OpError('bad-request', 'date 必须为有效 YYYY-MM-DD 日期')
+      const instrument = resolveInstrument(db, p, { create: side !== 'sell' || payload.applyHoldings === false })
       const trade = {
-        id: uid('TRD'), accountId: p.accountId, instrumentId: instrument.id, side,
-        qty: toNum(p.qty) || 0, price: toNum(p.price) || 0, fee: toNum(p.fee) || 0,
-        currency: normCurrency(p.currency, instrument.currency),
-        date: String(p.date || new Date().toISOString().slice(0, 10)),
+        id: uid('TRD'), accountId: p.accountId, instrumentId: instrument.id, side, qty, price, fee,
+        currency: normCurrency(p.currency, instrument.currency), date,
         note: String(p.note || ''), createdAt: nowISO(),
+        source: String(p.source || ''), ...(p.externalId == null ? {} : { externalId: String(p.externalId) }),
+        appliedToHoldings: payload.applyHoldings !== false,
       }
+      if (payload.deduplicate) {
+        const duplicate = db.trades.find((t) => tradeKey(t) === tradeKey(trade))
+        if (duplicate) return { trade: duplicate, holding: findHolding(db, duplicate.accountId, duplicate.instrumentId) || null, duplicate: true }
+      }
+      const holding = trade.appliedToHoldings ? applyTradeToHolding(db, trade) : null
       db.trades.push(trade)
-      const holding = applyTradeToHolding(db, trade)
       return { trade, holding }
     }
 
@@ -221,17 +317,62 @@ export function applyOp(db, op, payload = {}) {
       return { removed: id, note: '已删除流水；持仓数量未自动回算，请手动核对' }
     }
 
+    // 归档一条不改变当前持仓的资金流水：出入金、分红、利息、费税、证券划转，
+    // 以及后续的生活账单收支。买卖成交请用 trade.add。
+    case 'historyEvent.add': {
+      const p = payload.event || payload
+      if (!p.accountId) throw new OpError('bad-request', '缺少 accountId')
+      const account = findAccount(db, p.accountId)
+      if (!account) throw new OpError('not-found', '账户不存在: ' + p.accountId)
+      const kind = String(p.kind || '').trim()
+      if (!isFlowKind(kind)) throw new OpError('bad-request', 'kind 须为以下之一: ' + KIND_NAMES.join('/'))
+      if (['buy', 'sell', 'repo_open', 'repo_close'].includes(kind)) throw new OpError('bad-request', '买卖与回购请用 trade.add 记账；historyEvent.add 只归档不影响持仓的流水')
+      const date = String(p.date || '')
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date)) || new Date(date).toISOString().slice(0, 10) !== date) throw new OpError('bad-request', 'date 必须为有效 YYYY-MM-DD 日期')
+      const cashAmount = numeric(p.cashAmount === undefined ? null : p.cashAmount, 'cashAmount', { nullable: true })
+      const fee = p.fee === undefined || p.fee === null ? null : numeric(p.fee, 'fee')
+      const qty = p.qty === undefined || p.qty === null ? null : numeric(p.qty, 'qty', { positive: true })
+      const price = p.price === undefined || p.price === null ? null : numeric(p.price, 'price')
+      const currency = normCurrency(p.currency, account.currency || db.baseCurrency)
+      const externalId = p.externalId === undefined || p.externalId === null || p.externalId === '' ? null : String(p.externalId)
+      db.historyEvents ||= []
+      if (externalId) {
+        const duplicate = db.historyEvents.find((e) => e.accountId === p.accountId && e.externalId === externalId && (e.kind || '') === kind)
+        if (duplicate) return { event: duplicate, duplicate: true }
+      }
+      let instrumentId = null
+      if (p.symbol || p.instrumentId) {
+        const instrument = resolveInstrument(db, { ...p, instrumentId: p.instrumentId || undefined }, { create: false })
+        instrumentId = instrument.id
+      }
+      const batchId = uid('HIST')
+      const importedAt = nowISO()
+      const event = {
+        id: uid('EVT'), accountId: p.accountId, kind, date, cashAmount, fee,
+        currency, ...(qty != null ? { qty } : {}), ...(price != null ? { price } : {}),
+        ...(instrumentId ? { instrumentId } : {}),
+        note: String(p.note || ''), source: String(p.source || 'model'),
+        ...(externalId ? { externalId } : {}),
+        batchId, importedAt, archiveOnly: true, observedAt: importedAt,
+      }
+      db.historyEvents.push(event)
+      db.historyBatches ||= []
+      db.historyBatches.push({ id: batchId, accountId: p.accountId, importedAt, imported: 1, duplicates: 0, outside: 0, method: 'model', coverage: { method: 'model', requestedFrom: date, requestedTo: date, complete: false, note: '手工 / AI 逐条录入，不代表完整流水区间。' }, byKind: { [kind]: 1 } })
+      return { event, batchId }
+    }
+
     case 'price.set': {
       const p = payload
+      const price = numeric(p.price, 'price', { nullable: true })
       if (p.holdingId) {
         const h = db.holdings.find((x) => x.id === p.holdingId)
         if (!h) throw new OpError('not-found', '持仓不存在: ' + p.holdingId)
-        h.manualPrice = toNum(p.price); h.updatedAt = nowISO()
+        h.manualPrice = price; h.updatedAt = nowISO()
         return { holding: h }
       }
       if (p.instrumentId) {
         let n = 0
-        for (const h of db.holdings) if (h.instrumentId === p.instrumentId) { h.manualPrice = toNum(p.price); h.updatedAt = nowISO(); n++ }
+        for (const h of db.holdings) if (h.instrumentId === p.instrumentId) { h.manualPrice = price; h.updatedAt = nowISO(); n++ }
         if (n === 0) throw new OpError('not-found', '该标的没有持仓')
         return { updated: n }
       }
@@ -239,33 +380,52 @@ export function applyOp(db, op, payload = {}) {
     }
 
     case 'fx.set': {
-      const cur = normCurrency(payload.currency, null)
-      if (!cur) throw new OpError('bad-request', '缺少 currency')
-      const rate = toNum(payload.rate)
-      if (rate === null || rate <= 0) throw new OpError('bad-request', 'rate 必须是正数（1 单位该币种 = ? 本位币）')
+      const cur = requiredCurrency(payload.currency)
+      const rate = numeric(payload.rate, 'rate', { positive: true })
+      if (cur === db.baseCurrency && rate !== 1) throw new OpError('bad-request', '本位币汇率必须为 1')
+      db.fx ||= {}
       db.fx[cur] = rate
       return { fx: db.fx }
     }
 
     case 'base.set': {
-      const cur = normCurrency(payload.currency, null)
-      if (!cur) throw new OpError('bad-request', '缺少 currency')
+      const cur = requiredCurrency(payload.currency)
+      const oldBase = db.baseCurrency || 'CNY'
+      const divisor = cur === oldBase ? 1 : db.fx?.[cur]
+      if (typeof divisor !== 'number' || !Number.isFinite(divisor) || divisor <= 0) throw new OpError('bad-request', '新本位币缺少有效汇率: ' + cur)
+      const rebased = {}
+      for (const [currency, rate] of Object.entries({ ...db.fx, [oldBase]: 1 })) {
+        const converted = rate / divisor
+        if (typeof rate !== 'number' || !Number.isFinite(rate) || rate <= 0 || !Number.isFinite(converted) || converted <= 0) throw new OpError('bad-request', '无法重设本位币，汇率无效: ' + currency)
+        rebased[currency] = converted
+      }
+      rebased[cur] = 1
+      db.fx = rebased
       db.baseCurrency = cur
-      return { baseCurrency: cur }
+      return { baseCurrency: cur, fx: db.fx }
     }
 
     case 'import.holdings': {
-      const rows = Array.isArray(payload.rows) ? payload.rows : []
-      const out = []
-      for (const row of rows) out.push(applyOp(db, 'holding.upsert', { holding: row }).holding)
+      if (!Array.isArray(payload.rows)) throw new OpError('bad-request', 'rows 必须为数组')
+      const staged = structuredClone(db)
+      const out = payload.rows.map((row) => applyOp(staged, 'holding.upsert', { holding: row }).holding)
+      Object.assign(db, staged)
       return { imported: out.length, holdings: out }
     }
 
     case 'import.trades': {
-      const rows = Array.isArray(payload.rows) ? payload.rows : []
+      if (!Array.isArray(payload.rows)) throw new OpError('bad-request', 'rows 必须为数组')
+      if (payload.applyHoldings !== undefined && typeof payload.applyHoldings !== 'boolean') throw new OpError('bad-request', 'applyHoldings 必须为布尔值')
+      const staged = structuredClone(db)
       const out = []
-      for (const row of rows) out.push(applyOp(db, 'trade.add', { trade: row }).trade)
-      return { imported: out.length, trades: out }
+      let skipped = 0
+      for (const row of payload.rows) {
+        const result = applyOp(staged, 'trade.add', { trade: { ...row, source: row.source ?? payload.source }, applyHoldings: payload.applyHoldings, deduplicate: true })
+        if (result.duplicate) skipped++
+        else out.push(result.trade)
+      }
+      Object.assign(db, staged)
+      return { imported: out.length, skipped, trades: out, applyHoldings: payload.applyHoldings !== false }
     }
 
     default:
@@ -273,26 +433,61 @@ export function applyOp(db, op, payload = {}) {
   }
 }
 
-// Valuation helper shared by CLI: convert every holding to base currency.
+// Valuation helper shared by the dashboard and CLI. Only known conversions enter totals.
 export function summarize(db) {
   const base = db.baseCurrency || 'CNY'
   const fx = { ...db.fx, [base]: 1 }
-  const byAccount = new Map()
-  let totalBase = 0
+  const aggregate = (metadata) => ({ ...metadata, valueBase: 0, costBase: 0, holdings: 0, excludedHoldings: 0 })
+  const byAccount = new Map(db.accounts.map((a) => [a.id, aggregate({ ...a, accountId: a.id })]))
+  const byClass = new Map()
+  const byCurrency = new Map()
+  const bySector = new Map()
+  const byStyle = new Map()
+  const warnings = [], excludedHoldings = []
+  let totalBase = 0, totalCost = 0
+  const exclude = (h, currency, reason, message) => {
+    excludedHoldings.push({ holdingId: h.id, accountId: h.accountId, instrumentId: h.instrumentId, currency, reason })
+    warnings.push({ code: reason, message, holdingId: h.id, currency })
+    const account = byAccount.get(h.accountId)
+    if (account) account.excludedHoldings++
+  }
   for (const h of db.holdings) {
     const ins = db.instruments.find((i) => i.id === h.instrumentId)
-    if (!ins) continue
-    const price = (h.manualPrice ?? h.avgCost ?? 0)
-    const cur = h.currency || ins.currency || base
-    const rate = fx[cur] ?? 1
+    const cur = h.currency || ins?.currency || base
+    if (!ins) { exclude(h, cur, 'missing-instrument', '持仓标的不存在'); continue }
+    if (!byAccount.has(h.accountId)) { exclude(h, cur, 'missing-account', '持仓账户不存在'); continue }
+    const price = h.manualPrice ?? h.avgCost ?? 0
+    const rate = fx[cur]
+    if (typeof rate !== 'number' || !Number.isFinite(rate) || rate <= 0) {
+      exclude(h, cur, 'missing-fx', '缺少有效汇率: ' + cur); continue
+    }
     const valueBase = h.qty * price * rate
-    const costBase = h.qty * (h.avgCost || 0) * rate
+    const costBase = h.qty * (h.avgCost ?? 0) * rate
+    if (![h.qty, price, h.avgCost ?? 0].every((n) => typeof n === 'number' && Number.isFinite(n) && n >= 0) || !Number.isFinite(valueBase) || !Number.isFinite(costBase) || !Number.isFinite(totalBase + valueBase) || !Number.isFinite(totalCost + costBase)) {
+      exclude(h, cur, 'invalid-valuation', '持仓数值无效或超出可计算范围'); continue
+    }
+    if (h.manualPrice == null && h.qty > 0) warnings.push({ code: 'cost-estimate-price', message: '未设置现价，使用平均成本估值', holdingId: h.id, currency: cur })
     totalBase += valueBase
-    if (!byAccount.has(h.accountId)) byAccount.set(h.accountId, { accountId: h.accountId, valueBase: 0, costBase: 0, holdings: 0 })
-    const agg = byAccount.get(h.accountId)
-    agg.valueBase += valueBase; agg.costBase += costBase; agg.holdings += 1
+    totalCost += costBase
+    const cls = ins.assetClass || 'other'
+    if (!byClass.has(cls)) byClass.set(cls, aggregate({ assetClass: cls }))
+    if (!byCurrency.has(cur)) byCurrency.set(cur, aggregate({ currency: cur }))
+    // 行业 / 风格：缺失时归入「未分类」，分类数据只来自用户或来源，不猜测。
+    const sectorKey = String(ins.sector || '').trim() || '未分类'
+    const styleKey = ins.style || '未分类'
+    if (!bySector.has(sectorKey)) bySector.set(sectorKey, aggregate({ sector: sectorKey }))
+    if (!byStyle.has(styleKey)) byStyle.set(styleKey, aggregate({ style: styleKey }))
+    for (const agg of [byAccount.get(h.accountId), byClass.get(cls), byCurrency.get(cur), bySector.get(sectorKey), byStyle.get(styleKey)]) {
+      agg.valueBase += valueBase; agg.costBase += costBase; agg.holdings++
+    }
   }
-  const round = (n) => Math.round(n * 100) / 100
-  const accounts = [...byAccount.values()].map((a) => ({ ...a, valueBase: round(a.valueBase), costBase: round(a.costBase), pnlBase: round(a.valueBase - a.costBase) }))
-  return { baseCurrency: base, fx, totalValueBase: round(totalBase), totalCostBase: round(accounts.reduce((s, a) => s + a.costBase, 0)), totalPnlBase: round(accounts.reduce((s, a) => s + a.pnlBase, 0)), accounts }
+  const round = (n) => Number(n.toFixed(2))
+  const finish = (agg) => ({ ...agg, valueBase: round(agg.valueBase), costBase: round(agg.costBase), pnlBase: round(agg.valueBase - agg.costBase), weight: totalBase ? agg.valueBase / totalBase : 0 })
+  return {
+    baseCurrency: base, fx, totalValueBase: round(totalBase), totalCostBase: round(totalCost), totalPnlBase: round(totalBase - totalCost),
+    accounts: [...byAccount.values()].map(finish), assetClasses: [...byClass.values()].map(finish), currencies: [...byCurrency.values()].map(finish),
+    sectors: [...bySector.values()].map(finish), styles: [...byStyle.values()].map(finish),
+    history: [...(db.snapshots || [])].sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.baseCurrency).localeCompare(String(b.baseCurrency))),
+    warnings, excludedHoldings, excludedCount: excludedHoldings.length,
+  }
 }

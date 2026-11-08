@@ -21,29 +21,36 @@ function help() {
     usage: [
       'node cli.mjs state                          # full ledger',
       'node cli.mjs summary                        # valued totals in base currency',
+      'node cli.mjs accounts                       # account list with values (balance sheet view)',
+      'node cli.mjs positions [accountId]          # holdings joined with instruments (+sector/style)',
+      'node cli.mjs history [accountId] [limit]    # archived flows (deposit/dividend/fee/life bills)',
+      'node cli.mjs export [file]                  # write the whole ledger JSON to a file',
       'node cli.mjs <op> key=value key=value ...   # run one operation',
       'node cli.mjs \'{"op":"...",...}\'             # or pass one JSON object',
       '',
       'examples:',
       '  node cli.mjs account.upsert name=华泰证券 type=broker currency=CNY',
       '  node cli.mjs trade.add accountId=ACC_xxx symbol=600519 side=buy qty=100 price=1600',
+      '  node cli.mjs historyEvent.add accountId=ACC_xxx kind=deposit date=2026-11-08 cashAmount=10000 note=工资转入了 life-bill 余额',
       '  node cli.mjs holding.upsert accountId=ACC_xxx symbol=00700 market=HK qty=200 avgCost=380',
+      '  node cli.mjs instrument.upsert instrumentId=INS_xxx sector=白酒 style=value',
       '  node cli.mjs price.set instrumentId=INS_xxx price=1650',
       '  node cli.mjs fx.set currency=HKD rate=0.92',
     ],
     ops: {
-      'account.upsert': '{op, account:{id?,name,type?,currency?,note?}}',
-      'account.remove': '{op, id}',
-      'instrument.upsert': '{op, instrument:{id?,symbol,name?,market?,assetClass?,currency?}}',
+      'account.upsert': '{op, account:{id?,name,type?,currency?,note?,type credit=负债}}',
+      'account.remove': '{op, id, confirm:true}   # removes holdings/trades/history of the account',
+      'instrument.upsert': '{op, instrument:{id?,symbol,name?,market?,assetClass?,currency?,sector?,style?}}',
       'holding.upsert': '{op, holding:{id?,accountId,symbol|instrumentId,market?,qty,avgCost,currency?,manualPrice?,note?}}',
       'holding.remove': '{op, id}',
       'trade.add': '{op, accountId, symbol|instrumentId, market?, side:"buy"|"sell", qty, price, fee?, currency?, date?, note?}',
       'trade.remove': '{op, id}',
+      'historyEvent.add': '{op, accountId, kind(deposit|withdrawal|dividend|interest|fee|tax|security_in|security_out|ipo|other), date, cashAmount, currency?, fee?, note?, externalId?}  # archive-only flow, never moves positions',
       'price.set': '{op, holdingId?|instrumentId?, price}',
       'fx.set': '{op, currency, rate}   # 1 unit of currency = ? base',
       'base.set': '{op, currency}',
       'import.holdings': '{op, rows:[holding...]}',
-      'import.trades': '{op, rows:[trade...]}',
+      'import.trades': '{op, rows:[trade...], applyHoldings:false, source?} # historical imports: archive only; duplicate rows skipped',
     },
   })
 }
@@ -67,7 +74,10 @@ function parseRequest(args) {
   const payload = {}
   for (const token of rest) {
     const eq = token.indexOf('=')
-    if (eq > 0) payload[token.slice(0, eq)] = parseValue(token.slice(eq + 1))
+    if (eq > 0) {
+      const key = token.slice(0, eq), value = token.slice(eq + 1)
+      payload[key] = ['symbol', 'externalId', 'accountId', 'instrumentId', 'holdingId', 'date', 'name', 'kind', 'sector', 'style', 'side', 'note', 'currency', 'source'].includes(key) ? value : parseValue(value)
+    }
     else if (token.startsWith('-')) { /* ignore stray flags */ }
   }
   return { op, payload }
@@ -80,6 +90,38 @@ else if (arg[0] === 'state') {
   out({ ok: true, ledger: db, summary: summarize(db) })
 } else if (arg[0] === 'summary') {
   out({ ok: true, summary: summarize(load()) })
+} else if (arg[0] === 'accounts') {
+  // Balance-sheet view: credit accounts are liabilities, everything else is an asset.
+  const db = load(), summary = summarize(db)
+  const byId = new Map(summary.accounts.map((a) => [a.id, a]))
+  const rows = db.accounts.map((a) => ({ ...byId.get(a.id), liability: a.type === 'credit' }))
+  const assets = rows.filter((r) => !r.liability).reduce((s, r) => s + (r.valueBase || 0), 0)
+  const liabilities = rows.filter((r) => r.liability).reduce((s, r) => s + Math.abs(r.valueBase || 0), 0)
+  out({ ok: true, baseCurrency: summary.baseCurrency, accounts: rows, assets: Number(assets.toFixed(2)), liabilities: Number(liabilities.toFixed(2)), netWorth: Number((assets - liabilities).toFixed(2)) })
+} else if (arg[0] === 'positions') {
+  const db = load(), summary = summarize(db)
+  const accountId = arg[1]
+  const insMap = new Map(db.instruments.map((i) => [i.id, i]))
+  const fx = summary.fx, base = summary.baseCurrency
+  const rows = db.holdings.filter((h) => !accountId || h.accountId === accountId).map((h) => {
+    const ins = insMap.get(h.instrumentId) || {}
+    const rate = fx[h.currency] || fx[h.currency || ''] || (h.currency === base ? 1 : undefined)
+    const valueBase = typeof rate === 'number' ? Number((h.qty * (h.manualPrice ?? h.avgCost ?? 0) * rate).toFixed(2)) : null
+    return { holdingId: h.id, accountId: h.accountId, symbol: ins.symbol, name: ins.name, market: ins.market, assetClass: ins.assetClass, sector: ins.sector || null, style: ins.style || null, currency: h.currency, qty: h.qty, avgCost: h.avgCost, price: h.manualPrice ?? null, valueBase }
+  })
+  out({ ok: true, baseCurrency: base, count: rows.length, positions: rows })
+} else if (arg[0] === 'history') {
+  const db = load()
+  const accountId = arg[1]
+  const limit = Number(arg[2]) || 200
+  const events = (db.historyEvents || []).filter((e) => !accountId || e.accountId === accountId).slice(-limit)
+  out({ ok: true, count: events.length, events })
+} else if (arg[0] === 'export') {
+  const db = load()
+  const { writeFileSync } = await import('node:fs')
+  const target = arg[1] || 'dsh-wealth-export.json'
+  writeFileSync(target, JSON.stringify({ exportedAt: new Date().toISOString(), ledger: db, summary: summarize(db) }, null, 2))
+  out({ ok: true, file: target, accounts: db.accounts.length, holdings: db.holdings.length, historyEvents: (db.historyEvents || []).length })
 } else {
   let req
   try { req = parseRequest(arg) } catch (e) { out({ ok: false, error: { code: 'bad-json', message: '参数解析失败: ' + e.message } }, 2); process.exit() }

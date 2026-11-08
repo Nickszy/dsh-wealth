@@ -1,0 +1,45 @@
+BoardUI FREE attribution
+========================
+
+This plugin adapts a small set of BoardUI FREE design-token recipes: the
+10px / 20px radius steps, 150ms control feedback, low contact card shadow,
+6% / 10% soft control elevation, and selected-control inner highlight.
+The recipes are documented in ui-theme.js and embedded in client.js for the
+existing no-build host React loader. The entire BoardUI library is NOT installed.
+
+Source: https://github.com/BoardUI/boardui
+Reviewed commit: ec5c5eb3e29c2441be63b9422cd54f411ef23466
+Token source: https://github.com/BoardUI/boardui/blob/ec5c5eb3e29c2441be63b9422cd54f411ef23466/styles/theme.css
+Free semantic table component reviewed for scoped table/scroll conventions:
+https://github.com/BoardUI/boardui/blob/ec5c5eb3e29c2441be63b9422cd54f411ef23466/components/base/table/table.tsx
+Free neutral keyboard hint reviewed and adapted for the composer shortcut:
+https://github.com/BoardUI/boardui/blob/ec5c5eb3e29c2441be63b9422cd54f411ef23466/components/base/kbd/kbd.tsx
+
+The portfolio layout, warm palette, native broker forms, chart and host React
+implementation are custom adaptations. Monarch (https://www.monarch.com/) was
+used as visual direction only; no Monarch code, brand artwork, product assets
+or paid BoardUI Pro Finance template code was copied or downloaded.
+
+Original BoardUI license follows:
+
+MIT License
+
+Copyright (c) 2026 Mertcan Dundar Esmergul (BoardUI)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
