@@ -65,6 +65,17 @@
 
 - [x] 英文界面（导航 / 总览 / 账户 / 分析 / 流水 / 设置等核心标签，右上角 EN ↔ 中文切换并记住选择；长段解释性文案暂保留中文）
 - [ ] 演示视频（60–90 秒：连接同花顺 → 看到净值曲线 → 导入微信账单 → 问 AI）
+
+### 演示视频分镜脚本（照此录制即可，60–75 秒）
+
+| 镜头 | 时长 | 画面 | 旁白/字幕 |
+|---|---|---|---|
+| 1 | 0–8s | 空账本 onboarding 三步 | "All your brokers, bills and cash — one local ledger." |
+| 2 | 8–20s | 授权弹窗：登录同花顺 → 账户自动出现 | "One login to THS Ledger (or Futu / Longbridge / IB). Positions sync automatically." |
+| 3 | 20–35s | 分析页：历史净值曲线 + 资产类别/行业/风格 | "See how your money actually moved — rebuilt from your own flows and historical prices." |
+| 4 | 35–50s | 导入微信账单 CSV → 分类 → 预算条 | "Import WeChat/Alipay statements. Spending is categorized and budgeted automatically." |
+| 5 | 50–65s | 资产助手：'把招商轮船的行业改成航运' → 待确认 → 应用 | "The AI reads and edits the same ledger — always preview before apply." |
+| 6 | 65–75s | 总览收尾：净值 + 今日提醒 | "Local-first. Encrypted. Your data never leaves this machine." |
 - [ ] 截图按上表补齐（浅色 + 深色各一套）
 - [x] 首次启动引导已验证（三步 onboarding，预览 fixture 验证）
 - [ ] 错误路径演示：同步失败、重复导入、授权失效的处理文案
