@@ -75,9 +75,9 @@ DSH 多账户、多资产、多币种账本。本地开发版 **0.9.0**：独立
 
 ### 且慢（盈米）
 
-- 盈米 / 且慢官方 MCP（Streamable HTTP）。到 [ai.yingmi.com](https://ai.yingmi.com) 用且慢账号免费申请 **API Key**（长期有效，无需刷新），在插件「数据源 → 且慢」填入即可连接；默认服务地址 `https://stargate.yingmi.com/mcp/v2`，也可改用 OAuth 端点的 Bearer Token（备用方式）。
-- 读取**四笔钱基金持仓**（份额、净值、成本、收益）与资产树，来源未给成本时按净值暂估并在警告中说明；账户官方总资产 / 当日盈亏存为来源总额。盈米宝等现金管理产品本身就是基金，按基金持仓导入，不生成现金行。
-- 且慢 MCP 只提供快照与收益分析工具，**没有逐笔交易流水**；历史记录请用账单文件补录。授权范围由开放平台的「账户与资产」能力决定。
+- 盈米 / 且慢官方 MCP（Streamable HTTP）。**账户与资产工具只对用户级 OAuth 授权开放**：点「浏览器授权」，用且慢账号登录并同意，插件通过动态注册 + PKCE + 本机回环拿到 access token 与 refresh token（长期，自动续期）并加密保存。API Key 只能调用基金研究类工具，读不到账户资产。
+- 读取**总账户与各子账户**（盈米宝 / 四笔钱）：总账户用四笔钱明细（`staticShare` 份额、`staticShareAsset` 市值、`holdingProfit` 收益 → 推导成本与净值），子账户从资产树按账户名汇总基金；子账户视图没有成本，按当前市值暂估并明确警告。官方总资产 / 当日盈亏存为来源总额。
+- 且慢 MCP 只提供快照与收益分析工具，**没有逐笔交易流水**；历史记录请用账单文件补录。
 
 官方文档：<https://qieman.com/mcp/mcp-market> 与 <https://yingmi.feishu.cn/docx/PRPRds5SBo2MITxHJL2cMPminEf>。
 
@@ -91,11 +91,12 @@ DSH 多账户、多资产、多币种账本。本地开发版 **0.9.0**：独立
 
 ### 复星证券（星财富）
 
-- 复星财富官方 OpenAPI。向复星开放平台申请**网关地址、API Key、客户端私钥与服务端公钥**（长期有效），在插件「数据源 → 复星证券」填入后连接。
-- 插件按官方协议工作：ECDH P-384 握手 + ECDSA 服务端签名校验建立会话，之后每个请求 HMAC-SHA256 签名并对请求/响应体做 AES-256-GCM 加解密；会话过期自动重建。
-- 读取交易账户列表、资金汇总（现金 / 总资产 / 持有盈亏）与分页持仓；历史记录走资金流水接口（入金 / 出金 / 股息 / 买卖等，未知业务保留原文并归为「其他」）。API Key 权限与网关由开放平台提供。
+- 复星财富官方 OpenAPI，网关默认 `https://openapi.fosunxcz.com`。凭证是**同一 ticket 的原子三元组**：API Key（`ak_` 开头，页面复制）、服务端公钥 PEM（同一页面复制）、本机生成的客户端私钥。三者必须来自同一次开通/重置流程，不能跨 ticket 混用。
+- 插件按官方协议工作：ECDH P-384 握手 + ECDSA 服务端签名校验建立会话，之后每个请求 HMAC-SHA256 签名并对请求/响应体做 AES-256-GCM 加解密；会话过期自动重建。协议与官方 `openapi-python-sdk` 1.2.0 的 `crypto.py` 一致。
+- 读取交易账户列表、资金汇总（现金 / 总资产 / 持有盈亏）与分页持仓；历史记录走资金流水接口（入金 / 出金 / 股息 / 买卖等，未知业务保留原文并归为「其他」）。
+- 注意：`fsk_` 等平台型 Key 不是 OpenAPI Key，无法用于此连接；需先在复星 OpenAPI 开通页完成授权。
 
-官方 SDK：<https://github.com/fosunwealth/openapi-python-sdk>。
+官方 SDK：<https://github.com/fosunwealth/openapi-python-sdk>；开通与凭证流程见官方 `fw-tradings` skill 的 `fosun-env-setup`。
 
 ### Interactive Brokers / IB
 

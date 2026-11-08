@@ -55,9 +55,11 @@ const PROFIT_FIELDS = ['holdingProfit', 'holding_profit', 'unrealizedPnl', 'unre
 const MARKET_BY_CODE = { US: 'US', HK: 'HK', CN: 'CN', SH: 'CN', SZ: 'CN', FUND: 'FUND' }
 const CURRENCY_BY_MARKET = { US: 'USD', HK: 'HKD', CN: 'CNY', FUND: 'CNY' }
 
+export const FOSUN_DEFAULT_GATEWAY = 'https://openapi.fosunxcz.com'
+
 function baseUrlOf(source) {
-  const raw = text(source?.gatewayUrl) || text(source?.config?.gatewayUrl)
-  if (!raw) fail('请填写复星 OpenAPI 网关地址（开放平台提供）')
+  // Official gateway from the Fosun OpenAPI onboarding (fw-tradings skill default).
+  const raw = text(source?.gatewayUrl) || text(source?.config?.gatewayUrl) || FOSUN_DEFAULT_GATEWAY
   let url
   try { url = new URL(raw) } catch { fail('复星 OpenAPI 网关地址须为有效的 https:// URL') }
   if (url.protocol !== 'https:') fail('复星 OpenAPI 网关须使用 HTTPS')

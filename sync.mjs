@@ -137,8 +137,8 @@ function authConfig(connector, transport, raw = {}) {
     return out
   }
   if (connector === 'fosun') {
-    const gatewayUrl = String(raw.gatewayUrl || '').trim()
-    if (gatewayUrl) out.gatewayUrl = endpoint(gatewayUrl).replace(/\/$/,'')
+    const gatewayUrl = String(raw.gatewayUrl || '').trim() || 'https://openapi.fosunxcz.com'
+    out.gatewayUrl = endpoint(gatewayUrl).replace(/\/$/,'')
     return out
   }
   if (connector === 'ib') {
@@ -514,8 +514,7 @@ export function createSyncService(ctx, options = {}) {
     if (connector === 'qieman' && !(secrets.apiKey || secrets.bearerToken)) throw bad('请填写且慢 MCP API Key（ai.yingmi.com 申请，长期有效）')
     if (connector === 'tiger' && !secrets.accessToken) throw bad('请先完成老虎浏览器设备码授权')
     if (connector === 'tiger' && !(secrets.refreshToken && secrets.clientId)) throw bad('老虎授权缺少 refresh token，请重新授权以获得长期登录')
-    if (connector === 'fosun' && !(secrets.apiKey && secrets.privateKey && secrets.serverPublicKey)) throw bad('请填写复星 API Key、客户端私钥与服务端公钥')
-    if (connector === 'fosun' && !authSettings.gatewayUrl) throw bad('请填写复星 OpenAPI 网关地址')
+    if (connector === 'fosun' && !(secrets.apiKey && secrets.privateKey && secrets.serverPublicKey)) throw bad('请填写复星 API Key（ak_ 开头）、客户端私钥与服务端公钥')
     if (existing && connector === 'ths') {
       const bound = config.read().filter(s => (s.authId || s.id) === id && s.connector === 'ths')
       if (bound.length) {
@@ -666,7 +665,7 @@ export function createSyncService(ctx, options = {}) {
         if (mcpEndpoint) source.mcpEndpoint = mcpEndpoint
       } else if (source.connector === 'fosun') {
         if (source.transport !== 'native') throw bad('复星 OpenAPI 为原生接入，不支持 MCP')
-        source.gatewayUrl = endpoint(input.gatewayUrl).replace(/\/$/,'')
+        source.gatewayUrl = endpoint(input.gatewayUrl || 'https://openapi.fosunxcz.com').replace(/\/$/,'')
       } else if (source.connector === 'futu') {
         if (source.transport === 'mcp') {
           // 富途官方 MCP：按授权账户（acc_id）导入，可选自定义端点（默认 mcp.futunn.com）。

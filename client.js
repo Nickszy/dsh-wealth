@@ -1604,7 +1604,7 @@ window.__ModuleLoader__.load({
         if (!auth && choice === 'longbridge' && form.lbInterface === 'mcp' && !credentials.mcpToken) throw new Error('请先在 open.longbridge.com/connect 生成授权码并点击兑换')
         if (!auth && choice === 'qieman' && !credentials.apiKey && !credentials.bearerToken && login?.status !== 'ready') throw new Error('请先完成且慢浏览器授权（账户与资产工具只对 OAuth 授权开放）')
         if (!auth && choice === 'tiger' && !credentials.accessToken) throw new Error('请先完成老虎设备码授权')
-        if (!auth && choice === 'fosun') { if (!form.gatewayUrl.trim()) throw new Error('请填写复星 OpenAPI 网关地址'); if (!(credentials.apiKey && credentials.privateKey && credentials.serverPublicKey)) throw new Error('请填写复星 API Key、客户端私钥与服务端公钥') }
+        if (!auth && choice === 'fosun' && !(credentials.apiKey && credentials.privateKey && credentials.serverPublicKey)) throw new Error('请填写复星 API Key（ak_ 开头）、客户端私钥与服务端公钥')
         const out = await requestAuth()
         if (!current()) return
         applyAuth(out)
@@ -1763,7 +1763,7 @@ window.__ModuleLoader__.load({
         longbridge: '官方 MCP 接入：在 open.longbridge.com/connect 生成一次性授权码，兑换后自动读取持仓、余额与流水；也可改用 OpenAPI 凭据（App Key / Secret / Access Token）。不需要其他 DSH 插件。',
         qieman: '盈米 / 且慢官方 MCP。点「浏览器授权」用且慢账号登录，插件通过官方 OAuth（动态注册 + PKCE + 本机回环）获取长期凭据并自动续期，读取总账户 / 子账户的基金持仓、资产与收益。且慢不提供逐笔流水，历史记录可用账单文件补录。',
         tiger: '老虎官方远程 MCP（mcp.tigerfintech.com）。点「设备码授权」后在浏览器登录老虎账户并选择授权账户；refresh token 长期有效并自动续期，插件读取账户、持仓、现金与最近成交。无需安装 OpenD。',
-        fosun: '复星证券 / 星财富官方 OpenAPI。向复星开放平台申请网关地址、API Key 与密钥对（长期有效），插件按官方 ECDH + 签名协议读取账户、持仓、现金与资金流水。',
+        fosun: '复星证券 / 星财富官方 OpenAPI（默认网关 openapi.fosunxcz.com）。在复星 OpenAPI 开通页完成授权后，填入页面的 API Key（ak_ 开头）与服务端公钥 PEM，再加本机生成的客户端私钥；插件按官方 ECDH + 签名 + AES-GCM 协议读取账户、持仓、现金与资金流水。',
         ib: '需先启动并登录官方 IB Client Portal Gateway。本插件使用其账户接口；本地自签名证书须明确勾选信任。',
         custom: '高级选项：连接标准化持仓快照接口或已有只读 MCP 工具。请勿将密钥写入 URL 或工具参数。',
       }
@@ -1846,8 +1846,8 @@ window.__ModuleLoader__.load({
             h('details', { style: { marginTop: 10, fontSize: 12, color: t.sub } }, h('summary', { style: { cursor: 'pointer' } }, '手动粘贴 Token（可选备用方式）'), h('div', { style: { marginTop: 10 } }, secret('Access Token', 'accessToken'), secret('Refresh Token', 'refreshToken'), secret('OAuth Client ID', 'clientId')))) : null,
           choice === 'fosun' ? h('div', { style: { marginTop: 18 } },
             h('div', { className: 'wealth-source-fields' },
-              field('OpenAPI 网关地址', 'gatewayUrl', { type: 'url', placeholder: 'https://开放平台提供的网关域名', autoComplete: 'off' }),
-              secret('API Key', 'apiKey')),
+              field('OpenAPI 网关地址（默认官方网关）', 'gatewayUrl', { type: 'url', placeholder: 'https://openapi.fosunxcz.com', autoComplete: 'off' }),
+              secret('API Key（ak_ 开头）', 'apiKey')),
             h('div', { style: { marginTop: 12 } }, secretArea('客户端私钥（PEM）', 'privateKey'), secretArea('服务端公钥（PEM）', 'serverPublicKey')),
             h('small', { style: { display: 'block', marginTop: 10, color: t.sub, fontSize: 11 } }, '复星开放平台提供的 API Key 与密钥对长期有效；插件按官方 ECDH 握手、请求签名与 AES-GCM 加密协议读取账户、持仓与资金流水。')) : null,
           choice === 'ib' ? h('div', { className: 'wealth-source-fields', style: { marginTop: 18 } }, field('Client Portal Gateway URL', 'gatewayUrl', { type: 'url' }), check('信任本机 Gateway 的自签名证书', 'trustLocalGateway')) : null,
