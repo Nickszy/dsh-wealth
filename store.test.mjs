@@ -330,6 +330,41 @@ test('bills.import archives batch flows with categories, dedupes and never guess
   assert.equal(load().historyEvents.length, 2)
 })
 
+test('instrument.merge repoints holdings across accounts and refuses same-account clashes', () => {
+  const db = fixture()
+  db.instruments.push(
+    { id: 'IA', symbol: '02549', name: 'CAROTE', market: 'HK', assetClass: 'stock', currency: 'HKD' },
+    { id: 'IB', symbol: '2549.HK', name: 'CAROTE LTD', market: 'HK', assetClass: 'stock', currency: 'HKD' })
+  db.holdings.push(
+    { id: 'H1', accountId: 'a', instrumentId: 'IA', qty: 4000, avgCost: 10, manualPrice: 12, currency: 'HKD' },
+    { id: 'H2', accountId: 'empty', instrumentId: 'IB', qty: 3500, avgCost: 9, currency: 'HKD' })
+  const result = applyOp(db, 'instrument.merge', { keepId: 'IA', dropId: 'IB' })
+  assert.equal(result.movedHoldings, 1)
+  assert.equal(db.instruments.length, 1)
+  assert.equal(db.holdings.find((h) => h.id === 'H2').instrumentId, 'IA')
+  assert.equal(db.holdings.length, 2)
+  // 同一账户已有同币种持仓：拒绝合并，避免数量被覆盖。
+  db.instruments.push({ id: 'IB2', symbol: '2549.HK', name: 'CAROTE LTD', market: 'HK', assetClass: 'stock', currency: 'HKD' })
+  db.holdings.push({ id: 'H3', accountId: 'a', instrumentId: 'IB2', qty: 1, currency: 'HKD' })
+  assert.throws(() => applyOp(db, 'instrument.merge', { keepId: 'IA', dropId: 'IB2' }), (e) => e.code === 'bad-request')
+})
+
+test('budget.set upserts per category, validates and deletes', () => {
+  const db = fixture()
+  const first = applyOp(db, 'budget.set', { category: 'food', monthly: 2000 })
+  assert.equal(first.budget.monthly, 2000)
+  const second = applyOp(db, 'budget.set', { category: 'food', monthly: 2500 })
+  assert.equal(second.budget.id, first.budget.id)
+  assert.equal(db.budgets.length, 1)
+  bad(db, 'budget.set', { category: 'grocery', monthly: 100 })
+  bad(db, 'budget.set', { category: 'food', monthly: -1 })
+  save(db)
+  assert.equal(load().budgets.length, 1)
+  const removed = applyOp(db, 'budget.set', { category: 'food', monthly: null })
+  assert.equal(removed.removed, true)
+  assert.equal(db.budgets.length, 0)
+})
+
 test('quotePrice fills valuation below manualPrice and suppresses cost-estimate warnings', () => {
   const db = fixture()
   const h = holding(db, { symbol: 'QQQ', manualPrice: null })

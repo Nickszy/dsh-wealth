@@ -313,9 +313,19 @@ window.__ModuleLoader__.load({
       const [fc, setFc] = React.useState(null), [fcErr, setFcErr] = React.useState('')
       const [perf, setPerf] = React.useState(null), [perfErr, setPerfErr] = React.useState('')
       const [bills, setBills] = React.useState(null), [billsErr, setBillsErr] = React.useState('')
+      const [inf, setInf] = React.useState(null)
       const [billPrev, setBillPrev] = React.useState(null), [billMsg, setBillMsg] = React.useState(''), [billAccount, setBillAccount] = React.useState(''), [billBusy, setBillBusy] = React.useState(false)
       const perfAccount = fixedAccounts && fixedAccounts.length === 1 ? fixedAccounts[0] : null
       const loadBills = () => fetch('/portfolio/api/bills?months=12', { headers: { accept: 'application/json' } }).then(r => r.json()).then(d => { if (d.ok) setBills(d); else setBillsErr(d.error?.message || '生活账单读取失败') }).catch(e => setBillsErr(e.message))
+      const saveBudget = async (category, monthly) => {
+        setBillBusy(true); setBillMsg('')
+        try {
+          const r = await fetch('/portfolio/api/op', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ op: 'budget.set', category, monthly }) })
+          const d = await r.json()
+          if (!r.ok || !d.ok) throw new Error((d.error && d.error.message) || '预算保存失败')
+          await loadBills()
+        } catch (err) { setBillMsg(err.message) } finally { setBillBusy(false) }
+      }
       const pickBillFile = async (e) => {
         const file = e.target.files && e.target.files[0]
         if (!file) return
@@ -350,6 +360,12 @@ window.__ModuleLoader__.load({
         if (!key) { setScoped(null); return }
         let live = true; setScopeErr('')
         fetch('/portfolio/api/analysis?accounts=' + encodeURIComponent(key), { headers: { accept: 'application/json' } }).then(r => r.json()).then(d => { if (!live) return; if (d.ok) setScoped(d.analysis); else setScopeErr(d.error?.message || '分析读取失败') }).catch(e => { if (live) setScopeErr(e.message) })
+        return () => { live = false }
+      }, [key, state.ledger.updatedAt])
+      // 推定入金：券商流水缺银证转账，用现金缺口给出下限估计（出金无法反推）。
+      React.useEffect(() => {
+        let live = true
+        fetch('/portfolio/api/inferred-flows?accounts=' + encodeURIComponent(key), { headers: { accept: 'application/json' } }).then(r => r.json()).then(d => { if (live && d.ok) setInf(d) }).catch(() => {})
         return () => { live = false }
       }, [key, state.ledger.updatedAt])
       // 预计收支按全账本推算（周期性流水是账户级事实，合并口径才有意义）。
@@ -446,8 +462,10 @@ window.__ModuleLoader__.load({
             row('累计入金', fmtMoney(f.totals && f.totals.externalIn) + ' ' + a.baseCurrency, t.text),
             row('累计出金', fmtMoney(f.totals && f.totals.externalOut) + ' ' + a.baseCurrency, t.text),
             row('净流入', fmtMoney(f.totals && f.totals.netExternal) + ' ' + a.baseCurrency, (f.totals && f.totals.netExternal) >= 0 ? t.green : t.red),
+            inf && inf.total > 0 ? row('推定入金（下限估算）', '+' + fmtMoney(inf.total) + ' ' + a.baseCurrency, t.terra) : null,
             row('分红 / 利息', fmtMoney(f.totals && f.totals.dividends) + ' / ' + fmtMoney(f.totals && f.totals.interest), t.green),
             row('费用 / 税费', fmtMoney(f.totals && f.totals.fees) + ' / ' + fmtMoney(f.totals && f.totals.taxes), t.red),
+            inf && inf.total > 0 ? h('div', { style: { fontSize: 10.5, color: t.sub, marginTop: 8, lineHeight: 1.6 } }, '推定入金按现金缺口估算（券商流水不含银证转账）；出金与转账时点无法反推，补录银行流水后更准确。') : null,
             f.unknownCashRows ? h('div', { style: { fontSize: 10.5, color: t.terra, marginTop: 8 } }, '⚠ ' + f.unknownCashRows + ' 条流水缺少金额，以上为下限估算') : null),
           h('section', { style: T.card(t), 'aria-label': '配置与集中度' },
             h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 10, gap: 8, flexWrap: 'wrap' } },
@@ -468,8 +486,8 @@ window.__ModuleLoader__.load({
           h('strong', { style: { fontSize: 15 } }, '年度现金流', h('span', { style: { fontWeight: 400, color: t.sub, fontSize: 11, marginLeft: 7 } }, '按年份汇总')),
           (f.byYear || []).length ? h('div', { style: { marginTop: 8, overflowX: 'auto' } },
             h('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: 12 } },
-              h('thead', null, h('tr', null, ['年份', '入金', '出金', '分红', '利息', '费用', '税费', '其他'].map((h2) => h('th', { key: h2, style: { textAlign: h2 === '年份' ? 'left' : 'right', padding: '6px 8px', color: t.sub, fontWeight: 500, borderBottom: '1px solid ' + t.border, whiteSpace: 'nowrap' } }, h2)))),
-              h('tbody', null, (f.byYear || []).map((y) => h('tr', { key: y.year }, [y.year, y.externalIn, y.externalOut, y.dividends, y.interest, y.fees, y.taxes, y.other].map((v, i) => h('td', { key: i, style: { textAlign: i ? 'right' : 'left', padding: '6px 8px', borderBottom: '1px solid ' + t.border, fontVariantNumeric: 'tabular-nums', color: i ? t.text : t.sub } }, i ? fmtMoney(v) : v))))))) : h('div', { style: { fontSize: 12, color: t.sub, marginTop: 8 } }, '还没有归档流水，导入历史后这里会按年份汇总。')),
+              h('thead', null, h('tr', null, ['年份', '入金', '出金', '买入', '卖出', '分红', '利息', '费用', '税费', '其他'].map((h2) => h('th', { key: h2, style: { textAlign: h2 === '年份' ? 'left' : 'right', padding: '6px 8px', color: t.sub, fontWeight: 500, borderBottom: '1px solid ' + t.border, whiteSpace: 'nowrap' } }, h2)))),
+              h('tbody', null, (f.byYear || []).map((y) => h('tr', { key: y.year }, [y.year, y.externalIn, y.externalOut, y.buy, y.sell, y.dividends, y.interest, y.fees, y.taxes, y.other].map((v, i) => h('td', { key: i, style: { textAlign: i ? 'right' : 'left', padding: '6px 8px', borderBottom: '1px solid ' + t.border, fontVariantNumeric: 'tabular-nums', color: i ? t.text : t.sub } }, i ? fmtMoney(v) : v))))))) : h('div', { style: { fontSize: 12, color: t.sub, marginTop: 8 } }, '还没有归档流水，导入历史后这里会按年份汇总。')),
         !fixedAccounts ? h('section', { style: { ...T.card(t), marginTop: 14 }, 'aria-label': '预计收支' },
           h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8, gap: 8, flexWrap: 'wrap' } },
             h('strong', { style: { fontSize: 15 } }, '预计收支', h('span', { style: { fontWeight: 400, color: t.sub, fontSize: 11, marginLeft: 7 } }, '未来 30 天 · 按周期性流水推算')),
@@ -502,7 +520,25 @@ window.__ModuleLoader__.load({
                   h('div', { style: { fontSize: 11, color: t.sub, marginBottom: 6 } }, '近 12 个月分类'),
                   bills.categories.map((c) => h('div', { key: c.category, style: { display: 'flex', justifyContent: 'space-between', gap: 8, padding: '5px 0', borderBottom: '1px solid ' + t.border, fontSize: 12.5 } },
                     h('span', null, c.label, h('small', { style: { color: t.sub, marginLeft: 6 } }, c.count + ' 笔')),
-                    h('strong', { style: { fontVariantNumeric: 'tabular-nums', color: t.text } }, fmtMoney(c.out) + (c.in ? ' / +' + fmtMoney(c.in) : ''))))),
+                    h('strong', { style: { fontVariantNumeric: 'tabular-nums', color: t.text } }, fmtMoney(c.out) + (c.in ? ' / +' + fmtMoney(c.in) : '')))),
+                  (bills.budgetStatus || []).length ? h('div', { style: { marginTop: 10 } },
+                    h('div', { style: { fontSize: 11, color: t.sub, marginBottom: 6 } }, '本月预算 · ' + bills.currentMonth),
+                    bills.budgetStatus.map((b2) => h('div', { key: b2.category, style: { marginBottom: 8 } },
+                      h('div', { style: { display: 'flex', justifyContent: 'space-between', fontSize: 11.5 } },
+                        h('span', null, b2.label, b2.over ? h('small', { style: { color: t.red, marginLeft: 6 } }, '超支') : null),
+                        h('span', { style: { color: b2.over ? t.red : t.sub, fontVariantNumeric: 'tabular-nums' } }, fmtMoney(b2.spent) + ' / ' + fmtMoney(b2.monthly))),
+                      h('div', { className: 'wealth-bar' }, h('i', { style: { width: Math.min(100, Math.max(0, b2.pct)) + '%', background: b2.over ? t.red : b2.pct >= 80 ? t.terra : undefined } }))))) : null,
+                  h('details', { style: { marginTop: 10, fontSize: 11.5 } },
+                    h('summary', { style: { cursor: 'pointer', color: t.sub } }, '设置月度预算'),
+                    h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 6, marginTop: 8 } },
+                      Object.entries(LIFE_CATEGORIES).map(([cat, label]) => {
+                        const current = (bills.budgetStatus || []).find((b2) => b2.category === cat)
+                        return h('label', { key: cat, style: { display: 'flex', gap: 6, alignItems: 'center' } },
+                          h('span', { style: { color: t.sub, minWidth: 52 } }, label),
+                          h('input', { type: 'number', min: 0, defaultValue: current ? String(current.monthly) : '', placeholder: '不限', disabled: billBusy,
+                            onBlur: (e) => { const v = e.target.value.trim(); if ((current ? String(current.monthly) : '') !== v) saveBudget(cat, v === '' ? null : Number(v)) },
+                            style: { ...T.input(t), width: 92 } }))
+                      })))),
                 h('div', null,
                   h('div', { style: { fontSize: 11, color: t.sub, marginBottom: 6 } }, '按月'),
                   h('div', { style: { overflowX: 'auto' } }, h('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: 11.5 } },

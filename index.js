@@ -12,6 +12,7 @@ import { billSummary } from './bills.mjs'
 import { parseBillCsv, billPreview } from './bills-import.mjs'
 import { buildDigest } from './digest.mjs'
 import { computePerformance } from './performance.mjs'
+import { inferredTransfers } from './timeline.mjs'
 import { previewImport } from './importer.mjs'
 import { modelInfo, chatTurn, applyChatOps } from './chat.mjs'
 import { createSyncService } from './sync.mjs'
@@ -190,6 +191,12 @@ export function apply(ctx, config = {}) {
           const result = applyOp(db, 'bills.import', { accountId: body.accountId, rows: parsed.rows, provider: parsed.provider })
           if (result.imported) save(db)
           send(res, 200, { ok: true, ...result, summary: summarize(db) })
+          return
+        }
+        if (path === 'api/inferred-flows') {
+          if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
+          const ids = String(url.searchParams.get('accounts') || '').split(',').map((s) => s.trim()).filter(Boolean)
+          send(res, 200, { ok: true, ...inferredTransfers(load(), { accountIds: ids }) })
           return
         }
         if (path === 'api/performance') {

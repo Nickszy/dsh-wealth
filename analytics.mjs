@@ -69,9 +69,11 @@ function flowRows(db) {
   for (const t of db.trades || []) {
     const side = String(t.side || '').toLowerCase()
     if (side !== 'buy' && side !== 'sell') continue
+    const gross = Number(t.qty) * Number(t.price)
     rows.push({
       date: String(t.date || ''), kind: side, currency: t.currency || null, accountId: t.accountId || null,
-      cashAmount: null, fee: typeof t.fee === 'number' && Number.isFinite(t.fee) ? t.fee : null, batchId: null,
+      cashAmount: null, gross: Number.isFinite(gross) && gross > 0 ? gross : null,
+      fee: typeof t.fee === 'number' && Number.isFinite(t.fee) ? t.fee : null, batchId: null,
     })
   }
   return rows.filter((r) => r.date)
@@ -88,10 +90,13 @@ export function flowSummary(rows) {
     if (r.cashAmount == null) { agg.unknownCash++; unknownCash++ } else agg.cash += r.cashAmount
     byKind.set(r.kind, agg)
     const year = r.date.slice(0, 4)
-    const bucket = byYear.get(year) || { year, externalIn: 0, externalOut: 0, dividends: 0, interest: 0, fees: 0, taxes: 0, other: 0 }
-    const amount = r.cashAmount == null ? 0 : Math.abs(r.cashAmount)
+    const bucket = byYear.get(year) || { year, externalIn: 0, externalOut: 0, buy: 0, sell: 0, dividends: 0, interest: 0, fees: 0, taxes: 0, other: 0 }
+    // 买卖成交没有现金字段时用成交额（gross），否则「其他」会把整年的交易都吞掉。
+    const amount = r.cashAmount != null ? Math.abs(r.cashAmount) : ['buy', 'sell'].includes(r.kind) ? (r.gross || 0) : 0
     if (r.kind === 'deposit') { bucket.externalIn += amount; totals.externalIn += amount }
     else if (r.kind === 'withdrawal') { bucket.externalOut += amount; totals.externalOut += amount }
+    else if (r.kind === 'buy') bucket.buy += amount
+    else if (r.kind === 'sell') bucket.sell += amount
     else if (r.kind === 'dividend') { bucket.dividends += amount; totals.dividends += amount }
     else if (r.kind === 'interest') { bucket.interest += amount; totals.interest += amount }
     else if (r.kind === 'fee') { bucket.fees += amount; totals.fees += amount }

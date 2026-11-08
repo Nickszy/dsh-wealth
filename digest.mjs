@@ -31,6 +31,8 @@ export function buildDigest(db, { today = new Date(), horizonDays = 7 } = {}) {
     .flatMap((s) => (s.dueDates || []).filter((d) => d >= todayISO && d <= horizonEnd).map((d) => ({ date: d, label: s.label, amountBase: s.medianAmountBase, inflow: s.inflow })))
     .sort((a, b) => a.date.localeCompare(b.date) || a.label.localeCompare(b.label))
   const bills = billSummary(db, { months: 1, today: todayISO })
+  const overBudget = (bills.budgetStatus || []).filter((b) => b.over)
+  const nearBudget = (bills.budgetStatus || []).filter((b) => !b.over && b.pct >= 80)
   const quality = {
     priceWarnings: (summary.warnings || []).length,
     excluded: summary.excludedCount || 0,
@@ -43,6 +45,8 @@ export function buildDigest(db, { today = new Date(), horizonDays = 7 } = {}) {
   if (dueOut.length) lines.push(horizonDays + ' 天内预计支出 ' + fmt(dueOut.reduce((s, u) => s + Math.abs(u.amountBase), 0)) + ' ' + base + '：' + dueOut.map((u) => u.label + ' ' + u.date.slice(5) + ' ' + fmt(Math.abs(u.amountBase))).join('、'))
   else lines.push(horizonDays + ' 天内没有识别到周期性支出')
   if (bills.totals.count) lines.push('本月生活账单支出 ' + fmt(bills.totals.out) + '、收入 ' + fmt(bills.totals.in) + '，共 ' + bills.totals.count + ' 笔')
+  if (overBudget.length) lines.push('预算超支：' + overBudget.map((b) => b.label + ' ' + fmt(b.spent) + ' / ' + fmt(b.monthly)).join('、'))
+  else if (nearBudget.length) lines.push('接近预算：' + nearBudget.map((b) => b.label + ' 已用 ' + b.pct + '%').join('、'))
   if (quality.uncategorized) lines.push('还有 ' + quality.uncategorized + ' 笔生活流水未归类')
   if (quality.priceWarnings || quality.excluded) lines.push('数据提示：' + quality.priceWarnings + ' 项价格或汇率需要核对' + (quality.excluded ? '，' + quality.excluded + ' 条持仓暂未计入' : ''))
   return {
@@ -50,6 +54,7 @@ export function buildDigest(db, { today = new Date(), horizonDays = 7 } = {}) {
     netWorth, totalValue: summary.totalValueBase, snapshotChange,
     upcoming,
     bills: { out: bills.totals.out, in: bills.totals.in, net: bills.totals.net, count: bills.totals.count, uncategorized: bills.uncategorized },
+    budgets: bills.budgetStatus || [],
     quality, lines,
     text: lines.join('；') + '。',
   }

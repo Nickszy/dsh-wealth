@@ -4,6 +4,10 @@ import { billSummary } from './bills.mjs'
 
 const ledger = () => ({
   baseCurrency: 'CNY', fx: { CNY: 1, HKD: 0.92 },
+  budgets: [
+    { id: 'B1', category: 'food', monthly: 100 },
+    { id: 'B2', category: 'housing', monthly: 2000 },
+  ],
   historyEvents: [
     { id: '1', kind: 'withdrawal', date: '2026-11-03', cashAmount: -86, currency: 'CNY', category: 'food', note: '午餐' },
     { id: '2', kind: 'withdrawal', date: '2026-11-05', cashAmount: -3000, currency: 'CNY', category: 'housing', note: '房租' },
@@ -29,6 +33,13 @@ test('billSummary aggregates months and categories in base currency', () => {
   const food = summary.categories.find((c) => c.category === 'food')
   assert.deepEqual([food.out, food.in, food.count], [86, 30, 2])
   assert.equal(summary.categories[0].category, 'housing')
+  // 本月预算执行：住房 3000/2000 超支，餐饮 86/100 未超。
+  assert.equal(summary.currentMonth, '2026-11')
+  assert.deepEqual(summary.budgetStatus.map((b) => [b.category, b.spent, b.monthly, b.over]), [
+    ['housing', 3000, 2000, true],
+    ['food', 86, 100, false],
+  ])
+  assert.equal(summary.budgetStatus[1].remaining, 14)
   assert.ok(summary.warnings.includes('BILLS_MISSING_FX:1'))
   assert.ok(summary.warnings.includes('BILLS_UNCATEGORIZED:1'))
 })

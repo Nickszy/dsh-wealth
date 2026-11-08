@@ -1,4 +1,5 @@
 // Native adapters and pure snapshot validation. No credentials, network, or storage here.
+import { normalizeSymbol } from './symbols.mjs'
 const CLASSES = new Set(['stock', 'fund', 'etf', 'cash', 'bond', 'crypto', 'other'])
 const SAFE_PARTIAL = new Set(['NAME_LOOKUP_UNAVAILABLE', 'UPLOAD_TIME_UNAVAILABLE', 'QUOTE_DATE_UNAVAILABLE', 'QUOTE_TIME_UNAVAILABLE'])
 const fail = (message) => { throw new Error(message) }
@@ -28,10 +29,13 @@ function date(value, field, nullable = false) {
   return v
 }
 function identity(row, field) {
+  // 统一交易代码：各券商对港股/美股的写法不同（2549.HK、HK.02549、02549），
+  // 入库前收敛为一种，保证同一只证券只有一条身份、只查一份历史行情。
+  const normalized = normalizeSymbol(text(row.symbol, `${field}.symbol`), text(row.market, `${field}.market`))
   const result = {
-    symbol: text(row.symbol, `${field}.symbol`),
+    symbol: normalized.symbol,
     name: text(row.name, `${field}.name`),
-    market: text(row.market, `${field}.market`).toUpperCase(),
+    market: normalized.market,
     assetClass: text(row.assetClass, `${field}.assetClass`).toLowerCase(),
     currency: text(row.currency, `${field}.currency`).toUpperCase(),
   }

@@ -12,6 +12,8 @@ import { forecast } from './forecast.mjs'
 import { billSummary } from './bills.mjs'
 import { parseBillCsv, billPreview } from './bills-import.mjs'
 import { buildDigest } from './digest.mjs'
+import { inferredTransfers } from './timeline.mjs'
+import { normalizeSymbol, identityKey, resolveSecurity } from './symbols.mjs'
 import { computePerformance } from './performance.mjs'
 
 function out(obj, code = 0) {
@@ -33,6 +35,7 @@ function help() {
       'node cli.mjs bills [months]                 # life-bill summary by category and month (default 12)',
       'node cli.mjs bills-import <accountId> <csv> [apply=1]  # preview (default) or import WeChat/Alipay bill CSV',
       'node cli.mjs digest [days]                  # daily summary: net worth, upcoming bills, data notes (default 7)',
+      'node cli.mjs inferred-flows [accountId]     # lower-bound estimate of unrecorded external transfers',
       'node cli.mjs forecast [days]                # recurring flows + projected out/in for next N days (default 30)',
       'node cli.mjs performance [accountId] [days] # backfilled daily NAV from flows + historical prices (default 1095)',
       'node cli.mjs export [file]                  # write the whole ledger JSON to a file',
@@ -47,6 +50,7 @@ function help() {
       '  node cli.mjs instrument.upsert instrumentId=INS_xxx sector=白酒 style=value',
       '  node cli.mjs price.set instrumentId=INS_xxx price=1650',
       '  node cli.mjs fx.set currency=HKD rate=0.92',
+      '  node cli.mjs budget.set category=food monthly=2000',
     ],
     ops: {
       'account.upsert': '{op, account:{id?,name,type?,currency?,note?,type credit=负债}}',
@@ -127,6 +131,57 @@ else if (arg[0] === 'state') {
   const limit = Number(arg[2]) || 200
   const events = (db.historyEvents || []).filter((e) => !accountId || e.accountId === accountId).slice(-limit)
   out({ ok: true, count: events.length, events })
+} else if (arg[0] === 'instrument.merge') {
+  // 合并重复标的：node cli.mjs instrument.merge keepId=INS_A dropId=INS_B
+  const req = parseRequest(['instrument.merge', ...arg.slice(1)])
+  const db = load()
+  try {
+    const result = applyOp(db, 'instrument.merge', req.payload)
+    save(db)
+    out({ ok: true, ...result, summary: summarize(db) })
+  } catch (error) {
+    out({ ok: false, error: { code: error.code || 'internal', message: error.message } }, 1)
+  }
+} else if (arg[0] === 'symbol.resolve') {
+  // 外部查询：把名称或旧写法解析成统一交易代码（东财公开搜索）。
+  try {
+    out({ ok: true, query: arg.slice(1).join(' '), resolved: await resolveSecurity(arg.slice(1).join(' ')) })
+  } catch (error) {
+    out({ ok: false, error: { code: 'lookup-failed', message: error.message } }, 1)
+  }
+} else if (arg[0] === 'instruments.normalize') {
+  // 把历史导入的旧代码收敛到统一写法；重复身份（同一只证券多条记录）只报告不合并。
+  const apply = arg.includes('apply=1')
+  const db = load()
+  const groups = new Map()
+  for (const ins of db.instruments) {
+    const key = identityKey(ins)
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key).push(ins)
+  }
+  const planned = []
+  const collisions = []
+  for (const [key, list] of groups) {
+    if (list.length > 1) {
+      collisions.push({ key, instruments: list.map((i) => ({ id: i.id, symbol: i.symbol, market: i.market, name: i.name, holdings: db.holdings.filter((h) => h.instrumentId === i.id).length })) })
+    }
+    for (const ins of list) {
+      const normalized = normalizeSymbol(ins.symbol, ins.market)
+      if (normalized.symbol !== ins.symbol) planned.push({ id: ins.id, from: ins.market + '|' + ins.symbol, to: normalized.market + '|' + normalized.symbol, name: ins.name })
+    }
+  }
+  if (!apply) { out({ ok: true, applied: false, planned, collisions }) }
+  else {
+    const renamed = []
+    for (const item of planned) {
+      try { applyOp(db, 'instrument.rename', { id: item.id, symbol: item.to.split('|')[1] }); renamed.push(item) }
+      catch (error) { renamed.push({ ...item, error: error.message }) }
+    }
+    if (renamed.some((r) => !r.error)) save(db)
+    out({ ok: true, applied: true, renamed, collisions })
+  }
+} else if (arg[0] === 'inferred-flows') {
+  out({ ok: true, ...inferredTransfers(load(), { accountIds: arg[1] ? [arg[1]] : [] }) })
 } else if (arg[0] === 'digest') {
   const horizonDays = Math.min(30, Math.max(1, Number(arg[1]) || 7))
   out({ ok: true, ...buildDigest(load(), { horizonDays }) })

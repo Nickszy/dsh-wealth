@@ -105,6 +105,47 @@ export function cashEvents(db, { accountId } = {}) {
   return rows.sort((a, b) => String(a.date).localeCompare(String(b.date)))
 }
 
+/**
+ * 推定入金（下限）：证券流水不含银证转账，现金逆推转负时，缺口必然来自未记录的外部转入。
+ * 按缺口首次出现的时点归月，累计为下限估计；出金无法以此推断（出金只会减少现金，与消费/买入不可区分）。
+ */
+export function inferredTransfers(db, { accountIds } = {}) {
+  const ids = [...new Set((accountIds || []).map(String).filter(Boolean))]
+  const timelines = ids.length
+    ? ids.map((id) => reconstructTimeline(db, { accountId: id }))
+    : [reconstructTimeline(db)]
+  const timeline = timelines.length > 1 ? mergeTimelines(timelines) : timelines[0]
+  const base = db.baseCurrency || 'CNY'
+  const fx = { ...(db.fx || {}), [base]: 1 }
+  const byMonth = new Map()
+  let total = 0, previousShortfall = 0
+  for (const state of timeline.states || []) {
+    let cash = 0, missing = false
+    for (const [currency, amount] of Object.entries(state.cash || {})) {
+      const rate = fx[currency]
+      if (typeof rate !== 'number' || !Number.isFinite(rate) || rate <= 0) { missing = true; continue }
+      cash += amount * rate
+    }
+    if (missing) continue
+    const shortfall = Math.max(0, -cash)
+    const delta = shortfall - previousShortfall
+    previousShortfall = shortfall
+    if (delta > 0.01) {
+      const month = String(state.date).slice(0, 7)
+      byMonth.set(month, (byMonth.get(month) || 0) + delta)
+      total += delta
+    }
+  }
+  const round2 = (n) => Number(n.toFixed(2))
+  return {
+    baseCurrency: base,
+    total: round2(total),
+    byMonth: [...byMonth.entries()].map(([month, amount]) => ({ month, amount: round2(amount) })).sort((a, b) => a.month.localeCompare(b.month)),
+    coverage: { from: timeline.from, to: timeline.to, events: (timeline.events || []).length },
+    note: '推定入金为下限估计：券商流水不含银证转账，现金缺口只能说明确有外部转入；出金与转账日期无法反推，补录银行流水后更准确。',
+  }
+}
+
 /** 合并多个账户的时间线：按日期对齐后相加，用于组合视图。 */
 export function mergeTimelines(list) {
   const live = (list || []).filter((t) => t && Array.isArray(t.states) && t.states.length)

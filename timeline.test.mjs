@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { positionEvents, reconstructTimeline, mergeTimelines } from './timeline.mjs'
+import { positionEvents, reconstructTimeline, mergeTimelines, inferredTransfers } from './timeline.mjs'
 
 const ledger = () => ({
   version: 1, baseCurrency: 'CNY', fx: { CNY: 1 },
@@ -69,6 +69,34 @@ test('reconstructTimeline flags untracked holdings and negative cash honestly', 
   locked.trades = []
   const t2 = reconstructTimeline(locked, { accountId: 'A' })
   assert.ok(t2.warnings.some(w => w.startsWith('TIMELINE_NO_TRADE_HISTORY:1')))
+})
+
+test('inferredTransfers estimates unrecorded deposits from negative cash gaps', () => {
+  const db = ledger()
+  db.holdings = [{ id: 'H2', accountId: 'A', instrumentId: 'CASH', qty: 0, currency: 'CNY' }]
+  db.trades = []
+  db.historyEvents = [
+    { id: 'W1', accountId: 'A', kind: 'withdrawal', date: '2026-01-05', cashAmount: -2000, currency: 'CNY' },
+    { id: 'D1', accountId: 'A', kind: 'deposit', date: '2026-03-01', cashAmount: 2000, currency: 'CNY' },
+  ]
+  const inf = inferredTransfers(db, { accountIds: ['A'] })
+  // 1 月出金时现金缺口 2000：这笔钱只能来自未记录的外部转入（下限估计）。
+  assert.equal(inf.total, 2000)
+  assert.deepEqual(inf.byMonth, [{ month: '2026-01', amount: 2000 }])
+  assert.match(inf.note, /银证转账/)
+})
+
+test('inferredTransfers reports zero when recorded flows explain all cash', () => {
+  const db = ledger()
+  db.holdings = [{ id: 'H2', accountId: 'A', instrumentId: 'CASH', qty: 1000, currency: 'CNY' }]
+  db.trades = []
+  db.historyEvents = [
+    { id: 'D1', accountId: 'A', kind: 'deposit', date: '2026-01-05', cashAmount: 2000, currency: 'CNY' },
+    { id: 'W1', accountId: 'A', kind: 'withdrawal', date: '2026-02-05', cashAmount: -1000, currency: 'CNY' },
+  ]
+  const inf = inferredTransfers(db, { accountIds: ['A'] })
+  assert.equal(inf.total, 0)
+  assert.deepEqual(inf.byMonth, [])
 })
 
 test('mergeTimelines aligns dates and sums positions and cash across accounts', () => {

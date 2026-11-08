@@ -4,7 +4,8 @@ import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync, copyFil
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
-import { isFlowKind, KIND_NAMES, normalizeStyle, isLifeCategory, LIFE_CATEGORIES } from './model.mjs'
+import { isFlowKind, KIND_NAMES, normalizeStyle, isLifeCategory, LIFE_CATEGORIES, canonicalMarket } from './model.mjs'
+import { normalizeSymbol } from './symbols.mjs'
 
 export const DATA_DIR = process.env.DSH_PORTFOLIO_DIR || join(homedir(), '.dsh', 'data', 'dsh-portfolio')
 export const DATA_FILE = join(DATA_DIR, 'ledger.json')
@@ -19,6 +20,7 @@ const EMPTY = () => ({
   trades: [],
   historyEvents: [],
   historyBatches: [],
+  budgets: [],
   snapshots: [],
   updatedAt: null,
 })
@@ -113,8 +115,12 @@ function resolveInstrument(db, ref, { create = true } = {}) {
     if (!got) throw new OpError('not-found', '标的不存在: ' + ref.instrumentId)
     return got
   }
-  const symbol = String(ref.symbol || '').trim()
-  if (!symbol) throw new OpError('bad-request', '缺少标的代码 symbol')
+  const rawSymbol = String(ref.symbol || '').trim()
+  if (!rawSymbol) throw new OpError('bad-request', '缺少标的代码 symbol')
+  // 统一交易代码：同一只证券在各来源的写法（2549.HK / HK.02549 / 02549）收敛为一种，
+  // 否则历史行情与估值会按不同身份各查一次，产生重复持仓。
+  const normalized = normalizeSymbol(rawSymbol, ref.market || '')
+  const symbol = normalized.symbol || rawSymbol
   const market = String(ref.market || '').trim().toUpperCase()
   const existing = db.instruments.find((i) => i.symbol === symbol && (market === '' || i.market === market))
   if (existing) return existing
@@ -123,7 +129,7 @@ function resolveInstrument(db, ref, { create = true } = {}) {
     id: uid('INS'),
     symbol,
     name: String(ref.name || symbol).trim(),
-    market: market || 'CN',
+    market: canonicalMarket(market || 'CN'),
     assetClass: assetClass(ref.assetClass || guessAssetClass(symbol)),
     currency: normCurrency(ref.currency, defaultCurrencyOfMarket(market)),
     note: String(ref.note || ''),
@@ -394,6 +400,62 @@ export function applyOp(db, op, payload = {}) {
       if (p.note !== undefined) event.note = String(p.note || '')
       event.updatedAt = nowISO()
       return { event }
+    }
+
+    // 重写标的代码：用于把历史导入的旧写法（2549.HK）收敛到统一代码（02549）。
+    case 'instrument.rename': {
+      const p = payload
+      const instrument = findInstrument(db, String(p.id || ''))
+      if (!instrument) throw new OpError('not-found', '标的不存在: ' + p.id)
+      const symbol = p.symbol !== undefined ? normalizeSymbol(String(p.symbol), p.market || instrument.market).symbol : instrument.symbol
+      const market = p.market !== undefined ? canonicalMarket(String(p.market)) : instrument.market
+      if (!symbol) throw new OpError('bad-request', '缺少标的代码 symbol')
+      if (db.instruments.some((i) => i.id !== instrument.id && i.symbol === symbol && i.market === market)) {
+        throw new OpError('bad-request', '统一代码冲突：已存在 ' + market + '|' + symbol)
+      }
+      instrument.symbol = symbol
+      instrument.market = market
+      if (p.name !== undefined && p.name !== null) instrument.name = String(p.name)
+      return { instrument }
+    }
+
+    // 合并同一只证券的重复标的记录：把 dropId 的持仓改挂到 keepId 后删除 dropId。
+    // 同一账户下已有同币种持仓时拒绝（可能重复导入，需人工核对），避免数量被覆盖。
+    case 'instrument.merge': {
+      const p = payload
+      const keep = findInstrument(db, String(p.keepId || ''))
+      const drop = findInstrument(db, String(p.dropId || ''))
+      if (!keep || !drop) throw new OpError('not-found', '标的不存在')
+      if (keep.id === drop.id) throw new OpError('bad-request', 'keepId 与 dropId 不能相同')
+      const moved = db.holdings.filter((h) => h.instrumentId === drop.id)
+      for (const holding of moved) {
+        const clash = db.holdings.find((h) => h.accountId === holding.accountId && h.instrumentId === keep.id && h.currency === holding.currency)
+        if (clash) throw new OpError('bad-request', '账户「' + holding.accountId + '」同时持有两个重复标的，请先人工核对再合并')
+      }
+      for (const holding of moved) holding.instrumentId = keep.id
+      db.instruments = db.instruments.filter((i) => i.id !== drop.id)
+      if (!keep.name && drop.name) keep.name = drop.name
+      if (!keep.sector && drop.sector) keep.sector = drop.sector
+      if (!keep.style && drop.style) keep.style = drop.style
+      return { instrument: keep, movedHoldings: moved.length, removed: drop.id }
+    }
+
+    // 月度生活预算：每个分类一条；monthly 为 null 表示删除该分类预算。
+    case 'budget.set': {
+      const p = payload
+      const category = String(p.category || '').trim()
+      if (!isLifeCategory(category)) throw new OpError('bad-request', '未知的生活账单分类: ' + category + '（可用: ' + Object.keys(LIFE_CATEGORIES).join('/') + '）')
+      db.budgets ||= []
+      const index = db.budgets.findIndex((b) => b.category === category)
+      if (p.monthly === null || p.monthly === undefined || p.monthly === '') {
+        if (index >= 0) db.budgets.splice(index, 1)
+        return { removed: true, category }
+      }
+      const monthly = numeric(p.monthly, 'monthly', { positive: true })
+      const budget = { id: db.budgets[index]?.id || uid('BUD'), category, monthly, updatedAt: nowISO() }
+      if (index >= 0) db.budgets[index] = budget
+      else db.budgets.push(budget)
+      return { budget }
     }
 
     // 批量归档微信 / 支付宝账单：一文件一批次，按 externalId 去重，未识别行如实计数。

@@ -72,10 +72,26 @@ export function billSummary(db, { months = 12, today } = {}) {
   const warnings = []
   if (missingFx) warnings.push('BILLS_MISSING_FX:' + missingFx)
   if (uncategorized) warnings.push('BILLS_UNCATEGORIZED:' + uncategorized)
+  // 预算执行：按当前月（today 所在月）已发生的支出对比月度预算。
+  const currentMonth = monthOf(end)
+  const currentBucket = byMonth.get(currentMonth)
+  const budgetStatus = (db.budgets || [])
+    .filter((b) => b && LIFE_CATEGORIES[b.category] && Number.isFinite(b.monthly) && b.monthly > 0)
+    .map((b) => {
+      const spent = currentBucket?.byCategory.get(b.category)?.out || 0
+      return {
+        category: b.category, label: lifeCategoryLabel(b.category),
+        monthly: round2(b.monthly), spent: round2(spent), remaining: round2(b.monthly - spent),
+        pct: Number((spent / b.monthly * 100).toFixed(1)), over: spent > b.monthly + 0.005,
+      }
+    })
+    .sort((a, b) => b.pct - a.pct)
   return {
     baseCurrency: base,
     window: { from: window[0], to: window[window.length - 1], months: window.length },
+    currentMonth,
     months: monthsOut,
+    budgetStatus,
     totals: { out: round2(totalOut), in: round2(totalIn), net: round2(totalIn - totalOut), count: monthsOut.reduce((s, m) => s + m.count, 0) },
     categories: [...byCategory.values()].filter((c) => c.count).map((c) => ({ ...c, out: round2(c.out), in: round2(c.in) })).sort((a, b2) => b2.out - a.out),
     uncategorized,
