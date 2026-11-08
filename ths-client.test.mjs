@@ -62,20 +62,20 @@ test('rejects unsupported currency, debt and duplicate securities; short rows sk
   assert.ok(skipped.warnings.some(v => v.startsWith('THS_POSITION_SKIPPED:NEGATIVE_QTY')))
 })
 
-test('HK connect rows and negative diluted cost are handled per row, not per book', async () => {
+test('HK connect rows import as HKD and negative diluted cost is kept', async () => {
   const f = fixture()
   f.position.push({ code: '01164', market: '15', name: '中广核矿', count: '5000', cost: '-2.6035', price: '2.09', value: '8882.5', hold_profit: '10', pre_profit: '1' })
   f.position.push({ code: '501018', market: '2', name: '南方原油', count: '34', cost: '-28.6260', price: '2.062', value: '70.108', hold_profit: '5', pre_profit: '0.5' })
   const result = await fetchStandaloneThsSnapshot(source, secrets, undefined, deps(f))
-  // 港股通行被跳过并标记不完整；负摊薄成本的沪深基金照常导入。
-  assert.equal(result.complete, false)
-  assert.ok(result.warnings.some(v => v.startsWith('THS_POSITION_SKIPPED:UNSUPPORTED_MARKET:15:01164')))
+  // 港股行的最新价/成本价是港币：按 HKD 原样导入；value 列是来源折算的人民币，不逐行对账。
+  const hk = result.holdings.find(row => row.symbol === '01164')
+  assert.deepEqual([hk.market, hk.currency, hk.assetClass, hk.qty, hk.avgCost, hk.manualPrice], ['HK', 'HKD', 'stock', 5000, -2.6035, 2.09])
+  assert.ok(!result.warnings.some(v => v.includes('01164')))
   const oil = result.holdings.find(row => row.symbol === '501018')
   assert.equal(oil.avgCost, -28.626)
   assert.equal(oil.currency, 'CNY')
-  // 原有持仓 + 负摊薄成本行 + 现金行；港股通行不在其中。
-  assert.equal(result.holdings.length, 3)
-  assert.ok(result.holdings.every(row => row.symbol !== '01164'))
+  // 原有持仓 + 港股通行 + 负摊薄成本行 + 现金行。
+  assert.equal(result.holdings.length, 4)
 })
 test('403 is not auth expiry; redirects never follow; errors contain no secrets', async () => {
   for (const status of [302, 401, 403, 500]) {

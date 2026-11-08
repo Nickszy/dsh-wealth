@@ -135,8 +135,11 @@ export async function fetchStandaloneThsSnapshot(source, secrets, signal, deps =
   for (const raw of data.position) {
     const row = record(raw), symbol = scalar(row.code), market = scalar(row.market)
     const skip = warning => { complete = false; warnings.push(warning) }
-    if (!(market === '1' ? /^[013]\d{5}$/.test(symbol) : market === '2' && /^[56]\d{5}$/.test(symbol))) {
-      // 港股通（market 15）等暂不支持的品种：跳过该行并标记不完整，整本账本仍然可用。
+    // 港股通（market 15，5 位港股代码）：最新价与成本价是港币（A股行 value=数量×价格，
+    // 港股行 value=数量×价格×汇率，即折算后的人民币），统一按港股 HKD 导入；value 列
+    // 与 qty×price 不同币种，不参与逐行对账，人民币估值交给账本的 HKD 汇率。
+    const hkConnect = market === '15' && /^\d{4,5}$/.test(symbol)
+    if (!hkConnect && !(market === '1' ? /^[013]\d{5}$/.test(symbol) : market === '2' && /^[56]\d{5}$/.test(symbol))) {
       skip('THS_POSITION_SKIPPED:UNSUPPORTED_MARKET:' + market + ':' + symbol)
       continue
     }
@@ -152,8 +155,13 @@ export async function fetchStandaloneThsSnapshot(source, secrets, signal, deps =
     dayProfit = dayProfit === null || dp === null ? null : dayProfit + dp
     if (qty === null || avgCost === null) { missing('MISSING_POSITION_FIELDS:' + key); continue }
     if (manualPrice === null || value === null) missing('MISSING_POSITION_VALUE:' + key)
-    if (value !== null && manualPrice !== null && Math.abs(qty * manualPrice - value) > 0.011) missing('POSITION_VALUE_MISMATCH:' + key)
-    holdings.push({ symbol, name: scalar(row.name).trim() || symbol, market: 'CN', assetClass: /^(?:5[168]|15)/.test(symbol) ? 'etf' : 'stock', currency: 'CNY', qty, avgCost, manualPrice, externalId: key })
+    else if (!hkConnect && Math.abs(qty * manualPrice - value) > 0.011) missing('POSITION_VALUE_MISMATCH:' + key)
+    holdings.push({
+      symbol, name: scalar(row.name).trim() || symbol, market: hkConnect ? 'HK' : 'CN',
+      assetClass: hkConnect || !/^(?:5[168]|15)/.test(symbol) ? 'stock' : 'etf',
+      currency: hkConnect ? 'HKD' : 'CNY',
+      qty, avgCost, manualPrice, externalId: key,
+    })
   }
   sourceTotals.holdingProfit = holdingProfit; sourceTotals.dayProfit = dayProfit
   if (sourceTotals.cash !== null) holdings.push({ symbol: 'CASH:CNY', name: '人民币现金', market: 'CASH', assetClass: 'cash', currency: 'CNY', qty: sourceTotals.cash, avgCost: 1, manualPrice: 1, externalId: 'cash:CNY' })
