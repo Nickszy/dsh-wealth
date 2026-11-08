@@ -591,7 +591,8 @@ window.__ModuleLoader__.load({
               [...new Set(['CNY', 'HKD', 'USD', ...Object.keys(db.fx)])].map((c) => h('option', { key: c, value: c }, c)))),
             h('button', { style: T.btn(t, false), disabled: busy, onClick: () => call('base.set', { currency: baseSel }) }, '设为本位币'),
             h('div', { style: { width: 1, height: 28, background: t.border } }),
-            h('div', null, h('label', { style: T.label(t) }, '币种'), h('input', { value: fxEdit.cur, onChange: (e) => setFxEdit({ ...fxEdit, cur: e.target.value.toUpperCase() }), placeholder: 'HKD', style: { ...T.input(t), width: 90 } })),
+            h('div', null, h('label', { style: T.label(t) }, '币种'), h('select', { value: fxEdit.cur, onChange: (e) => setFxEdit({ ...fxEdit, cur: e.target.value }), 'aria-label': '汇率币种', style: { ...T.input(t), width: 130 } },
+              [['', '请选择'], ...currencyOptions(Object.keys(db.fx || {}))].map(([v, l]) => h('option', { key: v, value: v }, l)))),
             h('div', null, h('label', { style: T.label(t) }, '汇率(1单位=?' + cur + ')'), h('input', { value: fxEdit.rate, onChange: (e) => setFxEdit({ ...fxEdit, rate: e.target.value }), placeholder: '0.92', style: { ...T.input(t), width: 110 } })),
             h('button', { style: T.btn(t, false), disabled: busy, onClick: async () => { await call('fx.set', { currency: fxEdit.cur, rate: Number(fxEdit.rate) }); setFxEdit({ cur: '', rate: '' }) } }, '保存汇率'),
           ),
@@ -615,6 +616,13 @@ window.__ModuleLoader__.load({
       return d
     }
     const CONNECTOR_LABEL = { ths: '同花顺投资账本', futu: '富途', longbridge: '长桥', ib: 'Interactive Brokers', custom: '高级接口' }
+    // 币种一律从有限集合里选，避免手输产生 CNH/CNY、小写、拼写错误等脏数据。
+    const CURRENCY_OPTIONS = [['CNY', 'CNY 人民币'], ['HKD', 'HKD 港币'], ['USD', 'USD 美元'], ['CNH', 'CNH 离岸人民币'], ['SGD', 'SGD 新加坡元'], ['EUR', 'EUR 欧元'], ['JPY', 'JPY 日元'], ['GBP', 'GBP 英镑'], ['AUD', 'AUD 澳元'], ['CAD', 'CAD 加元'], ['CHF', 'CHF 瑞郎']]
+    const currencyOptions = (extra = []) => {
+      const base = CURRENCY_OPTIONS.map(([v, l]) => [v, l])
+      const seen = new Set(base.map(([v]) => v))
+      return [...base, ...[...new Set((extra || []).filter(Boolean))].filter((v) => !seen.has(v)).map((v) => [v, v])]
+    }
     const ADD_METHODS = [
       ['ths', '同花顺', '投资账本 · 股票与爱基金 / 基金账本', '同'],
       ['futu', '富途', '官方 MCP 浏览器授权', '富'],
@@ -673,7 +681,8 @@ window.__ModuleLoader__.load({
         h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 12 } },
           fld('账户名', 'name', { placeholder: '如 招商银行理财', autoFocus: true }),
           h('label', null, h('span', { style: T.label(t) }, '类型'), h('select', { value: form.type, onChange: e => setForm({ ...form, type: e.target.value }), style: T.input(t) }, [['broker', '证券账户'], ['fund', '基金账户'], ['bank', '银行 / 现金'], ['credit', '信用卡 / 借款（负债）'], ['hand', '其他手工']].map(([v, n]) => h('option', { key: v, value: v }, n)))),
-          fld('币种', 'currency', { placeholder: 'CNY', maxLength: 3 }),
+          h('label', null, h('span', { style: T.label(t) }, '币种'), h('select', { value: form.currency, onChange: e => setForm({ ...form, currency: e.target.value }), 'aria-label': '账户币种', style: T.input(t) },
+            currencyOptions([form.currency]).map(([v, l]) => h('option', { key: v, value: v }, l)))),
           fld('备注', 'note')),
         msg ? h('div', { role: 'alert', style: { color: t.red, fontSize: 12, marginTop: 10 } }, msg) : null,
         h('div', { style: { display: 'flex', gap: 10, marginTop: 18 } }, h('button', { style: T.btn(t, true), disabled: busy, onClick: submit }, account ? '保存账户信息' : '创建账户')))
@@ -1150,7 +1159,8 @@ window.__ModuleLoader__.load({
             sel('资产类别', 'assetClass', [['stock', '股票'], ['fund', '基金'], ['etf', 'ETF'], ['cash', '现金'], ['bond', '债券'], ['crypto', '数字资产'], ['other', '其他']]),
             fld('行业（可选）', 'sector', { placeholder: '如 白酒 / 银行 / 半导体', trim: true }),
             sel('风格（可选）', 'style', [['', '未分类'], ['growth', '成长'], ['value', '价值'], ['blend', '均衡'], ['other', '其他']]),
-            fld('数量', 'qty'), fld('成本价', 'avgCost'), fld('现价（手填，可空）', 'manualPrice'), fld('币种', 'currency', { placeholder: '自动', upper: true })),
+            fld('数量', 'qty'), fld('成本价', 'avgCost'), fld('现价（手填，可空）', 'manualPrice'), h('label', null, h('span', { style: T.label(t) }, '币种'), h('select', { value: form.currency, onChange: e => setForm({ ...form, currency: e.target.value }), 'aria-label': '币种', style: T.input(t) },
+              [['', '自动（跟随账户）'], ...currencyOptions([form.currency])].map(([v, l]) => h('option', { key: v, value: v }, l))))),
           editing ? h('p', { style: { fontSize: 11, color: t.sub, marginTop: 10 } }, '代码与市场决定持仓身份，如需更换请删除后重新添加。自动同步的账户下次同步可能覆盖手工修改。') : null,
           msg ? h('div', { role: 'alert', style: { color: t.red, fontSize: 12, marginTop: 10 } }, msg) : null,
           h('div', { style: { display: 'flex', gap: 10, marginTop: 18 } }, h('button', { style: T.btn(t, true), disabled: busy, onClick: submit }, editing ? '保存' : '添加'), h('button', { style: T.btn(t, false), onClick: () => setForm(null) }, '取消'))) : null)
@@ -1230,7 +1240,8 @@ window.__ModuleLoader__.load({
           h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12 } },
             accountId ? null : sel('账户', 'accountId', db.accounts.map(a => [a.id, a.name])),
             fld('代码', 'symbol', { placeholder: '00700' }), sel('市场', 'market', ['CN', 'HK', 'US', 'SG', 'FUND', 'OTHER'].map(x => [x, x])), sel('方向', 'side', [['buy', '买入'], ['sell', '卖出']]),
-            fld('数量', 'qty'), fld('价格', 'price'), fld('费用', 'fee', { placeholder: '0' }), fld('日期', 'date', { type: 'date' }), fld('币种', 'currency', { placeholder: '自动', upper: true })),
+            fld('数量', 'qty'), fld('价格', 'price'), fld('费用', 'fee', { placeholder: '0' }), fld('日期', 'date', { type: 'date' }), h('label', null, h('span', { style: T.label(t) }, '币种'), h('select', { value: form.currency, onChange: e => setForm({ ...form, currency: e.target.value }), 'aria-label': '币种', style: T.input(t) },
+              [['', '自动（跟随账户）'], ...currencyOptions([form.currency])].map(([v, l]) => h('option', { key: v, value: v }, l))))),
           msg ? h('div', { role: 'alert', style: { color: t.red, fontSize: 12, marginTop: 10 } }, msg) : null,
           h('div', { style: { display: 'flex', gap: 10, marginTop: 18 } }, h('button', { style: T.btn(t, true), disabled: busy, onClick: submit }, '记一笔'), h('button', { style: T.btn(t, false), onClick: () => setForm(null) }, '取消'))) : null)
     }
