@@ -778,7 +778,7 @@ window.__ModuleLoader__.load({
             h('label', { style: T.label(t) }, '③ 登录后在页面勾选同意并点「同意授权」，浏览器会跳到 workbuddy://… 的地址，把它完整粘贴到这里'),
             h('div', { style: { display: 'flex', gap: 10, marginTop: 4, flexWrap: 'wrap' } },
               h('input', { value: wCallback, onChange: (e) => setWCallback(e.target.value), placeholder: 'workbuddy://workbuddy/mcp/connector:dsh-wealth/oauth/callback?code=…&state=…', style: { ...T.input(t), flex: '1 1 260px' } }),
-              h('button', { style: T.btn(t, true), disabled: busy || wBusy || !wCallback.trim(), onClick: finishWestock }, '完成授权'))),
+              h('button', { style: T.btn(t, true), disabled: busy || wBusy || !wCallback.trim(), onClick: finishWestock }, '完成授权'))) : null,
           wAuthUrl && !wProtocol ? h('p', { style: { marginTop: 6, fontSize: 10.5, color: t.sub, lineHeight: 1.6 } }, '提示：本机的 WorkBuddy 客户端会抢先接住跳转——想手动粘贴，可按 F12 打开控制台，从报错里复制完整 workbuddy:// 地址；或点上面的「一键回调」省掉这一步。') : null,
           wNote ? h('div', { role: wNote.ok ? 'status' : 'alert', style: { marginTop: 8, fontSize: 11.5, color: wNote.ok ? t.green : t.red } }, wNote.text) : null,
         ),
@@ -1950,7 +1950,8 @@ window.__ModuleLoader__.load({
                 h('div', { style: { minWidth: 0, flex: 1 } },
                   h('div', { style: { fontSize: 12 } }, a.label || CONNECTOR_LABEL[a.connector] || a.connector),
                   h('div', { style: { fontSize: 10.5, color: t.sub, marginTop: 2 } }, stateText + ' · ' + (list.length ? list.length + ' 个账户' : '尚未读取账户') + (importedCount ? ' · 已导入 ' + importedCount : ''))),
-                h('button', { style: { ...T.btn(t, false), padding: '3px 9px', minHeight: 26 }, disabled: disabled || active, onClick: () => pickAuthorization(a) }, working === 'pick-auth' ? '读取中…' : active ? '当前授权' : '使用此授权'))
+                h('button', { style: { ...T.btn(t, false), padding: '3px 9px', minHeight: 26 }, disabled: disabled || active, onClick: () => pickAuthorization(a) }, working === 'pick-auth' ? '读取中…' : active ? '当前授权' : '使用此授权'),
+                h('button', { style: { ...T.btn(t, false), padding: '3px 9px', minHeight: 26, color: t.red }, disabled: disabled || (a.sources || []).length > 0, title: (a.sources || []).length ? '先移除这个授权下的已导入账户' : '移除这条授权（连同保存的凭据）', onClick: () => { if (window.confirm('移除授权「' + (a.label || CONNECTOR_LABEL[a.connector] || a.connector) + '」？其保存的凭据会一并删除。')) act('remove-auth:' + a.id, async () => { await post('sources/auth/remove', { authId: a.id }); if (auth?.id === a.id) { setAuth(null); setAuthFromList(false) } const r = await get('sources'); accept(r) }) } }, '移除'))
             })) : null,
           choice !== 'custom' && !form.id ? h('div', { style: { display: 'flex', gap: 18, flexWrap: 'wrap', fontSize: 12, color: t.sub, margin: '18px 0' }, 'aria-label': '导入步骤' }, h('strong', { style: { color: !discovered ? t.accent : t.sub } }, '1 登录 / 授权'), h('strong', { style: { color: discovered && !selected ? t.accent : t.sub } }, '2 选择来源账户'), h('strong', { style: { color: selected ? t.accent : t.sub } }, '3 导入账户')) : null,
           form.id || choice === 'custom' ? h('div', { className: 'wealth-source-fields', style: { marginTop: 16 } },
