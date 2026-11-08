@@ -126,14 +126,15 @@ test('THS history maps ops, signs cash by direction and keeps repo rate as price
     moneyRow({ vid: 'v6', op: '95', op_name: '缴税', code: '601872', name: '招商轮船', entry_money: '85', entry_count: '0', entry_price: '' }),
     moneyRow({ vid: 'v7', op: '222', op_name: '入账', code: '301111', name: '新股', entry_money: '0', entry_count: '500', entry_price: '12.34' }),
     moneyRow({ vid: 'v8', op: '999', op_name: '未知类型', code: '', name: '', entry_money: '12.5', entry_count: '0', entry_price: '' }),
-  ], total: 8, max_page: 1 } })
+    moneyRow({ vid: 'v9', op: '1', op_name: '买入', code: '01164', name: '中广核矿', market_code: '15', entry_money: '8882.5', entry_count: '5000', entry_price: '2.09' }),
+  ], total: 9, max_page: 1 } })
   const out = await fetchThsHistory(source, secrets, { from: '2026-01-01', to: '2026-01-31' }, undefined, d)
   const call = d.calls[0], form = new URLSearchParams(call.init.body)
   assert.equal(call.url, 'https://tzzb.10jqka.com.cn/caishen_httpserver/tzzb/caishen_fund/pc/account/v2/get_money_history')
   assert.equal(form.get('fund_key'), 'chosen'); assert.equal(form.get('start_date'), '20260101'); assert.equal(form.get('end_date'), '20260131')
   assert.equal(form.get('count'), '200'); assert.equal(form.get('page'), '1')
   const rows = out.rows
-  assert.equal(rows.length, 8); assert.deepEqual(out.errors, [])
+  assert.equal(rows.length, 9); assert.deepEqual(out.errors, [])
   const byId = Object.fromEntries(rows.map(r => [r.externalId, r]))
   assert.deepEqual([byId.v1.kind, byId.v1.cashAmount, byId.v1.qty, byId.v1.price, byId.v1.fee, byId.v1.currency, byId.v1.market], ['buy', -28122, 900, 31.24, 0, 'CNY', 'CN'])
   assert.equal(byId.v2.cashAmount, 14652)
@@ -143,6 +144,8 @@ test('THS history maps ops, signs cash by direction and keeps repo rate as price
   assert.equal(byId.v6.kind, 'tax'); assert.equal(byId.v6.cashAmount, -85)
   assert.deepEqual([byId.v7.kind, byId.v7.cashAmount, byId.v7.qty, byId.v7.price], ['security_in', 0, 500, 12.34])
   assert.equal(byId.v8.kind, 'other'); assert.equal(byId.v8.originalType, '未知类型'); assert.equal(byId.v8.symbol, null); assert.equal(byId.v8.market, null); assert.equal(byId.v8.cashAmount, null)
+  // 港股通成交按人民币交收归档，市场标注为 HK。
+  assert.deepEqual([byId.v9.kind, byId.v9.symbol, byId.v9.market, byId.v9.currency, byId.v9.cashAmount], ['buy', '01164', 'HK', 'CNY', -8882.5])
   assert.ok(out.warnings.some(w => /999/.test(w.message)))
   assert.match(out.coverage.note, /银证转账/)
 })

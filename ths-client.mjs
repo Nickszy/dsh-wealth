@@ -299,7 +299,8 @@ export async function fetchThsHistory(source, secrets, range, signal, deps = {})
         kind, originalType: scalar(row.op_name).trim() || null,
         symbol: scalar(row.code).trim() || null,
         name: scalar(row.name).trim() || null,
-        market: scalar(row.code).trim() ? 'CN' : null,
+        // 港股通（market_code 15）的成交也是人民币交收；市场标注仅用于展示。
+        market: scalar(row.market_code).trim() === '15' ? 'HK' : scalar(row.code).trim() ? 'CN' : null,
         currency: 'CNY',
         qty: qty !== null && qty > 0 ? qty : null,
         price: price !== null && price > 0 ? price : null,
