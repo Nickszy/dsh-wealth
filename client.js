@@ -208,7 +208,7 @@ window.__ModuleLoader__.load({
 
       const call = async (op, payload) => {
         setBusy(true)
-        try { const r = await runOp(op, payload); if (r.ok) { setState({ ok: true, ledger: r.ledger, summary: r.summary, analysis: r.analysis }); setErr('') } else setErr(r.error?.message || '操作失败'); return r }
+        try { const r = await runOp(op, payload); if (r.ok) { setState(prev => ({ ok: true, ledger: r.ledger, summary: r.summary, analysis: r.analysis, dataSource: prev?.dataSource })); setErr('') } else setErr(r.error?.message || '操作失败'); return r }
         catch (e) { setErr('操作失败：' + e.message); return { ok: false } }
         finally { setBusy(false) }
       }
@@ -254,7 +254,7 @@ window.__ModuleLoader__.load({
                 tab === 'accounts' ? (detailAccount ? h(AccountDetail, { key: detailAccount.id, t, state, call, busy, reload, accountId: detailAccount.id, back: () => setDetailId('') }) : h(AccountsHub, { t, state, call, busy, reload, openAccount })) :
                 tab === 'holdings' ? h(Holdings, { t, state, call, busy, reload }) :
                 tab === 'trades' ? h(Trades, { t, state, call, busy, openAccount }) :
-                h(Settings, { t, state, call, busy }),
+                h(Settings, { t, state, call, busy, reload }),
               h('footer', { style: { marginTop: 24, fontSize: 10, color: t.sub, lineHeight: 1.8 } }, '账本保存在本机 · 估值以已录入价格和汇率计算', h('br'), '资产助手使用 DSH 默认模型，提问时附带当前账本。')),
             state && chatOpen ? h(Chat, { t, state, reload, busy }) : null)))
     }
@@ -650,11 +650,26 @@ window.__ModuleLoader__.load({
     function assetLabel(cls) {
       return ({ stock: '股票', fund: '基金', etf: 'ETF', cash: '现金', bond: '债券', crypto: '加密资产', other: '其他' })[cls] || cls || '其他'
     }
-    function Settings({ t, state, call, busy }) {
+    function Settings({ t, state, call, busy, reload }) {
       const db = state.ledger, cur = db.baseCurrency
       const [baseSel, setBaseSel] = React.useState(cur)
       React.useEffect(() => { setBaseSel(cur) }, [cur])
       const [fxEdit, setFxEdit] = React.useState({ cur: '', rate: '' })
+      const thsData = state.dataSource?.thsData || {}
+      const [dataToken, setDataToken] = React.useState('')
+      const [dataNote, setDataNote] = React.useState(null)
+      const [savingData, setSavingData] = React.useState(false)
+      const saveDataToken = async (value) => {
+        if (savingData) return
+        setSavingData(true); setDataNote(null)
+        try {
+          const r = await post('settings/data-source', { token: value })
+          setDataNote({ ok: true, text: r.thsData.configured ? '已保存并验证 API Key，历史净值 / 日线将优先使用同花顺数据。' : '已清除 API Key，历史行情回落东方财富公开接口。' })
+          setDataToken('')
+          await reload?.()
+        } catch (e) { setDataNote({ ok: false, text: e.message }) }
+        finally { setSavingData(false) }
+      }
       return h('div', null,
         h('h2', { style: { fontSize: 17, margin: '0 0 8px' } }, '设置'),
         h('p', { style: { color: t.sub, fontSize: 12, marginBottom: 16 } }, '管理本位币与手工汇率，资产估值将统一折算为所选本位币。'),
@@ -670,6 +685,23 @@ window.__ModuleLoader__.load({
             h('button', { style: T.btn(t, false), disabled: busy, onClick: async () => { await call('fx.set', { currency: fxEdit.cur, rate: Number(fxEdit.rate) }); setFxEdit({ cur: '', rate: '' }) } }, '保存汇率'),
           ),
           h('div', { style: { marginTop: 10, fontSize: 12, color: t.sub } }, '当前汇率：' + Object.entries(db.fx).map(([c, r]) => c + '→' + cur + ' ' + r).join('　')),
+        ),
+        h('div', { style: { ...T.card(t), marginBottom: 14 } },
+          h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, flexWrap: 'wrap', marginBottom: 6 } },
+            h('strong', { style: { fontSize: 14 } }, '行情与净值数据源'),
+            h('span', { style: { fontSize: 11, color: thsData.configured ? t.green : t.sub } }, thsData.configured ? '● 同花顺数据已启用' : '○ 未配置，使用东方财富公开接口')),
+          h('p', { style: { color: t.sub, fontSize: 11.5, lineHeight: 1.65, margin: '0 0 10px' } },
+            '填入同花顺金融数据 API Key 后，历史日线与基金净值优先走该接口（覆盖沪深股票、ETF 与场外基金；港股仍用东方财富）。历史数据缓存在本机，之后只增量同步最新部分，不会每天整段重拉。未配置或接口失败时自动回落东方财富。'),
+          h('div', { style: { display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' } },
+            h('div', { style: { flex: '1 1 260px' } },
+              h('label', { style: T.label(t) }, '同花顺金融数据 API Key'),
+              h('input', { type: 'password', autoComplete: 'off', value: dataToken, onChange: (e) => setDataToken(e.target.value), placeholder: thsData.configured ? '已保存 · 输入新 Key 可替换' : '粘贴 API Key', style: T.input(t) })),
+            h('button', { style: T.btn(t, true), disabled: busy || savingData || !dataToken.trim(), onClick: () => saveDataToken(dataToken.trim()) }, savingData ? '验证中…' : '保存并验证'),
+            thsData.configured ? h('button', { style: T.btn(t, false), disabled: busy || savingData, onClick: () => saveDataToken('') }, '清除') : null,
+          ),
+          h('div', { style: { marginTop: 8, fontSize: 11, color: t.sub } },
+            h('a', { href: thsData.adminUrl || 'https://fuyao.aicubes.cn/admin', target: '_blank', rel: 'noreferrer', style: { color: t.accent } }, '签发 / 管理 API Key ↗'), '　·　同花顺金融数据 API（fuyao.aicubes.cn）'),
+          dataNote ? h('div', { role: dataNote.ok ? 'status' : 'alert', style: { marginTop: 8, fontSize: 11.5, color: dataNote.ok ? t.green : t.red } }, dataNote.text) : null,
         ),
       )
     }

@@ -238,7 +238,7 @@ else if (arg[0] === 'state') {
 } else if (arg[0] === 'performance') {
   const accountId = arg[1] && !/^\d+$/.test(arg[1]) ? arg[1] : null
   const days = Math.min(3650, Math.max(30, Number(arg[1] && /^\d+$/.test(arg[1]) ? arg[1] : arg[2]) || 1095))
-  const result = await computePerformance(load(), { accountIds: accountId ? [accountId] : [], days, cachePath: join(DATA_DIR, 'cache', 'klines.json') })
+  const result = await computePerformance(load(), { accountIds: accountId ? [accountId] : [], days, cachePath: join(DATA_DIR, 'cache', 'klines.json'), dataToken: String(createCredentialStore().get('app:finapi').token || '') })
   // 曲线可能上千点：CLI 输出指标 + 首尾与最大回撤区间，完整序列放在 series。
   out({ ok: true, ...result })
 } else if (arg[0] === 'export') {

@@ -64,6 +64,79 @@ test('loadDailyCloses reports failures per target and never invents prices', asy
   assert.ok(d.calls.length === 0)
 })
 
+test('loadDailyCloses keeps history and syncs only the tail on a new day', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-kline-inc-'))
+  const cachePath = join(dir, 'cache.json')
+  const instruments = [{ id: 'I1', symbol: '600519', market: 'CN', assetClass: 'stock' }]
+  const day1 = Date.parse('2026-11-06T10:00:00Z')
+  const calls = []
+  const first = await loadDailyCloses(instruments, {
+    from: '2026-01-01', cachePath, now: () => day1,
+    fetch: async (url) => { calls.push(String(url)); return { ok: true, status: 200, json: async () => klineJson(['2026-11-06,1433.33', '2026-11-05,1435.13', '2026-10-30,1410']) } },
+  })
+  assert.equal(first.fetched, 1)
+  assert.ok(calls[0].includes('beg=20260101'), '首次拉取从请求起点开始')
+  calls.length = 0
+  // 同一天再次查看：完全命中缓存，不发请求。
+  const again = await loadDailyCloses(instruments, {
+    from: '2026-01-01', cachePath, now: () => day1,
+    fetch: async (url) => { calls.push(String(url)); return { ok: true, status: 200, json: async () => klineJson(['2026-11-06,1433.33']) } },
+  })
+  assert.equal(again.cached, 1); assert.equal(again.fetched, 0); assert.equal(calls.length, 0)
+  // 第二天：只回看最后缓存日之前 5 天，历史缓存原样保留。
+  const day2 = Date.parse('2026-11-07T10:00:00Z')
+  const next = await loadDailyCloses(instruments, {
+    from: '2026-01-01', cachePath, now: () => day2,
+    fetch: async (url) => { calls.push(String(url)); return { ok: true, status: 200, json: async () => klineJson(['2026-11-07,1440']) } },
+  })
+  assert.equal(next.fetched, 1)
+  assert.equal(calls.length, 1)
+  assert.ok(calls[0].includes('beg=20261101'), '尾部同步从最后缓存日回看 5 天：' + calls[0])
+  assert.deepEqual(next.prices.get('em:1.600519').map(([d]) => d), ['2026-10-30', '2026-11-05', '2026-11-06', '2026-11-07'])
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('an empty tail keeps cached history and stops refetching that day', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-kline-empty-'))
+  const cachePath = join(dir, 'cache.json')
+  const instruments = [{ id: 'F1', symbol: '001257', market: 'CN', assetClass: 'fund' }]
+  const day1 = Date.parse('2026-11-06T10:00:00Z')
+  await loadDailyCloses(instruments, { from: '2026-01-01', cachePath, now: () => day1, fetch: async () => ({ ok: true, status: 200, json: async () => fundJson([{ FSRQ: '2026-11-06', DWJZ: '1.612' }]) }) })
+  const day2 = Date.parse('2026-11-08T10:00:00Z') // 周末，没有新净值
+  let calls = 0
+  const empty = await loadDailyCloses(instruments, { from: '2026-01-01', cachePath, now: () => day2, fetch: async () => { calls++; return { ok: true, status: 200, json: async () => fundJson([]) } } })
+  assert.equal(empty.warnings.length, 0)
+  assert.deepEqual(empty.prices.get('fund:001257'), [['2026-11-06', 1.612]])
+  assert.equal(calls, 1)
+  await loadDailyCloses(instruments, { from: '2026-01-01', cachePath, now: () => day2, fetch: async () => { calls++; return { ok: true, status: 200, json: async () => fundJson([]) } } })
+  assert.equal(calls, 1, '当天失败/空结果不应反复请求')
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('with a data token THS is preferred and eastmoney is the fallback', async () => {
+  const instruments = [{ id: 'I1', symbol: '600519', market: 'CN', assetClass: 'stock' }]
+  const now = () => Date.parse('2026-11-08T10:00:00Z')
+  const calls = []
+  const ths = await loadDailyCloses(instruments, {
+    from: '2026-11-01', dataToken: 'tk', now,
+    fetch: async (url) => {
+      calls.push(String(url))
+      if (String(url).includes('fuyao.aicubes.cn')) return { ok: true, status: 200, json: async () => ({ code: 0, data: { item: [{ date_ms: Date.parse('2026-11-06T00:00:00+08:00'), close_price: 1433.33 }] } }) }
+      return { ok: true, status: 200, json: async () => klineJson(['2026-11-06,1']) }
+    },
+  })
+  assert.ok(calls[0].includes('fuyao.aicubes.cn'))
+  assert.deepEqual(ths.prices.get('em:1.600519'), [['2026-11-06', 1433.33]])
+  const fallback = await loadDailyCloses(instruments, {
+    from: '2026-11-01', dataToken: 'tk', now,
+    fetch: async (url) => {
+      if (String(url).includes('fuyao.aicubes.cn')) throw new Error('down')
+      return { ok: true, status: 200, json: async () => klineJson(['2026-11-06,99']) }
+    },
+  })
+  assert.deepEqual(fallback.prices.get('em:1.600519'), [['2026-11-06', 99]])
+})
+
 test('fund NAV fetches pages until the requested start date is covered', async () => {
   const pages = [
     [{ FSRQ: '2026-11-06', DWJZ: '1.612' }, { FSRQ: '2026-10-01', DWJZ: '1.5' }],

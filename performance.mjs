@@ -137,7 +137,7 @@ export function buildPerformance(db, timeline, { prices, fx, baseCurrency = db.b
  * 编排：逆推时间线 + 拉取日线 + 计算净值。供 host 路由与 CLI 共用。
  * accountIds 为空表示全部账户合并。
  */
-export async function computePerformance(db, { accountIds = [], days = 1095, fetch: fetchImpl, cachePath, now = Date.now } = {}) {
+export async function computePerformance(db, { accountIds = [], days = 1095, fetch: fetchImpl, cachePath, now = Date.now, dataToken } = {}) {
   const todayISO = new Date(now()).toISOString().slice(0, 10)
   const ids = [...new Set((accountIds || []).map(String).filter(Boolean))]
   const timelines = ids.length
@@ -151,7 +151,7 @@ export async function computePerformance(db, { accountIds = [], days = 1095, fet
     ...(timeline.syntheticInstruments || []).filter((i) => involved.has(i.id)),
   ]
   const from = addDays(todayISO, -Math.max(7, days))
-  const kline = await loadDailyCloses(instruments, { from, fetch: fetchImpl, cachePath, now })
+  const kline = await loadDailyCloses(instruments, { from, fetch: fetchImpl, cachePath, now, dataToken })
   const perf = buildPerformance(db, timeline, {
     prices: pricesByInstrument(instruments, kline.prices), fx: db.fx, baseCurrency: db.baseCurrency, days, today: todayISO,
   })

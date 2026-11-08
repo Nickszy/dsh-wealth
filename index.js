@@ -20,6 +20,7 @@ import { createSyncService } from './sync.mjs'
 import { startTigerDeviceAuth, pollTigerDeviceToken } from './tiger-mcp.mjs'
 import { createQiemanLogin } from './qieman-login.mjs'
 import { generateFosunClientKey, fosunTicketCreate, checkFosunApiKey } from './fosun-client.mjs'
+import { checkThsToken, THS_ADMIN_URL } from './ths-data.mjs'
 import qrcode from 'qrcode-generator'
 import { createCredentialStore } from './credentials.mjs'
 import { createThsLogin } from './ths-login.mjs'
@@ -89,6 +90,10 @@ export function apply(ctx, config = {}) {
       return { historyError: String(error?.message || error) }
     }
   }
+  // 应用级行情数据密钥（同花顺金融数据 API）。不属于任何来源授权，存进同一个加密保险库。
+  const DATA_TOKEN_ID = 'app:finapi'
+  const dataToken = () => String(vault.get(DATA_TOKEN_ID).token || '')
+  const dataSourceStatus = () => ({ thsData: { configured: vault.configured(DATA_TOKEN_ID, 'finapi'), adminUrl: THS_ADMIN_URL } })
   let loginTarget = null
   const login = createThsLogin({ onCookie:cookie=>sync.acceptThsLogin(loginTarget,cookie) })
   const loginStatus = () => {
@@ -262,7 +267,27 @@ export function apply(ctx, config = {}) {
         if (path === 'api/state' || path === 'api/summary') {
           if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
           const db = load()
-          send(res, 200, { ok: true, ledger: db, summary: summarize(db), analysis: analyze(db) })
+          send(res, 200, { ok: true, ledger: db, summary: summarize(db), analysis: analyze(db), dataSource: dataSourceStatus() })
+          return
+        }
+        if (path === 'api/settings/data-source') {
+          if (req.method === 'GET') { send(res, 200, { ok: true, ...dataSourceStatus() }); return }
+          if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
+          const body = JSON.parse(await readBody(req, 64 * 1024))
+          const token = typeof body.token === 'string' ? body.token.trim() : ''
+          if (!token) {
+            vault.remove(DATA_TOKEN_ID)
+            send(res, 200, { ok: true, ...dataSourceStatus() })
+            return
+          }
+          try {
+            await checkThsToken(token)
+          } catch (error) {
+            send(res, 400, { ok: false, error: { code: 'invalid-token', message: String(error?.message || error) } })
+            return
+          }
+          vault.set(DATA_TOKEN_ID, 'finapi', { token })
+          send(res, 200, { ok: true, ...dataSourceStatus() })
           return
         }
         if (path === 'api/analysis') {
@@ -320,7 +345,7 @@ export function apply(ctx, config = {}) {
           if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
           const ids = String(url.searchParams.get('accounts') || '').split(',').map((s) => s.trim()).filter(Boolean)
           const days = Math.min(3650, Math.max(30, Number(url.searchParams.get('days')) || 1095))
-          const result = await computePerformance(load(), { accountIds: ids, days, cachePath: join(DATA_DIR, 'cache', 'klines.json') })
+          const result = await computePerformance(load(), { accountIds: ids, days, cachePath: join(DATA_DIR, 'cache', 'klines.json'), dataToken: dataToken() })
           send(res, 200, { ok: true, ...result })
           return
         }
