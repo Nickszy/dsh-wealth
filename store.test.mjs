@@ -330,6 +330,32 @@ test('bills.import archives batch flows with categories, dedupes and never guess
   assert.equal(load().historyEvents.length, 2)
 })
 
+test('transfers.import archives bisected bank transfers, dedupes and keeps the scan cursor', () => {
+  const db = fixture()
+  const rows = [
+    { date: '2026-01-05', direction: 'in', amount: 10000 },
+    { date: '2026-06-02', direction: 'out', amount: 3000 },
+    { date: 'nope', direction: 'in', amount: 1 },
+  ]
+  const result = applyOp(db, 'transfers.import', { accountId: 'a', rows, cursor: { coveredFrom: '2026-01-05', complete: false, scannedAt: '2026-11-08T12:00:00Z', requests: 42 } })
+  assert.deepEqual([result.imported, result.duplicates, result.skipped], [2, 0, 1])
+  const [deposit, withdrawal] = db.historyEvents
+  assert.deepEqual([deposit.kind, deposit.cashAmount, deposit.source, deposit.externalId, deposit.archiveOnly], ['deposit', 10000, 'ths-asset-change', 'ths-ac:2026-01-05:in', true])
+  assert.deepEqual([withdrawal.kind, withdrawal.cashAmount], ['withdrawal', -3000])
+  assert.deepEqual(db.accounts[0].transferScan, { coveredFrom: '2026-01-05', complete: false, lastScannedAt: '2026-11-08T12:00:00Z', lastRequests: 42, lastImported: 2 })
+  assert.equal(db.historyBatches.at(-1).method, 'transfer-scan')
+  // 同一行再导入：externalId 去重；同日同向同金额的手工记录也跳过，避免重复计数。
+  applyOp(db, 'historyEvent.add', { accountId: 'a', kind: 'deposit', date: '2026-03-10', cashAmount: 5000, note: '手工补录' })
+  const again = applyOp(db, 'transfers.import', { accountId: 'a', rows: [...rows, { date: '2026-03-10', direction: 'in', amount: 5000 }], cursor: { coveredFrom: '2026-01-01', complete: true } })
+  assert.deepEqual([again.imported, again.duplicates], [0, 3])
+  // 游标只增不减：更早的 coveredFrom 保留，complete 一旦成立保持成立。
+  assert.equal(db.accounts[0].transferScan.coveredFrom, '2026-01-01')
+  assert.equal(db.accounts[0].transferScan.complete, true)
+  assert.equal(db.historyEvents.filter(e => e.source === 'ths-asset-change').length, 2)
+  bad(db, 'transfers.import', { accountId: 'a', rows: [] })
+  assert.throws(() => applyOp(db, 'transfers.import', { accountId: 'missing', rows }), (e) => e.code === 'not-found')
+})
+
 test('instrument lookup is identity-aware so legacy spellings reuse the same record', () => {
   const db = fixture()
   const first = applyOp(db, 'holding.upsert', { accountId: 'a', symbol: '02549', market: 'HK', qty: 4000, avgCost: 10, currency: 'HKD' }).holding

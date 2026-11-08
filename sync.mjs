@@ -5,7 +5,7 @@ import { randomUUID, createHash } from 'node:crypto'
 import { DATA_DIR, load, save, applyOp, summarize, OpError } from './store.mjs'
 import { getConnectorStatus, normalizeSnapshot } from './connectors.mjs'
 import { createCredentialStore, validateCredentials } from './credentials.mjs'
-import { listThsAccounts, fetchStandaloneThsSnapshot } from './ths-client.mjs'
+import { listThsAccounts, fetchStandaloneThsSnapshot, scanThsTransfers } from './ths-client.mjs'
 import { listFutuAccounts, fetchFutuSnapshot, fetchLongbridgeSnapshot } from './brokers-sdk.mjs'
 import { listLongbridgeMcpAccounts, fetchLongbridgeMcpSnapshot } from './lb-mcp.mjs'
 import { listFutuMcpAccounts, fetchFutuMcpSnapshot, refreshFutuToken } from './futu-mcp.mjs'
@@ -302,6 +302,50 @@ export function createSyncService(ctx, options = {}) {
     const bookType = source.connector === 'ths' ? String(source.thsBookType || 'common') : ''
     if (bookType && bookType !== 'common') parts.push(bookType)
     return createHash('sha256').update(JSON.stringify(parts)).digest('hex')
+  }
+  // ---- 银证转账回扫（asset_change 二分定位到日）----
+  // 首次全历史深扫必须显式触发（scanThsTransfersDeep，可能要几分钟）；
+  // 已有游标的账户随每次同步做小预算增量——新转账只会出现在已扫区间之后，
+  // 二分从最新端进入，通常 1–3 个请求就能收尾，不轮询、不重扫已知区间。
+  const transferEventsOf = (db, accountId) => (db.historyEvents || []).filter(e => e.accountId === accountId && e.source === 'ths-asset-change').map(e => ({ date: e.date, direction: e.kind === 'deposit' ? 'in' : 'out', amount: Math.abs(e.cashAmount) }))
+  const transferScanBook = source => ({ portfolioId: source.portfolioId, thsBookType: String(source.thsBookType || 'common') })
+  async function applyTransferScan(db, accountId, scan) {
+    if (!scan.events.length) return { imported: 0, duplicates: 0 }
+    const result = applyOp(db, 'transfers.import', { accountId, rows: scan.events, cursor: { coveredFrom: scan.coveredFrom, complete: scan.complete, scannedAt: iso(), requests: scan.requests } })
+    writeLedger(db)
+    return { imported: result.imported, duplicates: result.duplicates }
+  }
+  async function syncThsTransfers(source, signal) {
+    if (source.connector !== 'ths' || String(source.thsBookType || 'common') !== 'common') return null
+    const db = readLedger()
+    const account = db.accounts.find(a => a.id === source.accountId)
+    const coveredFrom = account?.transferScan?.coveredFrom
+    if (!coveredFrom) return null
+    const scan = await scanThsTransfers(transferScanBook(source), secretsFor(source), { from: coveredFrom, maxRequests: 40, delayMs: 200, found: transferEventsOf(db, account.id) }, signal)
+    const applied = await applyTransferScan(db, account.id, scan)
+    return { ...applied, requests: scan.requests, complete: scan.complete, warnings: scan.warnings }
+  }
+  async function scanThsTransfersDeep(accountId, { maxRequests } = {}) {
+    if (disposed) throw bad('同步服务已停止')
+    const source = config.read().find(s => s.accountId === accountId && s.connector === 'ths')
+    if (!source) throw bad('该账户没有绑定同花顺股票账本来源')
+    if (String(source.thsBookType || 'common') !== 'common') throw bad('基金账本的资金流动是申购/赎回口径，没有银行转账可回扫')
+    const db = readLedger()
+    if (!db.accounts.some(a => a.id === accountId)) throw bad('账户不存在: ' + accountId)
+    const coveredFrom = db.accounts.find(a => a.id === accountId)?.transferScan?.coveredFrom
+    const from = coveredFrom || '2000-01-01'
+    const abort = new AbortController(); aborts.add(abort)
+    const timer = setTimeout(() => abort.abort(new Error('回扫超时')), 600000); timer.unref?.()
+    try {
+      const scan = await scanThsTransfers(transferScanBook(source), secretsFor(source), { from, maxRequests: Math.min(2000, Math.max(20, Number(maxRequests) || 600)), delayMs: 250, found: transferEventsOf(db, accountId) }, abort.signal)
+      if (disposed || abort.signal.aborted) throw bad('回扫已中止')
+      const applied = await applyTransferScan(db, accountId, scan)
+      return { accountId, from, to: scan.to, ...applied, requests: scan.requests, complete: scan.complete, coveredFrom: scan.coveredFrom, totals: scan.totals, warnings: scan.warnings }
+    } catch (error) {
+      let message = String(error?.message || error || '')
+      try { for (const value of Object.values(vault.get(source.authId || source.id) || {})) if (value && String(value).length > 3) message = message.split(String(value)).join('[已隐藏]') } catch { /* keep message */ }
+      throw bad('银证转账回扫失败：' + message)
+    } finally { clearTimeout(timer); aborts.delete(abort) }
   }
   function existingImport(source, secrets) {
     const key = fingerprint(source,secrets)
@@ -783,7 +827,10 @@ export function createSyncService(ctx, options = {}) {
       if ((uploadWatermark && snapshot.uploadedAt && Date.parse(snapshot.uploadedAt) < Date.parse(uploadWatermark)) || (quoteWatermark && snapshot.quoteDate && Date.parse(snapshot.quoteDate) < Date.parse(quoteWatermark))) throw bad('来源数据时间早于已保存快照，已保留原数据')
       writeLedger(ledger)
       const updated = updateRecord(id, { lastSuccessAt:iso(),lastStatus:snapshot.warnings.length || !snapshot.complete ? 'partial' : 'ok',lastError:null,warnings:snapshot.warnings,uploadedAt:snapshot.uploadedAt,quoteDate:snapshot.quoteDate,uploadedAtWatermark:snapshot.uploadedAt || uploadWatermark || null,quoteDateWatermark:snapshot.quoteDate || quoteWatermark || null,queriedAt:snapshot.queriedAt,imported,complete:snapshot.complete })
-      return { source:updated,ledger,summary:summarize(ledger),imported }
+      // 深扫过的账户随同步增量收尾新转账；失败或未开通游标都不影响本次持仓结果。
+      let transferScan = null
+      try { transferScan = await syncThsTransfers(current, abort.signal) } catch (error) { transferScan = { error: String(error?.message || error).slice(0, 200) } }
+      return { source:updated,ledger,summary:summarize(ledger),imported,transferScan }
     } catch (error) {
       // Adapter messages are curated and safe; still redact every known secret
       // before the message reaches the browser or sources.json.
@@ -841,5 +888,5 @@ export function createSyncService(ctx, options = {}) {
       }
     } finally { tickBusy=false }
   }
-  return { list,saveSource,removeSource,sync,tick,listAccounts,listAuthAccounts,createAuthorization,renameAuthorization,removeAuthorization,connectSource,acceptThsLogin,readHistory,listThsPortfolios:async()=>{const r=await listAccounts({connector:'ths'});return {portfolios:r.accounts.map(a=>({...a,selected:false})),warnings:r.warnings||[]}},dispose() { disposed=true; for (const controller of aborts) controller.abort() } }
+  return { list,saveSource,removeSource,sync,tick,listAccounts,listAuthAccounts,createAuthorization,renameAuthorization,removeAuthorization,connectSource,acceptThsLogin,readHistory,scanThsTransfers:scanThsTransfersDeep,listThsPortfolios:async()=>{const r=await listAccounts({connector:'ths'});return {portfolios:r.accounts.map(a=>({...a,selected:false})),warnings:r.warnings||[]}},dispose() { disposed=true; for (const controller of aborts) controller.abort() } }
 }

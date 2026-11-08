@@ -295,6 +295,102 @@ export async function fetchThsAssetChange(source, secrets, range, signal, deps =
   return result
 }
 
+// ---- 银证转账按日回扫（asset_change 二分跳跃检索）----
+// 区间总额 f(d)=转账(起点,d) 随 d 单调不减：对「最近一笔」做二分，每次 ~log2(天数)
+// 个请求定位到具体某天，空档自动剪枝；已定位的日期由调用方持久化后通过 found 传入，
+// 再次扫描时从集合中扣除、只扫未覆盖的历史，绝不重复请求已知区间。
+const TRANSFER_EPS = 0.005
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+const dayShift = (date, days) => {
+  const d = new Date(date + 'T00:00:00Z')
+  d.setUTCDate(d.getUTCDate() + days)
+  return d.toISOString().slice(0, 10)
+}
+const compact = value => (value !== null && Math.abs(value) < TRANSFER_EPS ? 0 : value)
+export async function scanThsTransfers(source, secrets, options = {}, signal, deps = {}) {
+  const id = typeof source?.portfolioId === 'string' ? source.portfolioId.trim() : ''
+  if (!id) fail('PORTFOLIO_REQUIRED', '请先明确选择同花顺账本')
+  if (thsBookType(source) !== 'common') fail('INVALID_RESPONSE', '基金账本的资金流动是申购/赎回口径，没有银行转账可回扫')
+  const maxRequests = Math.min(2000, Math.max(2, Number(options.maxRequests) || 500))
+  const delayMs = Math.max(0, Number(options.delayMs ?? 250))
+  // session 的总超时默认 15 秒（单请求口径）；扫描跨越几十个节流请求，按预算放宽。
+  const post = session(source, secrets, signal, { ...deps, timeoutMs: Number(deps.timeoutMs) || Math.max(60000, maxRequests * (delayMs + 5000)) })
+  const list = await accounts(post)
+  if (!list.some(row => row.id === id && row.thsType === 'common')) fail('PORTFOLIO_NOT_FOUND', '指定同花顺账本不属于当前登录用户，请重新选择')
+  const from = thsDay(options.from || '2000-01-01', '开始日期')
+  const to = thsDay(options.to || localDay(deps.now ? deps.now() : new Date()), '结束日期')
+  if (from > to) fail('INVALID_RESPONSE', '开始日期不能晚于结束日期')
+  const found = Array.isArray(options.found) ? options.found : []
+  const foundIn = found.filter(e => e.direction === 'in').reduce((s, e) => s + e.amount, 0)
+  const foundOut = found.filter(e => e.direction === 'out').reduce((s, e) => s + e.amount, 0)
+  const foundByDate = new Map()
+  for (const e of found) foundByDate.set(e.date, (foundByDate.get(e.date) || 0) + (e.direction === 'in' ? e.amount : -e.amount))
+  let requests = 0
+  const warnings = []
+  const ask = async (a, b) => {
+    if (requests >= maxRequests) return null
+    if (delayMs) await sleep(delayMs)
+    requests++
+    const data = record(await post('analysis/v1/asset_change', {
+      start_date: a.replaceAll('-', ''), end_date: b.replaceAll('-', ''),
+      fund_key: id, fundkey: id, rzrq_fund_key: '', manual_id: '', fund_id: '', cust_id: '', from_pc: '1', id: ASSET_CHANGE_ID,
+    }))
+    const section = assetChangeSection(data.stock)
+    return section ? { moneyIn: section.moneyIn ?? 0, moneyOut: section.moneyOut ?? 0 } : { moneyIn: 0, moneyOut: 0 }
+  }
+  // 已定位事件在 [from..d] 的累计量（本地计算，零请求）。
+  const foundCum = d => {
+    let inSum = 0, outSum = 0
+    for (const [date, net] of foundByDate) if (date <= d) { if (net > 0) inSum += net; else outSum += -net }
+    return { moneyIn: inSum, moneyOut: outSum }
+  }
+  const totals = await ask(from, to)
+  if (!totals) return { from, to, complete: false, coveredFrom: null, events: [], requests: 0, warnings: ['预算内没有发出任何请求，请调大 maxRequests'] }
+  const target = { moneyIn: Math.max(0, (totals.moneyIn ?? 0) - foundIn), moneyOut: Math.max(0, (totals.moneyOut ?? 0) - foundOut) }
+  const events = []
+  let hi = to, oldest = null
+  while ((target.moneyIn > TRANSFER_EPS || target.moneyOut > TRANSFER_EPS) && requests < maxRequests) {
+    // 二分最小的 d：remaining(from..d) == remaining(from..hi)，即最新一笔未定位转账的日期。
+    let lo = from
+    while (lo < hi && requests < maxRequests) {
+      const mid = dayShift(lo, Math.floor((new Date(hi + 'T00:00:00Z') - new Date(lo + 'T00:00:00Z')) / 86400000 / 2))
+      const probe = await ask(from, mid)
+      if (!probe) break
+      const base = foundCum(mid)
+      const left = { moneyIn: (probe.moneyIn ?? 0) - base.moneyIn, moneyOut: (probe.moneyOut ?? 0) - base.moneyOut }
+      if (compact(left.moneyIn) < target.moneyIn - TRANSFER_EPS || compact(left.moneyOut) < target.moneyOut - TRANSFER_EPS) lo = dayShift(mid, 1)
+      else hi = mid
+    }
+    if (requests >= maxRequests) break
+    const date = lo
+    let before = { moneyIn: 0, moneyOut: 0 }
+    if (date > from) {
+      const dayBase = await ask(from, dayShift(date, -1))
+      if (!dayBase) break
+      const cumBefore = foundCum(dayShift(date, -1))
+      before = { moneyIn: (dayBase.moneyIn ?? 0) - cumBefore.moneyIn, moneyOut: (dayBase.moneyOut ?? 0) - cumBefore.moneyOut }
+    }
+    const dayIn = compact(target.moneyIn - before.moneyIn), dayOut = compact(target.moneyOut - before.moneyOut)
+    if (dayIn > TRANSFER_EPS) events.push({ date, direction: 'in', amount: Math.round(dayIn * 100) / 100 })
+    if (dayOut > TRANSFER_EPS) events.push({ date, direction: 'out', amount: Math.round(dayOut * 100) / 100 })
+    if (dayIn <= TRANSFER_EPS && dayOut <= TRANSFER_EPS) { warnings.push('TRANSFER_DAY_ZERO:' + date); break }
+    oldest = date
+    target.moneyIn = Math.max(0, before.moneyIn); target.moneyOut = Math.max(0, before.moneyOut)
+    hi = dayShift(date, -1)
+    if (hi < from) break
+  }
+  const complete = target.moneyIn <= TRANSFER_EPS && target.moneyOut <= TRANSFER_EPS
+  const coveredFrom = complete ? from : oldest ? dayShift(oldest, 0) : null
+  if (!complete && requests >= maxRequests) warnings.push('TRANSFER_SCAN_BUDGET:还有 ' + (Math.round((target.moneyIn + target.moneyOut) * 100) / 100) + ' 元待定位，调大 maxRequests 或再次运行将继续')
+  if (complete && (totals.moneyIn - foundIn - events.filter(e => e.direction === 'in').reduce((s, e) => s + e.amount, 0) > 0.011)) warnings.push('TRANSFER_RESIDUE:扫描区间之外可能还有更早转账')
+  return {
+    from, to, complete, coveredFrom,
+    events: events.sort((a, b) => b.date.localeCompare(a.date) || a.direction.localeCompare(b.direction)),
+    requests, totals: { moneyIn: totals.moneyIn ?? 0, moneyOut: totals.moneyOut ?? 0 },
+    warnings: [...new Set(warnings)],
+  }
+}
+
 // 同花顺投资账本「资金流水」接口（get_money_history）。与持仓接口共用登录会话，
 // 返回全部原始字符串字段；这里只做读取与规范化，不推断文件之外的任何金额。
 // kind 枚举与现金方向沿用标准模型（model.mjs FLOW_KINDS），不在本文件另行定义。

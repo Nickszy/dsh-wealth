@@ -324,6 +324,37 @@ window.__ModuleLoader__.load({
       const [perf, setPerf] = React.useState(null), [perfErr, setPerfErr] = React.useState('')
       const [bills, setBills] = React.useState(null), [billsErr, setBillsErr] = React.useState('')
       const [inf, setInf] = React.useState(null)
+      const [thzScan, setThzScan] = React.useState(false), [thsAccountIds, setThsAccountIds] = React.useState([])
+      // 同花顺股票账本：可深扫银证转账明细（asset_change 二分定位到日）。
+      React.useEffect(() => {
+        let live = true
+        fetch('/portfolio/api/sources', { headers: { accept: 'application/json' } }).then(r => r.json()).then(d => {
+          if (!live || !d.ok) return
+          setThsAccountIds((d.sources || []).filter(s => s.connector === 'ths' && String(s.thsBookType || 'common') === 'common' && s.accountId).map(s => s.accountId))
+        }).catch(() => {})
+        return () => { live = false }
+      }, [])
+      const runTransferScan = async () => {
+        const scope = fixedAccounts || sel
+        const targets = thsAccountIds.filter(id => !scope.length || scope.includes(id))
+        if (!targets.length) return
+        if (!window.confirm('回扫银证转账明细：把「资金流动」区间总额二分定位到具体某天。首次全历史可能需要几分钟、几百个请求，之后每次同步只增量收尾。确认开始？')) return
+        setThzScan(true)
+        try {
+          const results = []
+          for (const accountId of targets) {
+            const r = await fetch('/portfolio/api/transfers/scan', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ accountId, maxRequests: 600 }) })
+            const d = await r.json()
+            if (!r.ok || !d.ok) throw new Error((d.error && d.error.message) || '回扫失败')
+            results.push(d)
+          }
+          const imported = results.reduce((s, d) => s + (d.imported || 0), 0)
+          const requests = results.reduce((s, d) => s + (d.requests || 0), 0)
+          const done = results.every(d => d.complete)
+          window.alert('回扫完成：新增 ' + imported + ' 笔转账，共 ' + requests + ' 个请求' + (done ? '，全历史已扫完' : '，还有更早区间未扫完，可再次运行继续'))
+          window.location.reload()
+        } catch (err) { window.alert(err.message) } finally { setThzScan(false) }
+      }
       const [billPrev, setBillPrev] = React.useState(null), [billMsg, setBillMsg] = React.useState(''), [billAccount, setBillAccount] = React.useState(''), [billBusy, setBillBusy] = React.useState(false)
       const perfAccount = fixedAccounts && fixedAccounts.length === 1 ? fixedAccounts[0] : null
       const loadBills = () => fetch('/portfolio/api/bills?months=12', { headers: { accept: 'application/json' } }).then(r => r.json()).then(d => { if (d.ok) setBills(d); else setBillsErr(d.error?.message || '生活账单读取失败') }).catch(e => setBillsErr(e.message))
@@ -493,6 +524,16 @@ window.__ModuleLoader__.load({
             row('分红 / 利息', fmtMoney(f.totals && f.totals.dividends) + ' / ' + fmtMoney(f.totals && f.totals.interest), t.green),
             row('费用 / 税费', fmtMoney(f.totals && f.totals.fees) + ' / ' + fmtMoney(f.totals && f.totals.taxes), t.red),
             transfer.accounts ? h('div', { style: { fontSize: 10.5, color: t.sub, marginTop: 8, lineHeight: 1.6 } }, '银证转入/转出取自同花顺「资金流动」累计值' + (transfer.to ? '（截至 ' + transfer.to + '）' : '') + '；单笔转账时点仍需券商资金流水，可补录后按明细查看。') : null,
+            (() => {
+              const scope = fixedAccounts || sel
+              const targets = thsAccountIds.filter(id => !scope.length || scope.includes(id))
+              if (!targets.length) return null
+              const cursors = state.ledger.accounts.filter(x => targets.includes(x.id) && x.transferScan?.coveredFrom)
+              const scanned = cursors.length ? '已回扫至 ' + cursors.map(x => x.transferScan.coveredFrom + (x.transferScan.complete ? '（全历史）' : '')).join('、') + '；' : ''
+              return h('div', { style: { marginTop: 8 } },
+                h('button', { style: { ...T.btn(t, false) }, disabled: thzScan, onClick: runTransferScan }, thzScan ? '回扫中…（可能需要几分钟）' : '回扫银证转账明细 ↗'),
+                cursors.length ? h('div', { style: { fontSize: 10.5, color: t.sub, marginTop: 6, lineHeight: 1.6 } }, scanned + '回扫后每次同步自动增量收尾。') : null)
+            })(),
             inf && inf.total > 0 && !transfer.accounts ? h('div', { style: { fontSize: 10.5, color: t.sub, marginTop: 8, lineHeight: 1.6 } }, '推定入金按现金缺口估算（券商流水不含银证转账）；出金与转账时点无法反推，补录银行流水后更准确。') : null,
             f.unknownCashRows ? h('div', { style: { fontSize: 10.5, color: t.terra, marginTop: 8 } }, '⚠ ' + f.unknownCashRows + ' 条流水缺少金额，以上为下限估算') : null),
           h('section', { style: T.card(t), 'aria-label': '配置与集中度' },
