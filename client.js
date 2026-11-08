@@ -664,6 +664,48 @@ window.__ModuleLoader__.load({
       const [wCallback, setWCallback] = React.useState('')
       const [wBusy, setWBusy] = React.useState(false)
       const [wNote, setWNote] = React.useState(null)
+      const [wProtocol, setWProtocol] = React.useState(!!westock.protocol)
+      React.useEffect(() => { setWProtocol(!!westock.protocol) }, [westock.protocol])
+      // 一键回调启用后：授权页跳转由本机协议助手接住，这里轮询完成换取 token。
+      React.useEffect(() => {
+        if (!wAuthUrl || westock.configured) return undefined
+        const timer = setInterval(async () => {
+          try {
+            const r = await getJson('settings/westock/poll-callback')
+            if (r.connected) {
+              setWAuthUrl(''); setWCallback('')
+              setWNote({ ok: true, text: '已连接腾讯自选股，沪深 / 港股行情将优先使用该数据源。' })
+              await reload?.()
+            } else if (r.error) {
+              setWAuthUrl('')
+              setWNote({ ok: false, text: r.error })
+            }
+          } catch { /* 下一个轮询周期再试 */ }
+        }, 2000)
+        return () => clearInterval(timer)
+      }, [wAuthUrl, westock.configured, reload])
+      const registerWestockProtocol = async () => {
+        if (wBusy) return
+        setWBusy(true); setWNote(null)
+        try {
+          await post('settings/westock/register-protocol', {})
+          setWProtocol(true)
+          setWNote({ ok: true, text: '已接管 workbuddy:// 回调（原 WorkBuddy 处理器已备份，可随时还原）。请重新点「① 发起授权」→ 登录并同意 → 浏览器弹窗点「打开」，无需再粘贴地址。' })
+          await reload?.()
+        } catch (e) { setWNote({ ok: false, text: e.message }) }
+        finally { setWBusy(false) }
+      }
+      const unregisterWestockProtocol = async () => {
+        if (wBusy) return
+        setWBusy(true); setWNote(null)
+        try {
+          await post('settings/westock/unregister-protocol', {})
+          setWProtocol(false)
+          setWNote({ ok: true, text: '已还原 workbuddy:// 协议处理。' })
+          await reload?.()
+        } catch (e) { setWNote({ ok: false, text: e.message }) }
+        finally { setWBusy(false) }
+      }
       const startWestock = async () => {
         if (wBusy) return
         setWBusy(true); setWNote(null)
@@ -723,16 +765,21 @@ window.__ModuleLoader__.load({
           h('p', { style: { color: t.sub, fontSize: 11.5, lineHeight: 1.65, margin: '0 0 10px' } },
             '授权后沪深 / 港股日线优先走腾讯自选股官方接口（免费，前复权口径），覆盖比东方财富更稳；场外基金净值与未覆盖标的自动回落同花顺数据 / 东方财富。授权只需一次，token 过期自动续期。'),
           westock.configured
-            ? h('div', { style: { display: 'flex', gap: 10, flexWrap: 'wrap' } }, h('button', { style: T.btn(t, false), disabled: busy || wBusy, onClick: disconnectWestock }, '断开连接'))
-            : h('div', { style: { display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' } },
+            ? h('div', { style: { display: 'flex', gap: 10, flexWrap: 'wrap' } },
+                h('button', { style: T.btn(t, false), disabled: busy || wBusy, onClick: disconnectWestock }, '断开连接'),
+                wProtocol ? h('button', { style: T.btn(t, false), disabled: busy || wBusy, onClick: unregisterWestockProtocol }, '还原 workbuddy 协议') : null)
+            : h('div', { style: { display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' } },
                 h('button', { style: T.btn(t, true), disabled: busy || wBusy, onClick: startWestock }, wBusy ? '请稍候…' : '① 发起授权'),
-                wAuthUrl ? h('a', { href: wAuthUrl, target: '_blank', rel: 'noreferrer', style: { ...T.btn(t, false), textDecoration: 'none', display: 'inline-flex', alignItems: 'center' } }, '② 打开授权页面 ↗') : null),
+                wAuthUrl ? h('a', { href: wAuthUrl, target: '_blank', rel: 'noreferrer', style: { ...T.btn(t, false), textDecoration: 'none', display: 'inline-flex', alignItems: 'center' } }, '② 打开授权页面 ↗') : null,
+                wProtocol
+                  ? h('span', { style: { fontSize: 11, color: t.green } }, '✓ 一键回调已启用：同意授权后点「打开」即自动完成')
+                  : h('button', { style: T.btn(t, false), disabled: busy || wBusy, onClick: registerWestockProtocol }, '一键回调（推荐，免复制）')),
           wAuthUrl ? h('div', { style: { marginTop: 10 } },
             h('label', { style: T.label(t) }, '③ 登录后在页面勾选同意并点「同意授权」，浏览器会跳到 workbuddy://… 的地址，把它完整粘贴到这里'),
             h('div', { style: { display: 'flex', gap: 10, marginTop: 4, flexWrap: 'wrap' } },
               h('input', { value: wCallback, onChange: (e) => setWCallback(e.target.value), placeholder: 'workbuddy://workbuddy/mcp/connector:dsh-wealth/oauth/callback?code=…&state=…', style: { ...T.input(t), flex: '1 1 260px' } }),
               h('button', { style: T.btn(t, true), disabled: busy || wBusy || !wCallback.trim(), onClick: finishWestock }, '完成授权'))),
-          wAuthUrl ? h('p', { style: { marginTop: 6, fontSize: 10.5, color: t.sub, lineHeight: 1.6 } }, '提示：本机没有装 WorkBuddy，跳转可能没有反应——按 F12 打开开发者工具的「控制台」，报错信息里包含完整的 workbuddy:// 地址，复制整段即可。') : null,
+          wAuthUrl && !wProtocol ? h('p', { style: { marginTop: 6, fontSize: 10.5, color: t.sub, lineHeight: 1.6 } }, '提示：本机的 WorkBuddy 客户端会抢先接住跳转——想手动粘贴，可按 F12 打开控制台，从报错里复制完整 workbuddy:// 地址；或点上面的「一键回调」省掉这一步。') : null,
           wNote ? h('div', { role: wNote.ok ? 'status' : 'alert', style: { marginTop: 8, fontSize: 11.5, color: wNote.ok ? t.green : t.red } }, wNote.text) : null,
         ),
         h('div', { style: { ...T.card(t), marginBottom: 14 } },

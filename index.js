@@ -4,8 +4,11 @@
  * can read and edit it, and so any local script can POST operations.
  * The AI (资产管家 / any agent) edits the same store through cli.mjs.
  */
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { execFile } from 'node:child_process'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { load, save, applyOp, summarize, OpError, DATA_DIR } from './store.mjs'
 import { refreshQuotes } from './quotes.mjs'
 import { forecast } from './forecast.mjs'
@@ -96,6 +99,19 @@ export function apply(ctx, config = {}) {
   const dataToken = () => String(vault.get(DATA_TOKEN_ID).token || '')
   // 腾讯自选股 westock-mcp：微信/QQ 扫码授权的行情来源，token 过期前自动续期。
   const WESTOCK_ID = 'app:westock'
+  const WESTOCK_CACHE = () => join(DATA_DIR, 'cache')
+  // 授权请求落盘：后端中途重启（加载新代码 / 更新）不再丢 PKCE 会话。
+  const westockSlotFile = () => join(WESTOCK_CACHE(), 'westock-login.json')
+  const saveWestockSlot = (slot) => {
+    try {
+      mkdirSync(WESTOCK_CACHE(), { recursive: true })
+      if (slot) writeFileSync(westockSlotFile(), JSON.stringify(slot), 'utf8')
+      else rmSync(westockSlotFile(), { force: true })
+    } catch { /* best effort */ }
+  }
+  const loadWestockSlot = () => {
+    try { return JSON.parse(readFileSync(westockSlotFile(), 'utf8')) } catch { return null }
+  }
   let westockLoginSlot = null
   const westockAuth = async () => {
     const secret = vault.get(WESTOCK_ID)
@@ -108,7 +124,35 @@ export function apply(ctx, config = {}) {
       return token.accessToken
     } catch { return secret.accessToken }
   }
-  const dataSourceStatus = () => ({ westock: { configured: vault.configured(WESTOCK_ID, 'westock') }, thsData: { configured: vault.configured(DATA_TOKEN_ID, 'finapi'), adminUrl: THS_ADMIN_URL } })
+  // 用回调授权码换 token 并入库；finish（手动粘贴）与 poll（一键回调）共用。
+  const completeWestockLogin = async (slot, parsed) => {
+    if (!slot) return { error: '授权请求不存在或已过期，请重新点「发起授权」' }
+    if (parsed.state && slot.state && parsed.state !== slot.state) {
+      saveWestockSlot(null); westockLoginSlot = null
+      return { error: '回调校验失败（state 不一致），请重新发起授权' }
+    }
+    try {
+      const token = await exchangeWestockCode({ code: parsed.code, clientId: slot.clientId, codeVerifier: slot.codeVerifier })
+      saveWestockSlot(null); westockLoginSlot = null
+      vault.set(WESTOCK_ID, 'westock', { accessToken: token.accessToken, refreshToken: token.refreshToken, clientId: slot.clientId, expiresAt: String(token.expiresAt || '') })
+      return {}
+    } catch (error) {
+      return { error: String(error?.message || error) }
+    }
+  }
+  // workbuddy:// 协议接管：让「打开」把回调交给本插件的助手脚本而不是 WorkBuddy 客户端。
+  const WESTOCK_REG_KEY = 'HKCU\\Software\\Classes\\workbuddy'
+  const westockProtocolFile = () => join(WESTOCK_CACHE(), 'westock-protocol.json')
+  const runReg = (args) => new Promise((resolve) => execFile('reg', args, { windowsHide: true }, (error, stdout) => resolve({ error, stdout: String(stdout || '') })))
+  const regValue = (stdout) => {
+    const line = stdout.split(/\r?\n/).find((entry) => entry.includes('REG_SZ'))
+    if (!line) return null
+    return line.slice(line.lastIndexOf('REG_SZ') + 'REG_SZ'.length).trim() || null
+  }
+  const westockProtocolStatus = () => {
+    try { return JSON.parse(readFileSync(westockProtocolFile(), 'utf8')) } catch { return null }
+  }
+  const dataSourceStatus = () => ({ westock: { configured: vault.configured(WESTOCK_ID, 'westock'), protocol: !!westockProtocolStatus() }, thsData: { configured: vault.configured(DATA_TOKEN_ID, 'finapi'), adminUrl: THS_ADMIN_URL } })
   let loginTarget = null
   const login = createThsLogin({ onCookie:cookie=>sync.acceptThsLogin(loginTarget,cookie) })
   const loginStatus = () => {
@@ -310,29 +354,79 @@ export function apply(ctx, config = {}) {
           const client = await registerWestockClient()
           const pkce = createWestockPkce()
           const state = randomUUID().replaceAll('-', '')
-          westockLoginSlot = { clientId: client.clientId, codeVerifier: pkce.codeVerifier, state, createdAt: Date.now() }
+          const slot = { clientId: client.clientId, codeVerifier: pkce.codeVerifier, state, createdAt: Date.now() }
+          westockLoginSlot = slot
+          saveWestockSlot(slot)
           send(res, 200, { ok: true, authorizeUrl: buildWestockAuthorizeUrl({ clientId: client.clientId, state, codeChallenge: pkce.codeChallenge }) })
           return
         }
         if (path === 'api/settings/westock/finish') {
           if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
           const body = JSON.parse(await readBody(req, 64 * 1024))
-          if (!westockLoginSlot) { send(res, 400, { ok: false, error: { code: 'bad-request', message: '请先发起 westock 授权' } }); return }
           if (typeof body.callbackUrl !== 'string' || !/^workbuddy:\/\//i.test(body.callbackUrl.trim())) {
             send(res, 400, { ok: false, error: { code: 'bad-request', message: '这不是授权回调地址：请在弹出的页面勾选同意并点「同意授权」，浏览器跳转到 workbuddy://… 后再把该地址完整粘贴回来' } })
             return
           }
+          const slot = westockLoginSlot || loadWestockSlot()
           const parsed = westockCallbackCode(body.callbackUrl)
           if (!parsed.code) { send(res, 400, { ok: false, error: { code: 'bad-request', message: '回调地址里没有 code，请粘贴完整的 workbuddy:// 回调链接' } }); return }
-          if (parsed.state && westockLoginSlot.state && parsed.state !== westockLoginSlot.state) {
-            westockLoginSlot = null
-            send(res, 400, { ok: false, error: { code: 'bad-request', message: '回调校验失败（state 不一致），请重新发起授权' } })
-            return
+          const done = await completeWestockLogin(slot, parsed)
+          if (done.error) { send(res, 400, { ok: false, error: { code: 'bad-request', message: done.error } }); return }
+          send(res, 200, { ok: true, ...dataSourceStatus() })
+          return
+        }
+        if (path === 'api/settings/westock/poll-callback') {
+          if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
+          const file = join(WESTOCK_CACHE(), 'westock-callback.json')
+          let payload = null
+          try { payload = JSON.parse(readFileSync(file, 'utf8')) } catch { payload = null }
+          if (!payload?.url) { send(res, 200, { ok: true, pending: false }); return }
+          rmSync(file, { force: true })
+          if (Date.now() - Number(payload.receivedAt || 0) > 15 * 60_000) { send(res, 200, { ok: true, pending: false }); return }
+          const slot = westockLoginSlot || loadWestockSlot()
+          const parsed = westockCallbackCode(payload.url)
+          if (!parsed.code) { send(res, 200, { ok: true, pending: false, error: '回调地址里没有 code' }); return }
+          const done = await completeWestockLogin(slot, parsed)
+          if (done.error) { send(res, 200, { ok: true, pending: false, error: done.error }); return }
+          send(res, 200, { ok: true, pending: false, connected: true, ...dataSourceStatus() })
+          return
+        }
+        if (path === 'api/settings/westock/register-protocol') {
+          if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
+          if (process.platform !== 'win32') { send(res, 400, { ok: false, error: { code: 'bad-request', message: '一键回调目前仅支持 Windows' } }); return }
+          const previous = await runReg(['query', WESTOCK_REG_KEY + '\\shell\\open\\command', '/ve'])
+          const previousCommand = previous.error ? null : regValue(previous.stdout)
+          try {
+            mkdirSync(WESTOCK_CACHE(), { recursive: true })
+            writeFileSync(westockProtocolFile(), JSON.stringify({ registeredAt: Date.now(), previousCommand }), 'utf8')
+          } catch { /* marker is best effort */ }
+          const helper = fileURLToPath(new URL('./westock-callback.mjs', import.meta.url))
+          const command = JSON.stringify(process.execPath) + ' ' + JSON.stringify(helper) + ' "%1"'
+          const steps = [
+            ['add', WESTOCK_REG_KEY, '/ve', '/d', 'URL:workbuddy Protocol', '/f'],
+            ['add', WESTOCK_REG_KEY, '/v', 'URL Protocol', '/t', 'REG_SZ', '/d', '', '/f'],
+            ['add', WESTOCK_REG_KEY + '\\shell\\open\\command', '/ve', '/d', command, '/f'],
+          ]
+          for (const step of steps) {
+            const result = await runReg(step)
+            if (result.error) {
+              send(res, 500, { ok: false, error: { code: 'internal', message: '写入注册表失败：' + String(result.error.message || result.error).slice(0, 120) } })
+              return
+            }
           }
-          const clientId = westockLoginSlot.clientId
-          const token = await exchangeWestockCode({ code: parsed.code, clientId, codeVerifier: westockLoginSlot.codeVerifier })
-          westockLoginSlot = null
-          vault.set(WESTOCK_ID, 'westock', { accessToken: token.accessToken, refreshToken: token.refreshToken, clientId, expiresAt: String(token.expiresAt || '') })
+          send(res, 200, { ok: true, ...dataSourceStatus() })
+          return
+        }
+        if (path === 'api/settings/westock/unregister-protocol') {
+          if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
+          const backup = westockProtocolStatus()
+          if (backup?.previousCommand) {
+            const result = await runReg(['add', WESTOCK_REG_KEY + '\\shell\\open\\command', '/ve', '/d', backup.previousCommand, '/f'])
+            if (result.error) { send(res, 500, { ok: false, error: { code: 'internal', message: '恢复注册表失败：' + String(result.error.message || result.error).slice(0, 120) } }); return }
+          } else {
+            await runReg(['delete', WESTOCK_REG_KEY, '/f'])
+          }
+          rmSync(westockProtocolFile(), { force: true })
           send(res, 200, { ok: true, ...dataSourceStatus() })
           return
         }
@@ -340,6 +434,7 @@ export function apply(ctx, config = {}) {
           if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
           vault.remove(WESTOCK_ID)
           westockLoginSlot = null
+          saveWestockSlot(null)
           send(res, 200, { ok: true, ...dataSourceStatus() })
           return
         }

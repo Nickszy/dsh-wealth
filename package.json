@@ -25,6 +25,7 @@
     "klines.mjs",
     "ths-data.mjs",
     "westock-mcp.mjs",
+    "westock-callback.mjs",
     "timeline.mjs",
     "performance.mjs",
     "store.mjs",
