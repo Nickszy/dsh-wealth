@@ -546,10 +546,15 @@ export async function checkFosunApiKey({ gatewayUrl, apiKey, signal, deps = {} }
   const flag = (value) => value === true || value === 'true' || value === 1 || value === '1' ? 'valid'
     : value === false || value === 'false' || value === 0 || value === '0' ? 'invalid' : null
   const named = String(data.status || '').toLowerCase()
+  // 网关对未激活/无效的 Key 返回数值 status: 0（实测乱造 key 与未绑定 key 完全一致）。
+  const numeric = Number(data.status)
+  const numericStatus = Number.isFinite(numeric) && String(data.status).trim() !== '' && !Number.isNaN(numeric)
+    ? (numeric === 1 ? 'valid' : numeric === 0 ? 'invalid' : 'unknown')
+    : null
   const status = ['valid', 'invalid', 'expired', 'disabled'].includes(named) ? named
-    : flag(data.valid) || flag(data.isValid) || flag(data.active) || 'unknown'
+    : flag(data.valid) || flag(data.isValid) || flag(data.active) || numericStatus || 'unknown'
   const expiresAt = Number(data.expiresAt) > 0 ? Number(data.expiresAt) : null
-  return { status, expiresAt }
+  return { status, expiresAt, rawStatus: data.status ?? null }
 }
 
 export function fosunFingerprintPart(secrets = {}) {

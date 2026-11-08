@@ -231,13 +231,20 @@ export function apply(ctx, config = {}) {
   const pendingFosunOwner = () => fosunOnboard?.authId ? 'pending-fosun:' + fosunOnboard.authId : 'pending-fosun'
   const pollFosunOnboard = async () => {
     if (!fosunOnboard || fosunOnboard.status !== 'waiting') return
+    // 网关对 TicketCreate 有频率限制（频繁调用会返回 40012），轮询至少间隔 5 秒。
+    if (Date.now() - (fosunOnboard.lastPollAt || 0) < 5000) return
+    fosunOnboard.lastPollAt = Date.now()
     try {
+      // 注意：TicketCreate 首次调用就会返回 apiKey + serverPubKey，但手机端完成绑定前
+      // 这个 Key 是未激活的——只有 APIKeyCheck 明确 valid 才能入库。
       const ticket = await fosunTicketCreate({ gatewayUrl: fosunOnboard.gatewayUrl, clientPubKey: fosunOnboard.publicPem, macId: fosunOnboard.macId })
-      if (!ticket.apiKey || !ticket.serverPubKey) return
+      if (!ticket.apiKey || !ticket.serverPubKey) {
+        fosunOnboard.message = '等待手机端完成绑定…'
+        return
+      }
       const check = await checkFosunApiKey({ gatewayUrl: fosunOnboard.gatewayUrl, apiKey: ticket.apiKey }).catch(() => ({ status: 'unknown' }))
-      if (['expired', 'disabled', 'invalid'].includes(check.status)) {
-        fosunOnboard.status = 'error'
-        fosunOnboard.message = '复星 API Key 校验未通过（' + check.status + '），请在开通页重新复制'
+      if (check.status !== 'valid') {
+        fosunOnboard.message = '等待手机端完成绑定…（当前 API Key 未激活）'
         return
       }
       vault.set(pendingFosunOwner(), 'fosun', {
@@ -248,8 +255,8 @@ export function apply(ctx, config = {}) {
       fosunOnboard.status = 'ready'
       fosunOnboard.message = '复星开通完成，凭据已保存，可以读取账户'
     } catch (error) {
-      // Transient gateway errors must not kill the waiting flow; the UI shows the message.
-      fosunOnboard.message = '轮询开通状态失败：' + String(error?.message || error)
+      // Transient gateway errors (including 40012 rate limiting) must not kill the waiting flow.
+      fosunOnboard.message = '轮询开通状态失败，稍后自动重试：' + String(error?.message || error)
     }
   }
   // Tiger's remote MCP uses the OAuth 2.1 device flow: no redirect listener, the

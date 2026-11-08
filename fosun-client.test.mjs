@@ -189,3 +189,15 @@ test('复星 TicketCreate onboarding: pending then bound, plus key generation', 
 
   await assert.rejects(() => fosunTicketCreate({ gatewayUrl: GATEWAY, clientPubKey: key.publicPem, macId: 'm', deps: { fetch: async () => ({ ok: true, status: 200, headers: { get: () => 'application/json' }, text: async () => JSON.stringify({ code: 500, message: 'boom', data: {} }) }) } }), /boom/)
 })
+
+test('APIKeyCheck maps numeric status: 0 invalid, 1 valid, others unknown', async () => {
+  const check = (status) => checkFosunApiKey({
+    gatewayUrl: GATEWAY, apiKey: 'ak_x',
+    deps: { fetch: async () => ({ ok: true, status: 200, headers: { get: () => 'application/json' }, text: async () => JSON.stringify({ encrypted: false, content: { code: 0, data: { status, expiresAt: 0 }, message: 'success' } }) }) },
+  })
+  // 未绑定/无效 Key 实测返回 status: 0（与乱造 key 完全一致），不能当成可用凭据。
+  assert.equal((await check(0)).status, 'invalid')
+  assert.equal((await check(1)).status, 'valid')
+  assert.equal((await check(7)).status, 'unknown')
+  assert.equal((await check(0)).rawStatus, 0)
+})
