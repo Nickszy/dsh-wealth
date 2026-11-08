@@ -12,6 +12,9 @@ import { createMcpHttpClient } from './mcp-http.mjs'
 export const TIGER_MCP_ENDPOINT = 'https://mcp.tigerfintech.com/mcp'
 export const TIGER_OAUTH_ISSUER = 'https://openapi-oauth2.tigerfintech.com'
 export const TIGER_SCOPE = 'api.account:read api.trade:read'
+// RFC 8707 resource indicator: the protected-resource metadata binds tokens to
+// this audience; without it the MCP endpoint rejects the token as invalid.
+export const TIGER_RESOURCE = TIGER_MCP_ENDPOINT
 
 const fail = (message) => { throw new Error(message) }
 const text = (value) => {
@@ -154,7 +157,7 @@ async function registerClient(options) {
 /** Begin a device authorization. Returns the code the user must approve. */
 export async function startTigerDeviceAuth({ signal, deps = {} } = {}) {
   const clientId = await registerClient({ signal, deps })
-  const payload = await oauthPost('/oauth2/device_authorization', formBody({ client_id: clientId, scope: TIGER_SCOPE }), {
+  const payload = await oauthPost('/oauth2/device_authorization', formBody({ client_id: clientId, scope: TIGER_SCOPE, resource: TIGER_RESOURCE }), {
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
     signal,
     deps,
@@ -180,6 +183,7 @@ export async function pollTigerDeviceToken(device, { signal, deps = {} } = {}) {
       grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
       device_code: device.deviceCode,
       client_id: device.clientId,
+      resource: TIGER_RESOURCE,
     }), { headers: { 'content-type': 'application/x-www-form-urlencoded' }, signal, deps })
     const accessToken = text(payload.access_token)
     if (!accessToken) fail('老虎授权响应缺少 access_token')
@@ -209,6 +213,7 @@ export async function refreshTigerToken({ refreshToken, clientId, signal, deps =
     grant_type: 'refresh_token',
     refresh_token: refreshToken,
     client_id: clientId,
+    resource: TIGER_RESOURCE,
   }), { headers: { 'content-type': 'application/x-www-form-urlencoded' }, signal, deps })
   const accessToken = text(payload.access_token)
   if (!accessToken) fail('老虎 Token 续期响应缺少 access_token')

@@ -317,10 +317,14 @@ export function createSyncService(ctx, options = {}) {
     const secrets = initialSecrets || secretsFor(source)
     try { return await fn(secrets) }
     catch (error) {
-      if (!AUTH_ERROR.test(String(error?.message || ''))) throw error
-      let refreshed = null
-      try { refreshed = await refreshSecrets(source, secrets) } catch { /* surface the original auth error */ }
-      if (!refreshed) throw error
+      if (!AUTH_ERROR.test(String(error?.message || error))) throw error
+      let refreshed = null, refreshError = null
+      try { refreshed = await refreshSecrets(source, secrets) } catch (refreshFailure) { refreshError = refreshFailure }
+      if (!refreshed) {
+        // Surface why renewal failed so "凭据无效" never hides a broken refresh token.
+        if (refreshError) throw new Error(String(error?.message || error) + '；自动续期失败：' + String(refreshError?.message || refreshError))
+        throw error
+      }
       return await fn(refreshed)
     }
   }

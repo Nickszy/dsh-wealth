@@ -81,13 +81,15 @@ test('老虎 history pages through transactions and maps buy/sell flows', async 
   assert.ok(sell.cashAmount > 0)
 })
 
-test('老虎 OAuth device flow: register, pending, ready and refresh', async () => {
+test('老虎 OAuth device flow: register, pending, slow_down, ready and refresh', async () => {
   let stage = 0
+  const requests = []
   const deps = {
     timeoutMs: 5000,
     fetch: async (url, init) => {
       const path = new URL(url).pathname
-      const text = init.body.startsWith('{') ? JSON.parse(init.body) : Object.fromEntries(new URLSearchParams(init.body))
+      const body = init.body.startsWith('{') ? JSON.parse(init.body) : Object.fromEntries(new URLSearchParams(init.body))
+      requests.push({ path, body })
       if (path === '/oauth2/register') return { ok: true, status: 200, headers: { get: () => 'application/json' }, text: async () => JSON.stringify({ client_id: 'cli-xyz' }) }
       if (path === '/oauth2/device_authorization') return { ok: true, status: 200, headers: { get: () => 'application/json' }, text: async () => JSON.stringify({ device_code: 'dev-1', user_code: 'ABCD-1234', verification_uri: 'https://auth.example/activate', verification_uri_complete: 'https://auth.example/activate?code=ABCD-1234', interval: 5, expires_in: 600 }) }
       if (path === '/oauth2/token') {
@@ -102,6 +104,7 @@ test('老虎 OAuth device flow: register, pending, ready and refresh', async () 
   const device = await startTigerDeviceAuth({ deps })
   assert.equal(device.clientId, 'cli-xyz')
   assert.equal(device.userCode, 'ABCD-1234')
+  assert.ok(device.verificationUri.includes('activate'))
   assert.equal((await pollTigerDeviceToken(device, { deps })).status, 'pending')
   const slow = await pollTigerDeviceToken(device, { deps })
   assert.equal(slow.status, 'slow_down')
@@ -111,4 +114,10 @@ test('老虎 OAuth device flow: register, pending, ready and refresh', async () 
   assert.equal(ready.token.accessToken, 'at-1')
   const refreshed = await refreshTigerToken({ refreshToken: 'rt-1', clientId: 'cli-xyz', deps })
   assert.equal(refreshed.accessToken, 'at-1')
+  // RFC 8707: device authorization and both token grants carry the MCP resource indicator.
+  for (const request of requests) {
+    if (request.path === '/oauth2/register') continue
+    assert.equal(request.body.resource, 'https://mcp.tigerfintech.com/mcp', request.path + ' must bind the resource')
+  }
+  assert.equal(requests.filter(r => r.path === '/oauth2/token').length, 4)
 })

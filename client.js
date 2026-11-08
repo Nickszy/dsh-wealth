@@ -1488,7 +1488,7 @@ window.__ModuleLoader__.load({
         ['ib', 'Interactive Brokers', '官方 Client Portal Gateway', 'IB'],
         ['custom', '高级 API / MCP', '标准化快照接口或只读工具', '⌘'],
       ]
-      const emptyForm = connector => ({ name: '', connector, transport: connector === 'custom' ? 'http' : 'native', lbInterface: 'mcp', futuInterface: 'mcp', accountId: '', portfolioId: '', thsBookType: 'common', brokerAccountId: '', intervalMinutes: '15', enabled: true, host: '127.0.0.1', port: '33333', tls: false, tradeEnvironment: 'REAL', tradeMarket: 'HK', currency: 'HKD', gatewayUrl: 'https://localhost:5000/v1/api', trustLocalGateway: false, mcpEndpoint: '', url: '', toolName: '', args: '{}', credentialRef: '' })
+      const emptyForm = connector => ({ name: '', connector, transport: connector === 'custom' ? 'http' : 'native', lbInterface: 'mcp', futuInterface: 'mcp', accountId: '', portfolioId: '', thsBookType: 'common', brokerAccountId: '', intervalMinutes: '15', enabled: true, host: '127.0.0.1', port: '33333', tls: false, tradeEnvironment: 'REAL', tradeMarket: 'HK', currency: 'HKD', gatewayUrl: connector === 'ib' ? 'https://localhost:5000/v1/api' : '', trustLocalGateway: false, mcpEndpoint: '', url: '', toolName: '', args: '{}', credentialRef: '' })
       const [choice, setChoice] = React.useState(reauth ? reauth.connector : (initialChoice || 'manual'))
       const [form, setForm] = React.useState(() => {
         if (reauth) return { ...emptyForm(reauth.connector), ...(reauth.config || {}), name: reauth.label || '', lbInterface: reauth.connector === 'longbridge' ? (reauth.transport === 'mcp' ? 'mcp' : 'sdk') : 'mcp', futuInterface: reauth.connector === 'futu' ? (reauth.transport === 'mcp' ? 'mcp' : 'sdk') : 'mcp', intervalMinutes: String(reauth.intervalMinutes ?? 15) }
@@ -1503,7 +1503,7 @@ window.__ModuleLoader__.load({
       const [authFromList, setAuthFromList] = React.useState(false)
       const lock = React.useRef(false), loginStart = React.useRef(0), generation = React.useRef(0), mounted = React.useRef(true), loginAttempt = React.useRef(0), adopted = React.useRef(0)
       React.useEffect(() => { mounted.current = true; return () => { mounted.current = false; generation.current++; loginAttempt.current++ } }, [])
-      const get = async path => { const r = await fetch('/portfolio/api/' + path, { headers: { accept: 'application/json' } }); const data = await r.json(); if (!r.ok || !data.ok) throw new Error(data.error?.message || '读取失败'); return data }
+      const get = async path => { const r = await fetch('/portfolio/api/' + path, { headers: { accept: 'application/json' } }); const data = await r.json().catch(() => null); if (!r.ok || !data?.ok) throw new Error(data?.error?.message || (r.ok ? '读取失败' : '服务暂不可用（HTTP ' + r.status + '）')); return data }
       const accept = r => { if (mounted.current) setSources(r.sources || []) }
       React.useEffect(() => {
         let live = true
@@ -1939,8 +1939,8 @@ window.__ModuleLoader__.load({
 
     async function post(path, body) {
       const r = await fetch('/portfolio/api/' + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
-      const data = await r.json()
-      if (!r.ok || !data.ok) throw new Error(data.error?.message || '请求失败')
+      const data = await r.json().catch(() => null)
+      if (!r.ok || !data?.ok) throw new Error(data?.error?.message || (r.ok ? '请求失败' : '服务暂不可用（HTTP ' + r.status + '）；请完全重启 the agent harness 后重试'))
       return data
     }
 
