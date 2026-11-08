@@ -100,6 +100,29 @@ export function createMcpHttpClient({
     return payload
   }
 
+  // JSON-RPC notification: no id, no response expected. Some servers (盈米) reject
+  // the initialized handshake when it is sent as a request.
+  async function notify(method, params, { auth = true, timeout = 8000 } = {}) {
+    guard()
+    const body = { jsonrpc: '2.0', method, ...(params === undefined ? {} : { params }) }
+    const extra = auth ? await resolveHeaders() : {}
+    const requestHeaders = {
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+      'mcp-protocol-version': protocolVersion,
+      ...extra,
+    }
+    if (sessionId) requestHeaders['mcp-session-id'] = sessionId
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(new Error('MCP 通知超时')), timeout)
+    try {
+      const response = await fetchImpl(base, { method: 'POST', headers: requestHeaders, body: JSON.stringify(body), signal: controller.signal, redirect: 'error' })
+      const sid = response.headers.get('mcp-session-id')
+      if (sid) sessionId = sid
+    } catch { /* a notification has no reply; a dropped one is harmless */ }
+    finally { clearTimeout(timer) }
+  }
+
   async function ensureSession() {
     if (initialized) return
     const init = await rpc('initialize', {
@@ -109,7 +132,7 @@ export function createMcpHttpClient({
     })
     if (!init?.result?.serverInfo && !init?.result?.protocolVersion) fail('MCP 初始化失败：响应缺少 serverInfo')
     initialized = true
-    await rpc('notifications/initialized', undefined, { auth: true, timeout: 8000 })
+    await notify('notifications/initialized')
   }
 
   function unwrap(result) {

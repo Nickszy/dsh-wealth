@@ -17,6 +17,7 @@ import { previewImport } from './importer.mjs'
 import { modelInfo, chatTurn, applyChatOps } from './chat.mjs'
 import { createSyncService } from './sync.mjs'
 import { startTigerDeviceAuth, pollTigerDeviceToken } from './tiger-mcp.mjs'
+import { createQiemanLogin } from './qieman-login.mjs'
 import { createCredentialStore } from './credentials.mjs'
 import { createThsLogin } from './ths-login.mjs'
 import { createFutuLogin } from './futu-login.mjs'
@@ -115,6 +116,26 @@ export function apply(ctx, config = {}) {
     return { status, message:current.message, ...(current.authorizeUrl ? {authorizeUrl:current.authorizeUrl} : {}) }
   }
   ctx.effect(() => () => futuLoginSlot?.dispose(), 'dsh-wealth: own Futu MCP login lifecycle')
+  // Qieman 账户与资产 tools are user-scoped: browser OAuth (DCR + PKCE + loopback)
+  // is the only route. The refresh token is stored under `pending-qieman-mcp`.
+  let qiemanLoginSlot = null, qiemanLoginTarget = null
+  const qiemanLogin = () => {
+    if (!qiemanLoginSlot) {
+      qiemanLoginSlot = createQiemanLogin({ onToken: async t => {
+        const fields = { bearerToken: t.accessToken }
+        if (t.refreshToken) fields.refreshToken = t.refreshToken
+        if (t.clientId) fields.clientId = t.clientId
+        vault.set(qiemanLoginTarget ? 'pending-qieman-mcp:' + qiemanLoginTarget : 'pending-qieman-mcp', 'qieman', fields)
+      } })
+    }
+    return qiemanLoginSlot
+  }
+  const qiemanStatus = () => {
+    const current = qiemanLogin().status()
+    const status = current.status === 'ready' ? 'ready' : ['error', 'timeout', 'disposed'].includes(current.status) ? 'error' : ['starting', 'waiting'].includes(current.status) ? 'waiting' : 'idle'
+    return { status, message: current.message, ...(current.authorizeUrl ? { authorizeUrl: current.authorizeUrl } : {}) }
+  }
+  ctx.effect(() => () => qiemanLoginSlot?.dispose(), 'dsh-wealth: own Qieman MCP login lifecycle')
   // Tiger's remote MCP uses the OAuth 2.1 device flow: no redirect listener, the
   // user enters a short code in the browser. The refresh token is long-lived.
   let tigerLogin = null
@@ -280,6 +301,18 @@ export function apply(ctx, config = {}) {
         if (path === 'api/sources' || path === 'api/sources/ths/portfolios') {
           if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
           send(res, 200, { ok: true, ...(path === 'api/sources' ? sync.list() : await sync.listThsPortfolios()) }); return
+        }
+        if (path === 'api/sources/qieman/mcp/start') {
+          if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
+          const body = JSON.parse(await readBody(req).catch(() => '{}') || '{}')
+          const target = body.authId ? sync.list().authorizations.find(a => a.id === body.authId && a.connector === 'qieman') : null
+          qiemanLoginTarget = target ? target.id : null
+          await qiemanLogin().start()
+          send(res, 200, { ok: true, ...qiemanStatus() }); return
+        }
+        if (path === 'api/sources/qieman/mcp/status') {
+          if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
+          send(res, 200, { ok: true, ...qiemanStatus() }); return
         }
         if (path === 'api/sources/tiger/oauth/start') {
           if (req.method !== 'POST') { res.writeHead(405); res.end(); return }

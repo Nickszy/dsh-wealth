@@ -35,6 +35,7 @@
     "futu-login.mjs",
     "mcp-http.mjs",
     "qieman-mcp.mjs",
+    "qieman-login.mjs",
     "tiger-mcp.mjs",
     "fosun-client.mjs",
     "HISTORY-DESIGN.md",

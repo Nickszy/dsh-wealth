@@ -9,7 +9,7 @@ import { listThsAccounts, fetchStandaloneThsSnapshot } from './ths-client.mjs'
 import { listFutuAccounts, fetchFutuSnapshot, fetchLongbridgeSnapshot } from './brokers-sdk.mjs'
 import { listLongbridgeMcpAccounts, fetchLongbridgeMcpSnapshot } from './lb-mcp.mjs'
 import { listFutuMcpAccounts, fetchFutuMcpSnapshot, refreshFutuToken } from './futu-mcp.mjs'
-import { listQiemanAccounts, fetchQiemanSnapshot } from './qieman-mcp.mjs'
+import { listQiemanAccounts, fetchQiemanSnapshot, refreshQiemanToken } from './qieman-mcp.mjs'
 import { listTigerAccounts, fetchTigerSnapshot, refreshTigerToken } from './tiger-mcp.mjs'
 import { listFosunAccounts, fetchFosunSnapshot } from './fosun-client.mjs'
 import { listIbAccounts, fetchIbSnapshot } from './ib-client.mjs'
@@ -277,6 +277,7 @@ export function createSyncService(ctx, options = {}) {
       ...(source.connector === 'ths' && !saved.cookie ? vault.get('pending-ths') : {}),
       ...(source.connector === 'futu' && !saved.mcpToken ? vault.get('pending-futu-mcp') : {}),
       ...(source.connector === 'tiger' && !saved.accessToken ? vault.get('pending-tiger-mcp') : {}),
+      ...(source.connector === 'qieman' && !saved.bearerToken && !saved.apiKey ? vault.get('pending-qieman-mcp') : {}),
       ...saved, ...typed,
     }
   }
@@ -293,11 +294,15 @@ export function createSyncService(ctx, options = {}) {
       work = (async () => {
         const token = source.connector === 'tiger'
           ? await refreshTigerToken({ refreshToken: secrets.refreshToken, clientId: secrets.clientId, signal: AbortSignal.timeout(20000) })
-          : await refreshFutuToken({ refreshToken: secrets.refreshToken, clientId: secrets.clientId, signal: AbortSignal.timeout(20000) })
+          : source.connector === 'qieman'
+            ? await refreshQiemanToken({ refreshToken: secrets.refreshToken, clientId: secrets.clientId, signal: AbortSignal.timeout(20000) })
+            : await refreshFutuToken({ refreshToken: secrets.refreshToken, clientId: secrets.clientId, signal: AbortSignal.timeout(20000) })
         if (!token || !token.accessToken) return null
         const fields = source.connector === 'tiger'
           ? { accessToken: token.accessToken, ...(token.refreshToken ? { refreshToken: token.refreshToken } : {}) }
-          : { mcpToken: token.accessToken, ...(token.refreshToken ? { refreshToken: token.refreshToken } : {}) }
+          : source.connector === 'qieman'
+            ? { bearerToken: token.accessToken, ...(token.refreshToken ? { refreshToken: token.refreshToken } : {}) }
+            : { mcpToken: token.accessToken, ...(token.refreshToken ? { refreshToken: token.refreshToken } : {}) }
         vault.set(owner, source.connector, fields)
         if (source.authId) { try { updateAuth(source.authId, { authorizedAt: iso(), lastError: null }) } catch { /* refreshed token is still usable */ } }
         return fields
@@ -444,7 +449,9 @@ export function createSyncService(ctx, options = {}) {
       ? (existing ? vault.get('pending-futu-mcp:' + existing.id) : vault.get('pending-futu-mcp'))
       : connector === 'tiger' && transport === 'mcp'
         ? (existing ? vault.get('pending-tiger-mcp:' + existing.id) : vault.get('pending-tiger-mcp'))
-        : existing ? {} : (connector === 'ths' ? vault.get('pending-ths') : {})
+        : connector === 'qieman' && transport === 'mcp'
+          ? (existing ? vault.get('pending-qieman-mcp:' + existing.id) : vault.get('pending-qieman-mcp'))
+          : existing ? {} : (connector === 'ths' ? vault.get('pending-ths') : {})
     const saved = existing ? vault.get(id) : {}
     // A fresh browser token must win over the stored one, otherwise "重新授权"
     // keeps using a possibly revoked credential.
@@ -494,6 +501,7 @@ export function createSyncService(ctx, options = {}) {
     if (connector === 'ths') vault.remove('pending-ths')
     if (connector === 'futu') { vault.remove('pending-futu-mcp'); vault.remove('pending-futu-mcp:' + id) }
     if (connector === 'tiger') { vault.remove('pending-tiger-mcp'); vault.remove('pending-tiger-mcp:' + id) }
+    if (connector === 'qieman') { vault.remove('pending-qieman-mcp'); vault.remove('pending-qieman-mcp:' + id) }
     const auth = {
       ...(existing || {}),
       id,
@@ -606,7 +614,7 @@ export function createSyncService(ctx, options = {}) {
       source.brokerAccountId = String(input.brokerAccountId || '').trim()
       if (!source.brokerAccountId) throw bad('请明确选择券商账户或通道')
       if (source.connector === 'qieman') {
-        if (source.brokerAccountId !== 'main') throw bad('且慢 MCP 接入为单一账户（main）')
+        // 'main' = 总账户; any other id is one 且慢 sub-account (四笔钱/盈米宝).
         const mcpEndpoint = mcpEndpointUrl(input.mcpEndpoint)
         if (mcpEndpoint) source.mcpEndpoint = mcpEndpoint
       } else if (source.connector === 'tiger') {

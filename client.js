@@ -1538,7 +1538,7 @@ window.__ModuleLoader__.load({
         const mcp = transportOf() === 'mcp'
         const source = { id: form.id, name: form.name.trim(), connector: choice, transport: choice === 'custom' ? form.transport : (mcp ? 'mcp' : 'native'), accountId: form.accountId, intervalMinutes: Number(form.intervalMinutes), enabled: !!form.enabled }
         if (choice === 'ths') { source.portfolioId = form.portfolioId; source.thsBookType = form.thsBookType || 'common' }
-        if (['futu','longbridge','qieman','tiger','fosun','ib'].includes(choice)) source.brokerAccountId = (choice === 'longbridge' && mcp) || choice === 'qieman' ? 'main' : form.brokerAccountId
+        if (['futu','longbridge','qieman','tiger','fosun','ib'].includes(choice)) source.brokerAccountId = (choice === 'longbridge' && mcp) ? 'main' : form.brokerAccountId
         if (['futu','longbridge','qieman','tiger'].includes(choice) && mcp && form.mcpEndpoint.trim()) source.mcpEndpoint = form.mcpEndpoint.trim().replace(/\/+$/,'')
         if (choice === 'futu' && !mcp) Object.assign(source, { host: form.host.trim(), port: Number(form.port), tls: !!form.tls, tradeEnvironment: form.tradeEnvironment, tradeMarket: form.tradeMarket, currency: form.currency })
         if (choice === 'futu' && mcp && form.currency) source.currency = form.currency
@@ -1589,7 +1589,7 @@ window.__ModuleLoader__.load({
           if (choice === 'futu' && form.futuInterface === 'mcp' && login?.status !== 'ready') throw new Error('请先完成富途浏览器授权')
         }
         if (!auth && choice === 'longbridge' && form.lbInterface === 'mcp' && !credentials.mcpToken) throw new Error('请先在 open.longbridge.com/connect 生成授权码并点击兑换')
-        if (!auth && choice === 'qieman' && !credentials.apiKey && !credentials.bearerToken) throw new Error('请填写且慢 MCP API Key（ai.yingmi.com 申请，长期有效）')
+        if (!auth && choice === 'qieman' && !credentials.apiKey && !credentials.bearerToken && login?.status !== 'ready') throw new Error('请先完成且慢浏览器授权（账户与资产工具只对 OAuth 授权开放）')
         if (!auth && choice === 'tiger' && !credentials.accessToken) throw new Error('请先完成老虎设备码授权')
         if (!auth && choice === 'fosun') { if (!form.gatewayUrl.trim()) throw new Error('请填写复星 OpenAPI 网关地址'); if (!(credentials.apiKey && credentials.privateKey && credentials.serverPublicKey)) throw new Error('请填写复星 API Key、客户端私钥与服务端公钥') }
         const out = await requestAuth()
@@ -1599,7 +1599,7 @@ window.__ModuleLoader__.load({
       })
       const startLogin = () => { if (disabled || lock.current) return; invalidate(); setForm(old => ({ ...old, portfolioId: '', brokerAccountId: '' })); loginAttempt.current++; const attempt = loginAttempt.current; return act('login', async current => { const r = await post('sources/login/start', { authId: auth?.id || reauth?.id || undefined, sourceId: form.id || undefined }); if (!current() || attempt !== loginAttempt.current) return; loginStart.current = Date.now(); setLogin({ status: r.status || 'opening', message: r.message }); }) }
       React.useEffect(() => {
-        if (!['ths','futu','tiger'].includes(choice) || login?.status !== 'ready' || !loginAttempt.current || adopted.current === loginAttempt.current || working || loading || busy || lock.current) return
+        if (!['ths','futu','tiger','qieman'].includes(choice) || login?.status !== 'ready' || !loginAttempt.current || adopted.current === loginAttempt.current || working || loading || busy || lock.current) return
         if (choice === 'futu' && form.futuInterface !== 'mcp') return
         adopted.current = loginAttempt.current
         adopt()
@@ -1636,6 +1636,33 @@ window.__ModuleLoader__.load({
         setLbCode('')
         applyAuth(out)
       })
+      const startQiemanAuth = () => {
+        if (disabled || lock.current) return
+        invalidate()
+        loginAttempt.current++
+        const attempt = loginAttempt.current
+        return act('qieman-auth', async current => {
+          const r = await post('sources/qieman/mcp/start', { authId: auth?.id || reauth?.id })
+          if (!current() || attempt !== loginAttempt.current) return
+          setLogin({ status: r.status || 'waiting', message: r.message, authorizeUrl: r.authorizeUrl })
+        })
+      }
+      React.useEffect(() => {
+        if (choice !== 'qieman' || login?.status !== 'waiting') return
+        let live = true, inflight = false
+        const version = generation.current
+        const current = () => live && mounted.current && version === generation.current
+        const timer = setInterval(async () => {
+          if (inflight || !current()) return
+          inflight = true
+          try {
+            const r = await get('sources/qieman/mcp/status')
+            if (current() && r.status !== 'waiting') setLogin({ status: r.status, message: r.message, authorizeUrl: login?.authorizeUrl })
+          } catch { /* keep waiting; transient polling errors stay silent */ }
+          finally { inflight = false }
+        }, 2000)
+        return () => { live = false; clearInterval(timer) }
+      }, [login?.status, choice])
       const startTigerAuth = () => {
         if (disabled || lock.current) return
         invalidate()
@@ -1721,7 +1748,7 @@ window.__ModuleLoader__.load({
         ths: '独立于其他 DSH 插件。浏览器登录后，由本机服务保存登录状态；支持人民币沪深股票 / ETF 投资账本，以及爱基金等基金账本。',
         futu: '两种接入：官方 MCP（推荐）在浏览器完成富途授权，插件自动读取持仓、余额与流水，无需安装 OpenD；或本机 OpenD 直连（需启用 WebSocket，核对交易环境、市场和资金币种）。不需要其他 DSH 插件。',
         longbridge: '官方 MCP 接入：在 open.longbridge.com/connect 生成一次性授权码，兑换后自动读取持仓、余额与流水；也可改用 OpenAPI 凭据（App Key / Secret / Access Token）。不需要其他 DSH 插件。',
-        qieman: '盈米 / 且慢官方 MCP。到 ai.yingmi.com 用且慢账号免费申请 API Key（长期有效，无需刷新），插件直连 stargate 读取四笔钱基金持仓、资产与收益。且慢不提供逐笔流水，历史记录可用账单文件补录。',
+        qieman: '盈米 / 且慢官方 MCP。点「浏览器授权」用且慢账号登录，插件通过官方 OAuth（动态注册 + PKCE + 本机回环）获取长期凭据并自动续期，读取总账户 / 子账户的基金持仓、资产与收益。且慢不提供逐笔流水，历史记录可用账单文件补录。',
         tiger: '老虎官方远程 MCP（mcp.tigerfintech.com）。点「设备码授权」后在浏览器登录老虎账户并选择授权账户；refresh token 长期有效并自动续期，插件读取账户、持仓、现金与最近成交。无需安装 OpenD。',
         fosun: '复星证券 / 星财富官方 OpenAPI。向复星开放平台申请网关地址、API Key 与密钥对（长期有效），插件按官方 ECDH + 签名协议读取账户、持仓、现金与资金流水。',
         ib: '需先启动并登录官方 IB Client Portal Gateway。本插件使用其账户接口；本地自签名证书须明确勾选信任。',
@@ -1787,11 +1814,13 @@ window.__ModuleLoader__.load({
               h('details', { style: { marginTop: 10, fontSize: 12, color: t.sub } }, h('summary', { style: { cursor: 'pointer' } }, '手动粘贴 Token（可选备用方式）'), h('div', { style: { marginTop: 10 } }, secret('MCP Token', 'mcpToken')))) :
             h('div', { className: 'wealth-source-fields', style: { marginTop: 18 } }, secret('App Key', 'appKey'), secret('App Secret', 'appSecret'), secret('Access Token', 'accessToken'))) : null,
           choice === 'qieman' ? h('div', { style: { marginTop: 18 } },
-            h('div', { className: 'wealth-source-fields' },
-              secret('且慢 MCP API Key', 'apiKey'),
-              field('MCP 地址（可选，默认 stargate.yingmi.com/mcp/v2）', 'mcpEndpoint', { placeholder: 'https://stargate.yingmi.com/mcp/v2', autoComplete: 'off' })),
-            h('details', { style: { marginTop: 10, fontSize: 12, color: t.sub } }, h('summary', { style: { cursor: 'pointer' } }, 'OAuth Bearer Token（可选）'), h('div', { style: { marginTop: 10 } }, secret('Bearer Token', 'bearerToken'))),
-            h('small', { style: { display: 'block', marginTop: 10, color: t.sub, fontSize: 11 } }, '到 ai.yingmi.com 用且慢账号免费申请 API Key，长期有效；插件通过官方 MCP 读取四笔钱基金持仓与收益。')) : null,
+            h('div', { className: 'wealth-source-actions', style: { alignItems: 'center' } },
+              h('button', { style: T.btn(t, false), disabled: disabled || login?.status === 'waiting', onClick: startQiemanAuth }, working === 'qieman-auth' ? '正在准备授权…' : login?.status === 'waiting' ? '等待浏览器授权…' : credentials.bearerToken || auth ? '重新授权' : '浏览器授权（读取账户）'),
+              h('span', { style: { color: login?.status === 'error' ? t.red : login?.status === 'ready' ? t.accent : t.sub, fontSize: 11 }, role: 'status' }, login ? loginText(login.status, login.message, { waiting: '请在浏览器完成且慢登录并授权', ready: '且慢授权已保存，可读取账户', error: '授权未完成' }) : credentials.bearerToken ? '✓ 已获得且慢 Token' : '授权一次后自动续期，无需重复登录')),
+            login?.authorizeUrl && login?.status === 'waiting' ? h('p', { style: { marginTop: 8, fontSize: 11 } }, h('a', { href: login.authorizeUrl, target: '_blank', rel: 'noreferrer', style: { color: t.accent } }, '如果没有自动打开，点这里完成且慢授权 ↗')) : null,
+            h('div', { className: 'wealth-source-fields', style: { marginTop: 12 } }, field('MCP 地址（可选，默认官方 OAuth 端点）', 'mcpEndpoint', { placeholder: 'https://stargate-partner.yingmi.com/mcp/v2/oauth/qieman', autoComplete: 'off' })),
+            h('details', { style: { marginTop: 10, fontSize: 12, color: t.sub } }, h('summary', { style: { cursor: 'pointer' } }, '研究工具 API Key（可选，读不到账户资产）'), h('div', { style: { marginTop: 10 } }, secret('且慢 MCP API Key', 'apiKey'), secret('Bearer Token', 'bearerToken'))),
+            h('small', { style: { display: 'block', marginTop: 10, color: t.sub, fontSize: 11 } }, '「账户与资产」工具只对且慢账号的 OAuth 授权开放；API Key 只能调用基金研究类工具。授权后会列出总账户与各子账户（盈米宝 / 四笔钱）。')) : null,
           choice === 'tiger' ? h('div', { style: { marginTop: 18 } },
             h('div', { className: 'wealth-source-fields' }, field('MCP 地址（可选，默认官方 mcp.tigerfintech.com）', 'mcpEndpoint', { placeholder: 'https://mcp.tigerfintech.com/mcp', autoComplete: 'off' })),
             h('div', { className: 'wealth-source-actions', style: { alignItems: 'center' } },

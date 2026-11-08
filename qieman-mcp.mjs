@@ -7,7 +7,7 @@
 // 且慢 is a fund/投顾 platform, so this is a snapshot-only source: funds under one
 // account, no trade ledger. The MCP tool names are resolved at runtime because the
 // market exposes Chinese names while the docs list the English function names.
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { createMcpHttpClient, mcpAuthHeaders, pickTool } from './mcp-http.mjs'
 
 export const QIEMAN_DEFAULT_ENDPOINT = 'https://stargate.yingmi.com/mcp/v2'
@@ -20,13 +20,15 @@ const ASSET_ANALYSIS_TOOLS = ['GetUserAssetAnalysis', 'get_user_asset_analysis']
 
 const CODE_FIELDS = ['fundCode', 'fund_code', 'fundcode', 'code', 'productCode', 'product_code', 'symbol']
 const NAME_FIELDS = ['fundName', 'fund_name', 'productName', 'product_name', 'name', 'shortName']
-const SHARE_FIELDS = ['holdShare', 'holdShares', 'hold_shares', 'shares', 'share', 'totalShare', 'totalShares', 'quantity', 'holdQuantity', 'units', 'holdUnits']
-const AMOUNT_FIELDS = ['holdAmount', 'hold_amount', 'amount', 'marketValue', 'market_value', 'assetAmount', 'asset_amount', 'totalAmount', 'value', 'holdValue']
-const PROFIT_FIELDS = ['holdProfit', 'hold_profit', 'profit', 'totalProfit', 'total_profit', 'accumProfit', 'accumulatedProfit', 'income', 'holdIncome']
+const SHARE_FIELDS = ['staticShare', 'holdShare', 'holdShares', 'hold_shares', 'shares', 'share', 'totalShare', 'totalShares', 'quantity', 'holdQuantity', 'units', 'holdUnits']
+const AMOUNT_FIELDS = ['staticShareAsset', 'holdAmount', 'hold_amount', 'amount', 'marketValue', 'market_value', 'assetAmount', 'asset_amount', 'totalAmount', 'totalAsset', 'value', 'holdValue']
+const PROFIT_FIELDS = ['holdingProfit', 'holdProfit', 'hold_profit', 'profit', 'totalProfit', 'total_profit', 'accumProfit', 'accumulatedProfit', 'income', 'holdIncome']
 const NAV_FIELDS = ['nav', 'netValue', 'net_value', 'unitNav', 'unit_nav', 'unitNetValue', 'latestNav', 'price']
 const CURRENCY_FIELDS = ['currency', 'currencyCode', 'currency_code']
 const TOTAL_FIELDS = ['totalAsset', 'total_asset', 'totalAssets', 'totalAmount', 'assetAmount', 'netAsset', 'netAssets', 'totalValue', 'total_value']
-const DAY_PROFIT_FIELDS = ['dayProfit', 'day_profit', 'todayProfit', 'today_profit', 'dailyProfit']
+const DAY_PROFIT_FIELDS = ['latestDailyProfit', 'dayProfit', 'day_profit', 'todayProfit', 'today_profit', 'dailyProfit']
+const ACCOUNT_ID_FIELDS = ['serviceAccountId', 'accountId', 'account_id', 'id', 'nodeId']
+const ACCOUNT_NAME_FIELDS = ['accountName', 'account_name', 'assetName', 'name']
 const NESTED_ROW_KEYS = ['fund', 'fundInfo', 'fund_info', 'product', 'productInfo', 'product_info', 'asset', 'item']
 
 const fail = (message) => { throw new Error(message) }
@@ -140,7 +142,9 @@ function findDayProfit(payload) {
 }
 
 function createClient(source, secrets, signal, deps) {
-  const endpoint = source?.mcpEndpoint || QIEMAN_DEFAULT_ENDPOINT
+  // API keys reach the research platform only; account tools live behind the
+  // OAuth endpoint. An explicit mcpEndpoint always wins.
+  const endpoint = source?.mcpEndpoint || (secrets.apiKey ? QIEMAN_DEFAULT_ENDPOINT : QIEMAN_OAUTH_ENDPOINT)
   const auth = mcpAuthHeaders({ apiKey: secrets.apiKey, bearerToken: secrets.bearerToken })
   return createMcpHttpClient({ endpoint, headers: auth, signal, deps })
 }
@@ -202,47 +206,101 @@ function fundRowToHolding(row, warnings) {
   }
 }
 
+/** Account catalogue: root account plus the 且慢 sub-accounts (四笔钱/盈米宝). */
+function accountCatalog(payload) {
+  const data = payload?.data && typeof payload.data === 'object' && !Array.isArray(payload.data) ? payload.data : payload
+  const root = data?.rootAccount && typeof data.rootAccount === 'object' ? data.rootAccount : null
+  const subAccounts = Array.isArray(data?.subAccounts) ? data.subAccounts : []
+  const accounts = [{
+    id: 'main',
+    name: text(pick(root || {}, ACCOUNT_NAME_FIELDS)) || '且慢总账户',
+    currency: 'CNY',
+    broker: '且慢',
+  }]
+  const byName = new Map()
+  for (const sub of subAccounts) {
+    const id = text(pick(sub, ACCOUNT_ID_FIELDS))
+    if (!id) continue
+    const name = text(pick(sub, ACCOUNT_NAME_FIELDS)) || id
+    byName.set(id, name)
+    accounts.push({ id, name, currency: 'CNY', broker: '且慢', accountType: text(pick(sub, ['accountType', 'account_type'])) || null })
+  }
+  return { accounts, subAccounts, byName }
+}
+
 export async function listQiemanAccounts(source, secrets, signal, deps = {}) {
   const mcp = createClient(source, secrets, signal, deps)
   try {
     const warnings = []
     // tools/list doubles as the credential check; a bad key fails here loudly.
     const tool = await resolveTool(mcp, ACCOUNT_TOOLS, '获取账户与产品清单', warnings)
-    if (tool) {
-      try { await callWithArgs(mcp, tool, [{}, { accountId: 'main' }]) } catch (error) {
-        if (/认证|授权|401|403|expired|unauthor/i.test(String(error?.message || error))) throw error
-        warnings.push('且慢账户清单接口返回错误：' + String(error?.message || error))
-      }
+    if (!tool) return { accounts: [{ id: 'main', name: '且慢总账户', currency: 'CNY' }], warnings }
+    let payload
+    try { payload = await callWithArgs(mcp, tool, [{}, { accountId: 'main' }]) } catch (error) {
+      if (/认证|授权|401|403|expired|unauthor/i.test(String(error?.message || error))) throw error
+      warnings.push('且慢账户清单接口返回错误：' + String(error?.message || error))
+      return { accounts: [{ id: 'main', name: '且慢总账户', currency: 'CNY' }], warnings }
     }
-    return { accounts: [{ id: 'main', name: '且慢账户 · MCP', currency: 'CNY' }], warnings }
+    const catalog = accountCatalog(payload)
+    return { accounts: catalog.accounts, warnings }
   } finally { await mcp.dispose() }
+}
+
+/** Flatten one sub-account's strategies into fund rows (tree shape). */
+function accountFundRows(tree, subName) {
+  const data = tree?.data && typeof tree.data === 'object' && !Array.isArray(tree.data) ? tree.data : tree
+  const nodes = Array.isArray(data?.accounts) ? data.accounts : []
+  const node = nodes.find((entry) => text(pick(entry || {}, ACCOUNT_NAME_FIELDS)) === subName)
+  if (!node) return { rows: [], total: null }
+  const rows = []
+  for (const strategy of Array.isArray(node.strategies) ? node.strategies : []) {
+    for (const fund of Array.isArray(strategy?.funds) ? strategy.funds : []) {
+      if (fund && typeof fund === 'object') rows.push(fund)
+    }
+  }
+  return { rows, total: number(node.totalAsset) }
 }
 
 export async function fetchQiemanSnapshot(source, secrets, signal, deps = {}) {
   const mcp = createClient(source, secrets, signal, deps)
   try {
     const warnings = []
+    const target = String(source?.brokerAccountId || 'main')
+    const isSubAccount = target !== 'main'
+    const accountTool = await resolveTool(mcp, ACCOUNT_TOOLS, '获取账户与产品清单', warnings)
     const fundTool = await resolveTool(mcp, FUND_DETAIL_TOOLS, '查看四笔钱持仓明细', warnings)
     const treeTool = await resolveTool(mcp, ASSET_TREE_TOOLS, '获取用户资产树', warnings)
     const analysisTool = await resolveTool(mcp, ASSET_ANALYSIS_TOOLS, '获取资产分析结果', warnings)
-    if (!fundTool && !treeTool) fail('且慢 MCP 没有提供持仓读取工具，请确认 API Key 已开通「账户与资产」权限')
+    if (!fundTool && !treeTool) fail('且慢 MCP 没有提供持仓读取工具，请确认授权包含「账户与资产」权限')
 
-    let payload = null
-    if (fundTool) {
-      payload = await callWithArgs(mcp, fundTool, [{}, { accountId: 'main' }])
-    }
-    let rows = payload ? collectFundRows(payload) : []
-    if (!rows.length && treeTool) {
-      const tree = await callWithArgs(mcp, treeTool, [{}, { accountId: 'main' }])
-      rows = collectFundRows(tree)
-      if (!payload) payload = tree
-      else payload = [payload, tree]
-    }
-    if (!rows.length && analysisTool) {
-      const analysis = await callWithArgs(mcp, analysisTool, [{}])
-      const analyzed = collectFundRows(analysis)
-      if (analyzed.length) rows = analyzed
-      else warnings.push('且慢资产分析接口没有返回可识别的基金持仓')
+    let payload = null, rows = [], accountTotal = null
+    if (isSubAccount) {
+      // A single 且慢 sub-account only exists in the asset tree (accounts -> strategies -> funds).
+      if (!accountTool || !treeTool) fail('读取且慢子账户需要「账户与产品清单」与「资产树」工具，请重新授权')
+      const catalog = accountCatalog(await callWithArgs(mcp, accountTool, [{}]))
+      const subName = catalog.byName.get(target)
+      if (!subName) fail('所选且慢子账户不在当前授权账号中，请重新读取来源账户')
+      const tree = await callWithArgs(mcp, treeTool, [{}])
+      const flat = accountFundRows(tree, subName)
+      rows = flat.rows
+      accountTotal = flat.total
+      payload = tree
+      if (!rows.length) warnings.push(`QIEMAN_SUB_ACCOUNT_EMPTY:${subName}`)
+      if (rows.length) warnings.push('且慢子账户视图不含成本与收益，成本按当前市值暂估；总账户视图才有完整成本')
+    } else {
+      payload = fundTool ? await callWithArgs(mcp, fundTool, [{}, { accountId: 'main' }]) : null
+      rows = payload ? collectFundRows(payload) : []
+      if (treeTool) {
+        const tree = await callWithArgs(mcp, treeTool, [{}])
+        payload = payload ? [payload, tree] : tree
+        if (!rows.length) rows = collectFundRows(tree)
+      }
+      if (!rows.length && analysisTool) {
+        const analysis = await callWithArgs(mcp, analysisTool, [{}])
+        const analyzed = collectFundRows(analysis)
+        if (analyzed.length) rows = analyzed
+        else warnings.push('且慢资产分析接口没有返回可识别的基金持仓')
+      }
     }
 
     const seen = new Set()
@@ -255,9 +313,9 @@ export async function fetchQiemanSnapshot(source, secrets, signal, deps = {}) {
       seen.add(key)
       holdings.push(holding)
     }
-    if (!holdings.length) fail('且慢 MCP 没有返回任何基金持仓；请确认账户内有资产且 API Key 已授权账户与资产权限')
+    if (!holdings.length) fail('且慢 MCP 没有返回任何基金持仓；请确认账户内有资产且授权包含「账户与资产」权限')
 
-    const reportedTotal = findTotalAsset(payload)
+    const reportedTotal = isSubAccount ? accountTotal : findTotalAsset(payload)
     const holdingsTotal = holdings.reduce((sum, h) => sum + (h.manualPrice != null ? h.manualPrice : h.avgCost) * h.qty, 0)
     const totalAsset = reportedTotal ?? (holdingsTotal || null)
     const dayProfit = findDayProfit(payload)
@@ -291,4 +349,92 @@ export async function fetchQiemanHistory() {
 export function qiemanMcpFingerprintPart(secrets = {}) {
   const value = String(secrets.apiKey || secrets.bearerToken || '')
   return value ? createHash('sha256').update(value).digest('hex').slice(0, 16) : ''
+}
+
+// ---------- OAuth (the only route to 账户与资产 tools; long-lived via refresh token) ----------
+// Authorization server metadata: https://stargate-partner.yingmi.com/.well-known/openid-configuration
+// Protected resource scopes: oapqieman:level1 (research) / level2 (账户与资产) / level3.
+export const QIEMAN_OAUTH_ISSUER = 'https://stargate-partner.yingmi.com'
+export const QIEMAN_OAUTH_SCOPES = 'openid offline_access oapqieman:level1 oapqieman:level2'
+const OAUTH_REGISTER_URL = QIEMAN_OAUTH_ISSUER + '/oauth/register'
+const OAUTH_AUTHORIZE_URL = QIEMAN_OAUTH_ISSUER + '/oauth/authorize'
+const OAUTH_TOKEN_URL = QIEMAN_OAUTH_ISSUER + '/oauth/token'
+
+function base64url(buffer) { return Buffer.from(buffer).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '') }
+
+export function createQiemanPkce() {
+  const verifier = base64url(randomBytes(32))
+  const challenge = base64url(createHash('sha256').update(verifier).digest())
+  return { verifier, challenge, method: 'S256' }
+}
+
+export async function registerQiemanClient({ redirectUri, clientName = 'dsh-wealth', signal, deps = {} } = {}) {
+  const fetchImpl = deps.fetch || globalThis.fetch
+  const response = await fetchImpl(OAUTH_REGISTER_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json' },
+    body: JSON.stringify({
+      client_name: clientName,
+      redirect_uris: [String(redirectUri || '').trim() || fail('redirect_uri is required')],
+      grant_types: ['authorization_code', 'refresh_token'],
+      response_types: ['code'],
+      token_endpoint_auth_method: 'none',
+      scope: QIEMAN_OAUTH_SCOPES,
+    }),
+    signal,
+    redirect: 'error',
+  })
+  if (!response.ok) fail('盈米客户端注册失败：HTTP ' + response.status)
+  const data = await response.json().catch(() => null)
+  if (!data?.client_id) fail('盈米客户端注册失败：响应缺少 client_id')
+  return { clientId: data.client_id, scope: data.scope || QIEMAN_OAUTH_SCOPES }
+}
+
+export function buildQiemanAuthorizeUrl({ clientId, redirectUri, challenge, state } = {}) {
+  const params = new URLSearchParams({
+    response_type: 'code',
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    scope: QIEMAN_OAUTH_SCOPES,
+    resource: QIEMAN_OAUTH_ENDPOINT,
+    code_challenge: challenge,
+    code_challenge_method: 'S256',
+  })
+  if (state) params.set('state', String(state))
+  return OAUTH_AUTHORIZE_URL + '?' + params.toString()
+}
+
+async function oauthToken(params, signal, deps) {
+  const fetchImpl = deps.fetch || globalThis.fetch
+  const response = await fetchImpl(OAUTH_TOKEN_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
+    body: new URLSearchParams(params).toString(),
+    signal,
+    redirect: 'error',
+  })
+  const raw = await response.text()
+  let data
+  try { data = JSON.parse(raw) } catch { data = null }
+  if (!response.ok) {
+    const detail = data?.error_description || data?.error || ('HTTP ' + response.status)
+    fail('盈米 Token 请求失败：' + detail)
+  }
+  if (!data?.access_token) fail('盈米 Token 响应缺少 access_token')
+  return { accessToken: data.access_token, refreshToken: data.refresh_token || null, expiresIn: Number(data.expires_in) || null, scope: data.scope || QIEMAN_OAUTH_SCOPES }
+}
+
+export async function exchangeQiemanCode({ code, clientId, redirectUri, verifier, signal, deps = {} } = {}) {
+  return oauthToken({
+    grant_type: 'authorization_code',
+    code,
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    code_verifier: verifier,
+    resource: QIEMAN_OAUTH_ENDPOINT,
+  }, signal, deps)
+}
+
+export async function refreshQiemanToken({ refreshToken, clientId, signal, deps = {} } = {}) {
+  return oauthToken({ grant_type: 'refresh_token', refresh_token: refreshToken, client_id: clientId, resource: QIEMAN_OAUTH_ENDPOINT }, signal, deps)
 }

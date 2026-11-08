@@ -7,7 +7,7 @@ const FIELDS = {
   ths:['cookie'],
   futu:['websocketKey','mcpToken','refreshToken','clientId'],
   longbridge:['appKey','appSecret','accessToken','mcpToken'],
-  qieman:['apiKey','bearerToken'],
+  qieman:['apiKey','bearerToken','refreshToken','clientId'],
   tiger:['accessToken','refreshToken','clientId'],
   fosun:['apiKey','privateKey','serverPublicKey'],
   ib:[],
