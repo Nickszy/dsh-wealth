@@ -461,12 +461,13 @@ window.__ModuleLoader__.load({
         const s = x.sourceTotals
         if (!s || (typeof s.transferIn !== 'number' && typeof s.transferOut !== 'number')) return acc
         acc.accounts += 1
+        acc.names.push(x.name)
         acc.in += typeof s.transferIn === 'number' ? s.transferIn : 0
         acc.out += typeof s.transferOut === 'number' ? s.transferOut : 0
         if (typeof s.assetProfit === 'number') acc.profit += s.assetProfit
         if (s.transferTo && (!acc.to || s.transferTo > acc.to)) acc.to = s.transferTo
         return acc
-      }, { accounts: 0, in: 0, out: 0, profit: 0, to: null })
+      }, { accounts: 0, in: 0, out: 0, profit: 0, to: null, names: [] })
       const pct = (v, d = 2) => (typeof v === 'number' && Number.isFinite(v) ? (v > 0 ? '+' : '') + v.toFixed(d) + '%' : '—')
       const kpi = (label, value, sub, color) => h('div', { style: { ...T.card(t), flex: '1 1 150px', minWidth: 140 } },
         h('div', { style: { fontSize: 11, color: t.sub, letterSpacing: .3 } }, label),
@@ -520,13 +521,13 @@ window.__ModuleLoader__.load({
             row('累计入金', fmtMoney(f.totals && f.totals.externalIn) + ' ' + a.baseCurrency, t.text),
             row('累计出金', fmtMoney(f.totals && f.totals.externalOut) + ' ' + a.baseCurrency, t.text),
             row('净流入', fmtMoney(f.totals && f.totals.netExternal) + ' ' + a.baseCurrency, (f.totals && f.totals.netExternal) >= 0 ? t.green : t.red),
-            transfer.accounts ? row('银证转入（同花顺）', '+' + fmtMoney(transfer.in) + ' ' + a.baseCurrency, t.green) : null,
-            transfer.accounts ? row('银证转出（同花顺）', '-' + fmtMoney(transfer.out) + ' ' + a.baseCurrency, t.red) : null,
-            transfer.accounts && transfer.profit ? row('账户累计盈亏（同花顺）', fmtMoney(transfer.profit) + ' ' + a.baseCurrency, transfer.profit >= 0 ? t.green : t.red) : null,
+            transfer.accounts ? row('银证转入', '+' + fmtMoney(transfer.in) + ' ' + a.baseCurrency, t.green) : null,
+            transfer.accounts ? row('银证转出', '-' + fmtMoney(transfer.out) + ' ' + a.baseCurrency, t.red) : null,
+            transfer.accounts && transfer.profit ? row('账户累计盈亏', fmtMoney(transfer.profit) + ' ' + a.baseCurrency, transfer.profit >= 0 ? t.green : t.red) : null,
             inf && inf.total > 0 && !transfer.accounts ? row('推定入金（下限估算）', '+' + fmtMoney(inf.total) + ' ' + a.baseCurrency, t.terra) : null,
             row('分红 / 利息', fmtMoney(f.totals && f.totals.dividends) + ' / ' + fmtMoney(f.totals && f.totals.interest), t.green),
             row('费用 / 税费', fmtMoney(f.totals && f.totals.fees) + ' / ' + fmtMoney(f.totals && f.totals.taxes), t.red),
-            transfer.accounts ? h('div', { style: { fontSize: 10.5, color: t.sub, marginTop: 8, lineHeight: 1.6 } }, '银证转入/转出取自同花顺「资金流动」累计值' + (transfer.to ? '（截至 ' + transfer.to + '）' : '') + '；单笔转账时点仍需券商资金流水，可补录后按明细查看。') : null,
+            transfer.accounts ? h('div', { style: { fontSize: 10.5, color: t.sub, marginTop: 8, lineHeight: 1.6 } }, '银证转入/转出来自同花顺「资金流动」累计值' + (transfer.names.length ? '（' + transfer.names.join('、') + '）' : '') + (transfer.to ? '，截至 ' + transfer.to : '') + '；富途/IB 等来源的转账以逐笔流水计入上方累计入金/出金。单笔时点可「回扫」或补录券商资金流水。') : null,
             (() => {
               const scope = fixedAccounts || sel
               const targets = thsAccountIds.filter(id => !scope.length || scope.includes(id))
@@ -929,7 +930,6 @@ window.__ModuleLoader__.load({
       const sync = useAccountSync(reload, refreshSources)
       const [modal, setModal] = React.useState(null)
       const [openGroup, setOpenGroup] = React.useState({ cash: true, credit: true, invest: true })
-      const [expanded, setExpanded] = React.useState('')
       const cur = state.summary.baseCurrency
       const summaryRows = state.summary.accounts || []
       const accounts = db.accounts.map((a) => ({
@@ -943,79 +943,41 @@ window.__ModuleLoader__.load({
       const total = state.summary.totalValueBase || 0
       const pnl = state.summary.totalPnlBase || 0
       const history = (state.summary.history || []).filter((x) => x.baseCurrency === cur && Number.isFinite(x.totalValueBase))
-      const insMap = new Map(db.instruments.map((i) => [i.id, i]))
-      const holdingsOf = (id) => db.holdings.filter((ho) => ho.accountId === id)
-      const removeAccount = async (a) => {
-        const src = sources.find((s) => s.accountId === a.id)
-        if (!window.confirm('删除账户「' + a.name + '」及其全部持仓和流水？' + (src ? '它的自动同步连接也会一并移除。' : ''))) return
-        try { if (src) await post('sources/remove', { id: src.id }) } catch (e) { window.alert('移除同步连接失败：' + e.message); return }
-        await call('account.remove', { id: a.id })
-        refreshSources()
-      }
       const closeModal = () => { setModal(null); refreshSources() }
       const row = (label, value, color) => h('div', { style: { display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid ' + t.border, fontSize: 12.5 } },
         h('span', { style: { color: t.sub } }, label),
         h('strong', { style: { color: color || t.text, fontVariantNumeric: 'tabular-nums' } }, value))
 
       const renderAccount = ({ account: a, sa }) => {
-        const open = expanded === a.id
         const gid = accountGroup(a.type)
         const share = total > 0 ? Math.max(0, Math.min(1, (sa.valueBase || 0) / total)) : 0
         const src = sources.find((s) => s.accountId === a.id)
         const failed = src && ['error', 'failed'].includes(src.lastStatus)
         const authorization = authorizations.find((x) => x.id === (src?.authId || src?.id))
-        const holds = holdingsOf(a.id)
-        return h('div', { key: a.id },
-          h('div', {
-            className: 'wealth-acct-row' + (open ? ' is-open' : ''),
-            role: 'button', tabIndex: 0,
-            onClick: () => setExpanded(open ? '' : a.id),
-            onKeyDown: (e) => { if (e.key === 'Enter') setExpanded(open ? '' : a.id) },
-          },
-            h('div', { className: 'wealth-account-badge', style: { color: groupColor(t, gid) } }, (a.name || '账').slice(0, 1)),
-            h('div', { style: { minWidth: 0 } },
-              h('div', { style: { fontSize: 13.5, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, a.name),
-              h('div', { style: { fontSize: 11.5, color: failed ? t.red : t.sub, marginTop: 2 } },
-                (authorization ? (authorization.label || '已授权') + ' · 同步' : src ? (CONNECTOR_LABEL[src.connector] || src.connector) + ' · 自动同步' : '手动账户') + ' · ' + a.currency + (failed ? ' · 同步失败' : ''))),
-            h('div', { className: 'wealth-alloc' },
-              h('div', { style: { fontSize: 10.5, color: t.sub } }, '占净值 ' + (share * 100).toFixed(1) + '%'),
-              h('div', { className: 'wealth-bar' }, h('i', { style: { width: (share * 100).toFixed(1) + '%', background: groupColor(t, gid) } }))),
-            h('div', { style: { textAlign: 'right', fontVariantNumeric: 'tabular-nums' } },
-              h('div', { style: { fontSize: 14, fontWeight: 750 } }, fmtMoney(sa.valueBase, cur)),
-              h('div', { style: { fontSize: 11, marginTop: 2, color: (sa.pnlBase || 0) >= 0 ? t.green : t.red } }, fmtMoney(sa.pnlBase, cur))),
-            h(Chevron, { open, color: t.sub })),
-          open ? h('div', { className: 'wealth-nested' },
-            h('div', { className: 'wealth-nested-card' },
-              holds.length ? h('table', null,
-                h('thead', null, h('tr', null, ['标的', '数量', '成本', '现价', '市值', '盈亏'].map((label) => T.th(label, t)))),
-                h('tbody', null, holds.map((ho) => {
-                  const ins = insMap.get(ho.instrumentId)
-                  const price = ho.manualPrice ?? ho.avgCost ?? 0
-                  const rate = ho.currency === db.baseCurrency ? 1 : (db.fx[ho.currency] ?? 1)
-                  const mv = ho.qty * price * rate
-                  const gain = (price - (ho.avgCost || 0)) * ho.qty * rate
-                  return h('tr', { key: ho.id },
-                    T.td(h('div', null,
-                      h('div', { style: { fontWeight: 700 } }, ins?.name || ho.instrumentId),
-                      h('small', { style: { color: t.sub } }, (ins?.symbol || '') + ' · ' + (ho.currency || ''))), t),
-                    T.td(String(ho.qty), t),
-                    T.td(fmtMoney(ho.avgCost), t),
-                    T.td(fmtMoney(price), t),
-                    T.td(fmtMoney(mv, db.baseCurrency), t),
-                    T.td(fmtMoney(gain), t, { color: gain >= 0 ? t.green : t.red, fontWeight: 650 }))
-                }))) : h('div', { style: { padding: '10px 2px', fontSize: 12.5, color: t.sub } }, '这个账户还没有持仓')),
-            h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 } },
-              h('button', { style: T.btn(t, false), onClick: (e) => { e.stopPropagation(); openAccount(a.id) } }, '详情'),
-              src ? h('button', { style: T.btn(t, true), disabled: busy || !!sync.syncing, onClick: (e) => { e.stopPropagation(); sync.run(a) } }, sync.syncing === a.id ? '同步中…' : '⟳ 同步') : null,
-              h('button', { style: T.btn(t, false), onClick: (e) => { e.stopPropagation(); setModal({ kind: 'edit', account: a }) } }, '编辑'),
-              h('button', { style: { ...T.btn(t, false), color: t.red }, onClick: (e) => { e.stopPropagation(); removeAccount(a) } }, '删除'),
-              h('span', { style: { alignSelf: 'center', fontSize: 11, color: t.sub } }, (sa.holdings || 0) + ' 项持仓 · ' + holds.length + ' 条展开明细'))) : null,
+        return h('div', {
+          key: a.id,
+          className: 'wealth-acct-row',
+          role: 'button', tabIndex: 0,
+          onClick: () => openAccount(a.id),
+          onKeyDown: (e) => { if (e.key === 'Enter') openAccount(a.id) },
+        },
+          h('div', { className: 'wealth-account-badge', style: { color: groupColor(t, gid) } }, (a.name || '账').slice(0, 1)),
+          h('div', { style: { minWidth: 0 } },
+            h('div', { style: { fontSize: 13.5, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, a.name),
+            h('div', { style: { fontSize: 11.5, color: failed ? t.red : t.sub, marginTop: 2 } },
+              (authorization ? (authorization.label || '已授权') + ' · 同步' : src ? (CONNECTOR_LABEL[src.connector] || src.connector) + ' · 自动同步' : '手动账户') + ' · ' + a.currency + (failed ? ' · 同步失败' : ''))),
+          h('div', { className: 'wealth-alloc' },
+            h('div', { style: { fontSize: 10.5, color: t.sub } }, '占净值 ' + (share * 100).toFixed(1) + '%'),
+            h('div', { className: 'wealth-bar' }, h('i', { style: { width: (share * 100).toFixed(1) + '%', background: groupColor(t, gid) } }))),
+          h('div', { style: { textAlign: 'right', fontVariantNumeric: 'tabular-nums' } },
+            h('div', { style: { fontSize: 14, fontWeight: 750 } }, fmtMoney(sa.valueBase, cur)),
+            h('div', { style: { fontSize: 11, marginTop: 2, color: (sa.pnlBase || 0) >= 0 ? t.green : t.red } }, fmtMoney(sa.pnlBase, cur))),
         )
       }
 
       return h('div', null,
         h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 16 } },
-          h('div', { style: { fontSize: 12.5, color: t.sub } }, db.accounts.length + ' 个账户 · 点账户行展开持仓明细'),
+          h('div', { style: { fontSize: 12.5, color: t.sub } }, db.accounts.length + ' 个账户 · 点击账户行进入详情'),
           h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' } },
             h('button', { style: T.btn(t, false), disabled: busy, onClick: () => setModal({ kind: 'auths' }) }, '授权账号' + (authorizations.length ? ' · ' + authorizations.length : '')),
             h('button', { style: T.btn(t, true), disabled: busy, onClick: () => setModal({ kind: 'add' }) }, '＋ 新增账户'))),
@@ -1109,6 +1071,12 @@ window.__ModuleLoader__.load({
       const source = sources.find(s => s.accountId === accountId)
       const sync = useAccountSync(reload, refreshSources)
       const [sub, setSub] = React.useState('holdings'), [editing, setEditing] = React.useState(false)
+      const removeAccount = async () => {
+        if (!window.confirm('删除账户「' + account.name + '」及其全部持仓和流水？' + (source ? '它的自动同步连接也会一并移除。' : ''))) return
+        try { if (source) await post('sources/remove', { id: source.id }) } catch (e) { window.alert('移除同步连接失败：' + e.message); return }
+        await call('account.remove', { id: accountId })
+        refreshSources(); back()
+      }
       const sa = state.summary.accounts.find(x => x.accountId === accountId) || {}
       const hs = db.historySync?.[accountId]
       // 券商口径的累计持有盈亏（同步来源自带，如 THS 的 hold_profit 汇总 / 爱基金 now_profit），
@@ -1126,7 +1094,8 @@ window.__ModuleLoader__.load({
               h('div', { className: 'wealth-asset-value', style: { margin: '6px 0 8px' } }, fmtMoney(sa.valueBase), h('small', null, cur))),
             h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' } },
               source ? h('button', { style: T.btn(t, true), disabled: busy || !!sync.syncing, onClick: () => sync.run(account) }, sync.syncing ? '同步中…' : '⟳ 同步到最新') : null,
-              h('button', { style: T.btn(t, false), disabled: busy, onClick: () => setEditing(true) }, '编辑'))),
+              h('button', { style: T.btn(t, false), disabled: busy, onClick: () => setEditing(true) }, '编辑'),
+              h('button', { style: { ...T.btn(t, false), color: t.red }, disabled: busy, onClick: removeAccount }, '删除'))),
           h('div', { className: 'wealth-metrics', style: { paddingBottom: 12 } },
             metric('持仓成本', fmtMoney(sa.costBase, cur)),
             metric('浮动盈亏', fmtMoney(sa.pnlBase, cur), (sa.pnlBase || 0) >= 0 ? t.green : t.red),
