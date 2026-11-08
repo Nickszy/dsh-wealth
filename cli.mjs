@@ -11,6 +11,7 @@ import { load, save, applyOp, summarize, OpError, DATA_FILE, DATA_DIR } from './
 import { forecast } from './forecast.mjs'
 import { billSummary } from './bills.mjs'
 import { parseBillCsv, billPreview } from './bills-import.mjs'
+import { buildDigest } from './digest.mjs'
 import { computePerformance } from './performance.mjs'
 
 function out(obj, code = 0) {
@@ -31,6 +32,7 @@ function help() {
       'node cli.mjs history [accountId] [limit]    # archived flows (deposit/dividend/fee/life bills)',
       'node cli.mjs bills [months]                 # life-bill summary by category and month (default 12)',
       'node cli.mjs bills-import <accountId> <csv> [apply=1]  # preview (default) or import WeChat/Alipay bill CSV',
+      'node cli.mjs digest [days]                  # daily summary: net worth, upcoming bills, data notes (default 7)',
       'node cli.mjs forecast [days]                # recurring flows + projected out/in for next N days (default 30)',
       'node cli.mjs performance [accountId] [days] # backfilled daily NAV from flows + historical prices (default 1095)',
       'node cli.mjs export [file]                  # write the whole ledger JSON to a file',
@@ -125,6 +127,9 @@ else if (arg[0] === 'state') {
   const limit = Number(arg[2]) || 200
   const events = (db.historyEvents || []).filter((e) => !accountId || e.accountId === accountId).slice(-limit)
   out({ ok: true, count: events.length, events })
+} else if (arg[0] === 'digest') {
+  const horizonDays = Math.min(30, Math.max(1, Number(arg[1]) || 7))
+  out({ ok: true, ...buildDigest(load(), { horizonDays }) })
 } else if (arg[0] === 'bills') {
   const months = Math.min(60, Math.max(1, Number(arg[1]) || 12))
   out({ ok: true, ...billSummary(load(), { months }) })

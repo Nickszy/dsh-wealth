@@ -20,6 +20,7 @@
     "forecast.mjs",
     "bills.mjs",
     "bills-import.mjs",
+    "digest.mjs",
     "klines.mjs",
     "timeline.mjs",
     "performance.mjs",
@@ -59,7 +60,7 @@
     "read-excel-file": "9.3.14"
   },
   "scripts": {
-    "test": "node --test analytics.test.mjs model.test.mjs lb-mcp.test.mjs futu-mcp.test.mjs history-file.test.mjs history.test.mjs history-sync.test.mjs history-provider.test.mjs store.test.mjs importer.test.mjs chat.test.mjs host.test.mjs connectors.test.mjs sync.test.mjs account-import.test.mjs authorization.test.mjs credentials.test.mjs ths-client.test.mjs ths-login.test.mjs brokers-sdk.test.mjs ib-client.test.mjs futu-transport.test.mjs quotes.test.mjs forecast.test.mjs klines.test.mjs timeline.test.mjs performance.test.mjs bills.test.mjs bills-import.test.mjs"
+    "test": "node --test analytics.test.mjs model.test.mjs lb-mcp.test.mjs futu-mcp.test.mjs history-file.test.mjs history.test.mjs history-sync.test.mjs history-provider.test.mjs store.test.mjs importer.test.mjs chat.test.mjs host.test.mjs connectors.test.mjs sync.test.mjs account-import.test.mjs authorization.test.mjs credentials.test.mjs ths-client.test.mjs ths-login.test.mjs brokers-sdk.test.mjs ib-client.test.mjs futu-transport.test.mjs quotes.test.mjs forecast.test.mjs klines.test.mjs timeline.test.mjs performance.test.mjs bills.test.mjs bills-import.test.mjs digest.test.mjs"
   },
   "keywords": [
     "dsh",

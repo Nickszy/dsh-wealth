@@ -262,6 +262,12 @@ window.__ModuleLoader__.load({
     function Overview({ t, state, call, busy, navigate, openAccount }) {
       const s = state.summary, db = state.ledger, cur = s.baseCurrency
       const positiveTotal = s.accounts.reduce((sum, a) => sum + Math.max(0, a.valueBase || 0), 0)
+      const [digest, setDigest] = React.useState(null)
+      React.useEffect(() => {
+        let live = true
+        fetch('/portfolio/api/digest?days=7', { headers: { accept: 'application/json' } }).then(r => r.json()).then(d => { if (live && d.ok) setDigest(d) }).catch(() => {})
+        return () => { live = false }
+      }, [db.updatedAt])
       return h('div', null,
         (s.warnings || []).length ? h('details', { style: { ...T.card(t), marginBottom: 16, color: t.sub, fontSize: 12 } }, h('summary', { style: { cursor: 'pointer' } }, '估值提示 · ' + s.warnings.length + ' 项价格或汇率信息需要核对'), s.warnings.map((w, i) => { const position = db.holdings.find(p => p.id === w.holdingId); const ins = db.instruments.find(x => x.id === position?.instrumentId); return h('div', { key: i, style: { marginTop: 8 } }, (ins ? ins.name + ' · ' : '') + w.message) })) : null,
         h('section', { className: 'wealth-hero', 'aria-label': '总资产' },
@@ -276,9 +282,21 @@ window.__ModuleLoader__.load({
             h('div', null, h('span', { style: T.label(t) }, '浮动盈亏'), h('strong', { style: { color: s.totalPnlBase >= 0 ? t.green : t.red } }, fmtMoney(s.totalPnlBase, cur))),
             h('div', null, h('span', { style: T.label(t) }, '账户 / 持仓'), h('strong', null, db.accounts.length + ' / ' + db.holdings.length))),
           h(DashboardCharts, { t, state, call, busy })),
+        digest ? h('section', { style: { ...T.card(t), marginBottom: 16 }, 'aria-label': '今日摘要' },
+          h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 } },
+            h('strong', { style: { fontSize: 15 } }, '今日摘要'),
+            h('span', { style: { fontSize: 10.5, color: t.sub } }, digest.date + ' · 可让资产助手复述或追问')),
+          digest.lines.map((line, i) => h('div', { key: i, style: { fontSize: 12.5, color: i === 0 ? t.text : t.sub, lineHeight: 1.8, fontVariantNumeric: 'tabular-nums' } }, line))) : null,
         h('section', { style: T.card(t), 'aria-label': '我的账户' },
           h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 5 } }, h('strong', { style: { fontSize: 15, fontWeight: 600 } }, '我的账户', h('span', { style: { fontWeight: 400, color: t.sub, marginLeft: 7, fontSize: 12 } }, db.accounts.length)), h('button', { style: T.btn(t, false), onClick: () => navigate('accounts') }, '管理账户 ↗')),
-          !s.accounts.length ? h('div', { className: 'wealth-empty' }, h('span', { className: 'wealth-empty-mark' }, '▣'), h('strong', { style: { fontSize: 16, fontWeight: 500, color: t.text } }, '让每一笔资产，都有归属'), h('span', { style: { maxWidth: 330, fontSize: 12 } }, '登录同花顺、富途、长桥或 IB，选择来源账户即可导入账户与持仓；也可手工维护账户。'), h('button', { style: { ...T.btn(t, true), marginTop: 9 }, onClick: () => navigate('accounts') }, '＋ 添加账户')) : s.accounts.map((a, i) => {
+          !s.accounts.length ? h('div', { className: 'wealth-empty' },
+            h('span', { className: 'wealth-empty-mark' }, '▣'),
+            h('strong', { style: { fontSize: 16, fontWeight: 500, color: t.text } }, '三步，拥有一个完整的资产管家'),
+            h('div', { style: { display: 'grid', gap: 6, textAlign: 'left', maxWidth: 380, fontSize: 12, lineHeight: 1.7 } },
+              h('div', null, h('strong', { color: t.text }, '① 连接券商'), '　同花顺投资账本 / 富途 / 长桥 / IB，一次登录自动同步账户、持仓与流水'),
+              h('div', null, h('strong', { color: t.text }, '② 导入账单'), '　微信 / 支付宝 CSV 自动归类，补齐生活账本'),
+              h('div', null, h('strong', { color: t.text }, '③ 问资产助手'), '　让 AI 核对数据、补录流水、生成分析与提醒')),
+            h('button', { style: { ...T.btn(t, true), marginTop: 9 }, onClick: () => navigate('accounts') }, '开始 · 添加账户')) : s.accounts.map((a, i) => {
             const account = db.accounts.find(x => x.id === a.accountId)
             const share = positiveTotal ? Math.max(0, a.valueBase || 0) / positiveTotal * 100 : 0
             return h('div', { key: a.accountId, className: 'wealth-account-row', role: 'button', tabIndex: 0, title: '查看账户详情', style: { cursor: 'pointer' }, onClick: () => openAccount(a.accountId), onKeyDown: e => { if (e.key === 'Enter') openAccount(a.accountId) } },

@@ -10,6 +10,7 @@ import { refreshQuotes } from './quotes.mjs'
 import { forecast } from './forecast.mjs'
 import { billSummary } from './bills.mjs'
 import { parseBillCsv, billPreview } from './bills-import.mjs'
+import { buildDigest } from './digest.mjs'
 import { computePerformance } from './performance.mjs'
 import { previewImport } from './importer.mjs'
 import { modelInfo, chatTurn, applyChatOps } from './chat.mjs'
@@ -157,6 +158,12 @@ export function apply(ctx, config = {}) {
           if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
           const days = Math.min(365, Math.max(7, Number(url.searchParams.get('days')) || 30))
           send(res, 200, { ok: true, ...forecast(load(), { days }) })
+          return
+        }
+        if (path === 'api/digest') {
+          if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
+          const horizon = Math.min(30, Math.max(1, Number(url.searchParams.get('days')) || 7))
+          send(res, 200, { ok: true, ...buildDigest(load(), { horizonDays: horizon }) })
           return
         }
         if (path === 'api/bills') {
