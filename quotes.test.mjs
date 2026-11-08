@@ -19,6 +19,9 @@ test('quoteKey maps CN/HK/US instruments and rejects the rest', () => {
   assert.equal(quoteKey({ market: 'CN', symbol: '159977', assetClass: 'etf' }), 'sz159977')
   assert.equal(quoteKey({ market: 'CN', symbol: '830000', assetClass: 'stock' }), null)
   assert.equal(quoteKey({ market: 'HK', symbol: '700', assetClass: 'stock' }), 'hk00700')
+  // 旧写法也映射到同一行情键（2549.HK / HK.02549 / 02549）。
+  assert.equal(quoteKey({ market: 'HK', symbol: '2549.HK', assetClass: 'stock' }), 'hk02549')
+  assert.equal(quoteKey({ market: 'HK', symbol: 'HK.02549', assetClass: 'stock' }), 'hk02549')
   assert.equal(quoteKey({ market: 'HK', symbol: '01164', assetClass: 'stock' }), 'hk01164')
   assert.equal(quoteKey({ market: 'US', symbol: 'aapl', assetClass: 'stock' }), 'usAAPL')
   assert.equal(quoteKey({ market: 'FUND', symbol: '000001', assetClass: 'fund' }), null)

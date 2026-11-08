@@ -18,6 +18,9 @@ test('klineTarget maps A-share/ETF/HK/fund and rejects unsupported assets', () =
   assert.equal(klineTarget({ symbol: '510300', market: 'CN', assetClass: 'etf' }).key, 'em:1.510300')
   assert.equal(klineTarget({ symbol: '159977', market: 'CN', assetClass: 'etf' }).key, 'em:0.159977')
   assert.equal(klineTarget({ symbol: '700', market: 'HK', assetClass: 'stock' }).key, 'em:116.00700')
+  // 旧写法同样能查历史行情（2549.HK → 02549）。
+  assert.equal(klineTarget({ symbol: '2549.HK', market: 'HK', assetClass: 'stock' }).key, 'em:116.02549')
+  assert.equal(klineTarget({ symbol: 'HK.02549', market: 'HK', assetClass: 'stock' }).key, 'em:116.02549')
   assert.equal(klineTarget({ symbol: '001257', market: 'CN', assetClass: 'fund' }).key, 'fund:001257')
   assert.equal(klineTarget({ symbol: 'AAPL', market: 'US', assetClass: 'stock' }), null)
   assert.equal(klineTarget({ symbol: 'CASH:CNY', market: 'CASH', assetClass: 'cash' }), null)

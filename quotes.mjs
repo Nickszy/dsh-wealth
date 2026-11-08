@@ -1,6 +1,7 @@
 // Market quotes via Tencent's public batch endpoint. Read-only, one GET per refresh,
 // no keys, no redirects; failures degrade to per-symbol warnings, never to fake prices.
 // GBK text lines: v_sh600000="1~浦发银行~600000~10.86~..."; field 3 is the last price.
+import { normalizeSymbol } from './symbols.mjs'
 const QUOTES_URL = 'https://qt.gtimg.cn/q='
 const MARKET_CURRENCY = { sh: 'CNY', sz: 'CNY', hk: 'HKD', us: 'USD' }
 const number = (value) => {
@@ -9,8 +10,10 @@ const number = (value) => {
 }
 /** Exchange prefix for an instrument, or null when no public quote is expected. */
 export function quoteKey(instrument = {}) {
-  const market = String(instrument.market || '').toUpperCase()
-  const symbol = String(instrument.symbol || '').trim()
+  // 统一代码：各来源写法（2549.HK / HK.02549）都映射到同一个行情键。
+  const normalized = normalizeSymbol(instrument.symbol, instrument.market)
+  const market = normalized.market
+  const symbol = normalized.symbol
   const assetClass = String(instrument.assetClass || '').toLowerCase()
   if (!symbol || !['stock', 'etf'].includes(assetClass)) return null
   if (market === 'CN') {

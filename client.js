@@ -623,6 +623,22 @@ window.__ModuleLoader__.load({
       const seen = new Set(base.map(([v]) => v))
       return [...base, ...[...new Set((extra || []).filter(Boolean))].filter((v) => !seen.has(v)).map((v) => [v, v])]
     }
+    // 与 symbols.mjs normalizeSymbol 同规则：统计视图按统一代码归并，记录本身保持分开。
+    const normSym = (symbol, market) => {
+      const raw = String(symbol || '').trim(), m = String(market || '').trim().toUpperCase()
+      if (!raw) return { symbol: '', market: m }
+      if (m === 'HK') {
+        const code = raw.replace(/^HK(EX)?[.:]/i, '').replace(/\.HK$/i, '').replace(/^0+/, '')
+        return { symbol: /^\d{1,5}$/.test(code) ? code.padStart(5, '0') : raw.toUpperCase(), market: m }
+      }
+      if (m === 'CN' || m === 'FUND') {
+        const code = raw.replace(/^(SH|SZ)[.:]?/i, '')
+        return { symbol: /^\d{6}$/.test(code) ? code : raw, market: m }
+      }
+      if (m === 'US') return { symbol: raw.replace(/^US[.:]/i, '').toUpperCase(), market: m }
+      return { symbol: raw.toUpperCase(), market: m }
+    }
+    const symKey = (symbol, market) => { const n = normSym(symbol, market); return n.market + '|' + n.symbol }
     const ADD_METHODS = [
       ['ths', '同花顺', '投资账本 · 股票与爱基金 / 基金账本', '同'],
       ['futu', '富途', '官方 MCP 浏览器授权', '富'],
@@ -1252,9 +1268,13 @@ window.__ModuleLoader__.load({
       const groups = new Map()
       for (const r of ledgerEvents(db, accountId)) {
         if (!r.symbol) continue
-        const k = r.symbol + '|' + (r.market || '')
+        // 按统一代码归并：2549.HK 与 HK.02549 在统计里是同一只证券（记录仍各自保存）。
+        const k = symKey(r.symbol, r.market)
         let g = groups.get(k)
-        if (!g) groups.set(k, g = { key: k, symbol: r.symbol, name: r.name, market: r.market, currency: r.currency, rows: [], buys: 0, sells: 0, buyQty: 0, sellQty: 0, buyCash: 0, sellCash: 0, income: 0, unknown: 0, first: r.date, last: r.date })
+        if (!g) {
+          const n = normSym(r.symbol, r.market)
+          groups.set(k, g = { key: k, symbol: n.symbol, name: r.name, market: n.market, currency: r.currency, rows: [], buys: 0, sells: 0, buyQty: 0, sellQty: 0, buyCash: 0, sellCash: 0, income: 0, unknown: 0, first: r.date, last: r.date })
+        }
         g.rows.push(r); if (!g.name && r.name) g.name = r.name
         const qty = Number(r.qty) || 0, cash = typeof r.cashAmount === 'number' && Number.isFinite(r.cashAmount) ? r.cashAmount : null
         if (r.kind === 'buy') { g.buys++; g.buyQty += qty; if (cash !== null) g.buyCash -= cash; else g.unknown++ }
@@ -1264,7 +1284,8 @@ window.__ModuleLoader__.load({
         if (r.date && r.date > g.last) g.last = r.date
       }
       const insMap = new Map(db.instruments.map(i => [i.id, i]))
-      const heldQty = g => db.holdings.filter(ho => (!accountId || ho.accountId === accountId) && insMap.get(ho.instrumentId)?.symbol === g.symbol).reduce((s, ho) => s + (Number(ho.qty) || 0), 0)
+      // 当前持有同样按统一代码汇总：两条来源记录的数量相加展示。
+      const heldQty = g => db.holdings.filter(ho => (!accountId || ho.accountId === accountId) && (() => { const ins = insMap.get(ho.instrumentId); return ins && symKey(ins.symbol, ins.market) === g.key })()).reduce((s, ho) => s + (Number(ho.qty) || 0), 0)
       const q = query.trim().toLowerCase()
       const list = [...groups.values()].filter(g => !q || (g.symbol + ' ' + (g.name || '')).toLowerCase().includes(q)).sort((a, b) => String(b.last || '').localeCompare(String(a.last || '')))
       const n = v => (Math.round(v * 100) / 100).toLocaleString('zh-CN')

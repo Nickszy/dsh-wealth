@@ -330,6 +330,30 @@ test('bills.import archives batch flows with categories, dedupes and never guess
   assert.equal(load().historyEvents.length, 2)
 })
 
+test('instrument lookup is identity-aware so legacy spellings reuse the same record', () => {
+  const db = fixture()
+  const first = applyOp(db, 'holding.upsert', { accountId: 'a', symbol: '02549', market: 'HK', qty: 4000, avgCost: 10, currency: 'HKD' }).holding
+  const second = applyOp(db, 'holding.upsert', { accountId: 'empty', symbol: '2549.HK', market: 'HK', qty: 3500, avgCost: 9, currency: 'HKD' }).holding
+  assert.equal(second.instrumentId, first.instrumentId)
+  assert.equal(db.instruments.length, 1)
+  assert.ok(db.instruments[0].symbol === '02549' || db.instruments[0].symbol === 'HK.02549')
+})
+
+test('summary reads duplicate instrument records under one identity', () => {
+  const db = fixture()
+  db.instruments.push(
+    { id: 'IA', symbol: '02549', name: 'CAROTE', market: 'HK', assetClass: 'stock', currency: 'HKD', sector: '汽车', style: 'growth' },
+    { id: 'IB', symbol: '2549.HK', name: 'CAROTE LTD', market: 'HK', assetClass: 'stock', currency: 'HKD', sector: '汽车', style: 'growth' })
+  db.holdings.push(
+    { id: 'H1', accountId: 'a', instrumentId: 'IA', qty: 4000, avgCost: 10, manualPrice: 12, currency: 'HKD' },
+    { id: 'H2', accountId: 'empty', instrumentId: 'IB', qty: 3500, avgCost: 9, manualPrice: 12, currency: 'HKD' })
+  const summary = summarize(db)
+  assert.equal(summary.excludedCount, 0)
+  // 两条记录都计入同一行业/风格口径，不因写法不同被拆开。
+  assert.deepEqual(summary.sectors.map((s) => [s.sector, s.valueBase]), [['汽车', 7500 * 12 * 1]])
+  assert.deepEqual(summary.styles.map((s) => [s.style, s.valueBase]), [['growth', 7500 * 12 * 1]])
+})
+
 test('instrument.merge repoints holdings across accounts and refuses same-account clashes', () => {
   const db = fixture()
   db.instruments.push(

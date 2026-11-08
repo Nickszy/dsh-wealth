@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { isFlowKind, KIND_NAMES, normalizeStyle, isLifeCategory, LIFE_CATEGORIES, canonicalMarket } from './model.mjs'
-import { normalizeSymbol } from './symbols.mjs'
+import { normalizeSymbol, identityKey } from './symbols.mjs'
 
 export const DATA_DIR = process.env.DSH_PORTFOLIO_DIR || join(homedir(), '.dsh', 'data', 'dsh-portfolio')
 export const DATA_FILE = join(DATA_DIR, 'ledger.json')
@@ -122,7 +122,11 @@ function resolveInstrument(db, ref, { create = true } = {}) {
   const normalized = normalizeSymbol(rawSymbol, ref.market || '')
   const symbol = normalized.symbol || rawSymbol
   const market = String(ref.market || '').trim().toUpperCase()
-  const existing = db.instruments.find((i) => i.symbol === symbol && (market === '' || i.market === market))
+  // 按统一身份查找：旧写法（2549.HK / HK.02549）也能挂到已有记录上，不再产生第三条重复。
+  const existing = db.instruments.find((i) => {
+    const n = normalizeSymbol(i.symbol, i.market)
+    return n.symbol === symbol && (market === '' || n.market === market)
+  })
   if (existing) return existing
   if (!create) throw new OpError('not-found', '标的不存在: ' + symbol)
   const instrument = {
@@ -592,6 +596,17 @@ export function summarize(db) {
   const byStyle = new Map()
   const warnings = [], excludedHoldings = []
   let totalBase = 0, totalCost = 0
+  // 同一只证券可能存在多条历史记录（每个来源一条）：统计按统一身份取首条元数据，
+  // 记录本身保持分开，汇总与分类归并到同一身份下。
+  const canonical = new Map()
+  for (const ins of db.instruments) {
+    const key = identityKey(ins)
+    if (!canonical.has(key)) canonical.set(key, ins)
+  }
+  const instrumentOf = (id) => {
+    const ins = db.instruments.find((i) => i.id === id)
+    return ins ? (canonical.get(identityKey(ins)) || ins) : null
+  }
   const exclude = (h, currency, reason, message) => {
     excludedHoldings.push({ holdingId: h.id, accountId: h.accountId, instrumentId: h.instrumentId, currency, reason })
     warnings.push({ code: reason, message, holdingId: h.id, currency })
@@ -599,7 +614,7 @@ export function summarize(db) {
     if (account) account.excludedHoldings++
   }
   for (const h of db.holdings) {
-    const ins = db.instruments.find((i) => i.id === h.instrumentId)
+    const ins = instrumentOf(h.instrumentId)
     const cur = h.currency || ins?.currency || base
     if (!ins) { exclude(h, cur, 'missing-instrument', '持仓标的不存在'); continue }
     if (!byAccount.has(h.accountId)) { exclude(h, cur, 'missing-account', '持仓账户不存在'); continue }

@@ -3,6 +3,7 @@
 // 解析失败或网络失败只产生警告，绝不返回编造的价格。
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { normalizeSymbol } from './symbols.mjs'
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36'
 const KLINE_URL = 'https://push2his.eastmoney.com/api/qt/stock/kline/get'
@@ -17,7 +18,9 @@ const lower = (v) => String(v || '').trim().toLowerCase()
  * key 同时用作缓存键和去重键。
  */
 export function klineTarget(instrument = {}) {
-  const market = upper(instrument.market), symbol = String(instrument.symbol || '').trim(), assetClass = lower(instrument.assetClass)
+  // 统一代码：2549.HK / HK.02549 / 02549 都查到同一条日线。
+  const normalized = normalizeSymbol(instrument.symbol, instrument.market)
+  const market = normalized.market, symbol = normalized.symbol, assetClass = lower(instrument.assetClass)
   if (!symbol || !['stock', 'etf', 'fund', 'bond'].includes(assetClass)) return null
   if (assetClass === 'fund' && /^\d{6}$/.test(symbol) && (market === 'FUND' || market === 'CN')) return { key: 'fund:' + symbol, kind: 'fund', id: symbol }
   if (!['stock', 'etf', 'bond'].includes(assetClass)) return null
