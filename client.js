@@ -357,6 +357,8 @@ window.__ModuleLoader__.load({
       }
       const [billPrev, setBillPrev] = React.useState(null), [billMsg, setBillMsg] = React.useState(''), [billAccount, setBillAccount] = React.useState(''), [billBusy, setBillBusy] = React.useState(false)
       const perfAccount = fixedAccounts && fixedAccounts.length === 1 ? fixedAccounts[0] : null
+      // 历史净值按分析范围取数：单账户、多账户合并、全部账户合并（空 = 全部）都支持。
+      const perfScope = (fixedAccounts || sel).join(',')
       const loadBills = () => fetch('/portfolio/api/bills?months=12', { headers: { accept: 'application/json' } }).then(r => r.json()).then(d => { if (d.ok) setBills(d); else setBillsErr(d.error?.message || '生活账单读取失败') }).catch(e => setBillsErr(e.message))
       const saveBudget = async (category, monthly) => {
         setBillBusy(true); setBillMsg('')
@@ -423,12 +425,11 @@ window.__ModuleLoader__.load({
       }, [state.ledger.updatedAt])
       // 历史净值回补：首次需要拉取历史行情，稍慢；之后走服务端缓存。
       React.useEffect(() => {
-        if (!perfAccount) { setPerf(null); return }
         let live = true; setPerfErr(''); setPerf(null)
-        fetch('/portfolio/api/performance?accounts=' + encodeURIComponent(perfAccount) + '&days=1095', { headers: { accept: 'application/json' } })
+        fetch('/portfolio/api/performance?accounts=' + encodeURIComponent(perfScope) + '&days=1095', { headers: { accept: 'application/json' } })
           .then(r => r.json()).then(d => { if (!live) return; if (d.ok) setPerf(d); else setPerfErr(d.error?.message || '历史净值读取失败') }).catch(e => { if (live) setPerfErr(e.message) })
         return () => { live = false }
-      }, [perfAccount, state.ledger.updatedAt])
+      }, [perfScope, state.ledger.updatedAt])
       const a = key ? scoped : state.analysis
       const toggle = id => setSel(old => old.includes(id) ? old.filter(x => x !== id) : [...old, id])
       const picker = fixedAccounts ? null : h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16 }, 'aria-label': '分析范围' },
@@ -482,7 +483,7 @@ window.__ModuleLoader__.load({
           kpi('最大回撤', p.maxDrawdown && p.maxDrawdown.value != null ? pct(p.maxDrawdown.value) : '—', p.maxDrawdown && p.maxDrawdown.peakDate ? (p.maxDrawdown.peakDate + ' → ' + (p.maxDrawdown.troughDate || '—')) : (p.maxDrawdown && p.maxDrawdown.reason) || '', t.red),
           kpi('快照覆盖', (nw.snapshotCount || 0) + ' 天', (nw.spanDays ? '跨度 ' + nw.spanDays + ' 天 · ' : '') + '变动 ' + fmtMoney(nw.change) + ' ' + a.baseCurrency, t.text)),
         h('div', { style: { fontSize: 11, color: t.sub, margin: '-4px 0 16px', lineHeight: 1.6 } }, p.note || ''),
-        perfAccount ? (() => {
+        perfScope !== undefined ? (() => {
           const rows = perf && perf.series && perf.series.length > 1 ? perf.series : []
           const step = Math.max(1, Math.ceil(rows.length / 240))
           const sampled = rows.filter((_, i) => i % step === 0).concat(rows.length && rows.length % step ? [rows[rows.length - 1]] : [])
@@ -490,9 +491,11 @@ window.__ModuleLoader__.load({
           const lo = Math.min(...vals), hi = Math.max(...vals), span = hi - lo || Math.max(hi * .05, 1)
           const pts = vals.map((v, i) => [(i / Math.max(1, vals.length - 1)) * 560 + 20, 150 - ((v - lo) / span) * 110])
           const m = perf && perf.metrics
+          const scopeTag = perfAccount ? null : sel.length ? '已选 ' + sel.length + ' 个账户合并' : '全部账户合并'
           return h('section', { style: { ...T.card(t), marginBottom: 14 }, 'aria-label': '历史净值' },
             h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', marginBottom: 8 } },
-              h('strong', { style: { fontSize: 15 } }, '历史净值走势', h('span', { style: { fontWeight: 400, color: t.sub, fontSize: 11, marginLeft: 7 } }, '按流水 × 历史行情回补')),
+              h('strong', { style: { fontSize: 15 } }, '历史净值走势', h('span', { style: { fontWeight: 400, color: t.sub, fontSize: 11, marginLeft: 7 } }, '按流水 × 历史行情回补'),
+                scopeTag ? h('span', { style: { fontWeight: 500, color: t.sub, fontSize: 11, marginLeft: 7 } }, scopeTag) : null),
               m ? h('span', { style: { fontSize: 11, color: t.sub } }, perf.from + ' → ' + perf.to + ' · ' + m.days + ' 个交易日') : null),
             perfErr ? h('div', { role: 'alert', style: { fontSize: 12, color: t.red } }, perfErr) :
             rows.length ? h('div', null,
