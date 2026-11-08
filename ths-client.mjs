@@ -193,6 +193,9 @@ async function fundSnapshot(post, source, id, deps) {
   const totalAsset = decimal(account.total_asset), totalCost = decimal(account.total_cost)
   sourceTotals.totalAsset = totalAsset
   sourceTotals.totalCost = totalCost
+  // 券商口径的持有盈亏（爱基金 now_profit），与股票账本逐行 hold_profit 汇总同义。
+  const holdingProfit = decimal(account.now_profit)
+  if (holdingProfit !== null) sourceTotals.holdingProfit = holdingProfit
   if (totalAsset === null) missing('MISSING_ASSET_FIELD:totalAsset')
   const groups = [['fund', 'fund'], ['currencyfund', 'cash']]
   for (const [key] of groups) {

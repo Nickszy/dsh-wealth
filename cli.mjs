@@ -7,6 +7,7 @@
 //   node cli.mjs help
 // Every command prints one JSON object to stdout. Nothing is interactive.
 import { load, save, applyOp, summarize, OpError, DATA_FILE, DATA_DIR } from './store.mjs'
+import { forecast } from './forecast.mjs'
 
 function out(obj, code = 0) {
   process.stdout.write(JSON.stringify(obj, null, 2) + '\n')
@@ -24,6 +25,7 @@ function help() {
       'node cli.mjs accounts                       # account list with values (balance sheet view)',
       'node cli.mjs positions [accountId]          # holdings joined with instruments (+sector/style)',
       'node cli.mjs history [accountId] [limit]    # archived flows (deposit/dividend/fee/life bills)',
+      'node cli.mjs forecast [days]                # recurring flows + projected out/in for next N days (default 30)',
       'node cli.mjs export [file]                  # write the whole ledger JSON to a file',
       'node cli.mjs <op> key=value key=value ...   # run one operation',
       'node cli.mjs \'{"op":"...",...}\'             # or pass one JSON object',
@@ -116,6 +118,9 @@ else if (arg[0] === 'state') {
   const limit = Number(arg[2]) || 200
   const events = (db.historyEvents || []).filter((e) => !accountId || e.accountId === accountId).slice(-limit)
   out({ ok: true, count: events.length, events })
+} else if (arg[0] === 'forecast') {
+  const days = Math.min(365, Math.max(7, Number(arg[1]) || 30))
+  out({ ok: true, ...forecast(load(), { days }) })
 } else if (arg[0] === 'export') {
   const db = load()
   const { writeFileSync } = await import('node:fs')

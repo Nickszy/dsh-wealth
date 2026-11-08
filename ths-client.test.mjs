@@ -198,7 +198,7 @@ function fundDeps({ list = fundRows, merge, history } = {}, options = {}) {
     calls.push({ url, init })
     const body = new URLSearchParams(init.body)
     if (url.endsWith('account_list')) return { ok: true, status: 200, json: async () => ({ error_code: '0', ex_data: { common: list.filter(r => r.fund_key), fund: list.filter(r => r.fundId) }, ...options }) }
-    if (url.endsWith('merge_fund')) return { ok: true, status: 200, json: async () => ({ error_code: '0', ex_data: merge ?? { account: { cust_id: '100108832246', username: '爱基金', total_asset: '115116.337772', total_cost: '141202.550427', trans_date: '2026-11-06' }, fund: [{ fundcode: '001257', fundname: '兴业收益增强债券A', fundtype: '1', fundcount: '4316.86', fundcost: '6954.46146', fundnav: '1.612', fundvalue: '6958.77832', date: '2026-11-06', percost: '1.611245', onway: '0', unconf_count: 0 }, { fundcode: '020686', fundname: '南方上证科创板新材料ETF联接C', fundtype: '0', fundcount: '23397.83', fundcost: '53861.80', fundnav: '1.5198', fundvalue: '35560.02', date: '2026-11-05', percost: '2.302047', onway: '0', unconf_count: 0 }], currencyfund: [], onwayfund: [], clearfund: [], empty: 'false' } }) }
+    if (url.endsWith('merge_fund')) return { ok: true, status: 200, json: async () => ({ error_code: '0', ex_data: merge ?? { account: { cust_id: '100108832246', username: '爱基金', total_asset: '115116.337772', total_cost: '141202.550427', now_profit: '1039.72', trans_date: '2026-11-06' }, fund: [{ fundcode: '001257', fundname: '兴业收益增强债券A', fundtype: '1', fundcount: '4316.86', fundcost: '6954.46146', fundnav: '1.612', fundvalue: '6958.77832', date: '2026-11-06', percost: '1.611245', onway: '0', unconf_count: 0 }, { fundcode: '020686', fundname: '南方上证科创板新材料ETF联接C', fundtype: '0', fundcount: '23397.83', fundcost: '53861.80', fundnav: '1.5198', fundvalue: '35560.02', date: '2026-11-05', percost: '2.302047', onway: '0', unconf_count: 0 }], currencyfund: [], onwayfund: [], clearfund: [], empty: 'false' } }) }
     return { ok: true, status: 200, json: async () => ({ error_code: '0', ex_data: history ?? { list: [], total: 0, max_page: 1, page: Number(body.get('page') || 1), count: 200 } }) }
   } }
 }
@@ -220,6 +220,7 @@ test('fund snapshot (ijj) maps merge_fund to holdings with percost avg cost and 
   assert.deepEqual([first.symbol, first.assetClass, first.market, first.currency, first.qty, first.avgCost, first.manualPrice, first.externalId], ['001257', 'fund', 'CN', 'CNY', 4316.86, 1.611245, 1.612, '001257'])
   assert.equal(result.sourceTotals.totalAsset, 115116.337772)
   assert.equal(result.sourceTotals.totalCost, 141202.550427)
+  assert.equal(result.sourceTotals.holdingProfit, 1039.72)
   assert.equal(result.quoteDate, '2026-11-06')
   assert.equal(result.complete, true)
 })

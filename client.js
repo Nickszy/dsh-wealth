@@ -292,6 +292,7 @@ window.__ModuleLoader__.load({
       const [sel, setSel] = React.useState([])
       const [dim, setDim] = React.useState('class')
       const [scoped, setScoped] = React.useState(null), [scopeErr, setScopeErr] = React.useState('')
+      const [fc, setFc] = React.useState(null), [fcErr, setFcErr] = React.useState('')
       const key = (fixedAccounts || sel).join(',')
       React.useEffect(() => {
         if (!key) { setScoped(null); return }
@@ -299,6 +300,13 @@ window.__ModuleLoader__.load({
         fetch('/portfolio/api/analysis?accounts=' + encodeURIComponent(key), { headers: { accept: 'application/json' } }).then(r => r.json()).then(d => { if (!live) return; if (d.ok) setScoped(d.analysis); else setScopeErr(d.error?.message || '分析读取失败') }).catch(e => { if (live) setScopeErr(e.message) })
         return () => { live = false }
       }, [key, state.ledger.updatedAt])
+      // 预计收支按全账本推算（周期性流水是账户级事实，合并口径才有意义）。
+      React.useEffect(() => {
+        if (fixedAccounts) return
+        let live = true
+        fetch('/portfolio/api/forecast?days=30', { headers: { accept: 'application/json' } }).then(r => r.json()).then(d => { if (!live) return; if (d.ok) setFc(d); else setFcErr(d.error?.message || '预计收支读取失败') }).catch(e => { if (live) setFcErr(e.message) })
+        return () => { live = false }
+      }, [state.ledger.updatedAt])
       const a = key ? scoped : state.analysis
       const toggle = id => setSel(old => old.includes(id) ? old.filter(x => x !== id) : [...old, id])
       const picker = fixedAccounts ? null : h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16 }, 'aria-label': '分析范围' },
@@ -363,6 +371,23 @@ window.__ModuleLoader__.load({
             h('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: 12 } },
               h('thead', null, h('tr', null, ['年份', '入金', '出金', '分红', '利息', '费用', '税费', '其他'].map((h2) => h('th', { key: h2, style: { textAlign: h2 === '年份' ? 'left' : 'right', padding: '6px 8px', color: t.sub, fontWeight: 500, borderBottom: '1px solid ' + t.border, whiteSpace: 'nowrap' } }, h2)))),
               h('tbody', null, (f.byYear || []).map((y) => h('tr', { key: y.year }, [y.year, y.externalIn, y.externalOut, y.dividends, y.interest, y.fees, y.taxes, y.other].map((v, i) => h('td', { key: i, style: { textAlign: i ? 'right' : 'left', padding: '6px 8px', borderBottom: '1px solid ' + t.border, fontVariantNumeric: 'tabular-nums', color: i ? t.text : t.sub } }, i ? fmtMoney(v) : v))))))) : h('div', { style: { fontSize: 12, color: t.sub, marginTop: 8 } }, '还没有归档流水，导入历史后这里会按年份汇总。')),
+        !fixedAccounts ? h('section', { style: { ...T.card(t), marginTop: 14 }, 'aria-label': '预计收支' },
+          h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8, gap: 8, flexWrap: 'wrap' } },
+            h('strong', { style: { fontSize: 15 } }, '预计收支', h('span', { style: { fontWeight: 400, color: t.sub, fontSize: 11, marginLeft: 7 } }, '未来 30 天 · 按周期性流水推算')),
+            fc && fc.projection ? h('span', { style: { fontSize: 10.5, color: t.sub } }, '预计支出 ' + fmtMoney(fc.projection.outBase) + ' · 预计收入 ' + fmtMoney(fc.projection.inBase) + ' · ' + a.baseCurrency) : null),
+          fcErr ? h('div', { style: { fontSize: 12, color: t.terra } }, fcErr) :
+          !fc ? h('div', { style: { fontSize: 12, color: t.sub } }, '推算中…') :
+          fc.series.length ? h('div', null,
+            fc.series.map((s) => h('div', { key: s.key, style: { display: 'flex', justifyContent: 'space-between', gap: 10, padding: '7px 0', borderBottom: '1px solid ' + t.border, fontSize: 12.5, flexWrap: 'wrap' } },
+              h('span', { style: { color: t.text } }, s.label, h('small', { style: { display: 'block', color: t.sub } }, [s.cadenceLabel, s.accountName, '已发生 ' + s.occurrences + ' 次'].filter(Boolean).join(' · '))),
+              h('span', { style: { textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' } },
+                h('strong', { style: { color: s.inflow ? t.green : t.text } }, fmtMoney(s.medianAmountBase, a.baseCurrency) + (s.dueInHorizon > 1 ? ' × ' + s.dueInHorizon : '')),
+                h('small', { style: { display: 'block', color: t.sub } }, '下次 ' + s.nextDue)))),
+            h('div', { style: { display: 'flex', justifyContent: 'space-between', padding: '8px 0 0', fontSize: 13 } },
+              h('strong', null, '净 ' + fmtMoney(fc.projection.netBase, a.baseCurrency)),
+              h('span', { style: { color: t.sub, fontSize: 11 } }, '共 ' + fc.projection.count + ' 笔 · 中位数估算，非保证'))) :
+          h('div', { style: { fontSize: 12, color: t.sub, lineHeight: 1.6 } }, '还没有识别到周期性收支。同一事项（如每月定投、房租、工资）按相同方向记录 3 次以上，就会在这里推算未来 30 天的预计支出与收入。'),
+          (fc && (fc.warnings || []).length) ? h('div', { style: { fontSize: 10.5, color: t.sub, marginTop: 8 } }, fc.warnings.map(w => '· ' + w).join('　')) : null) : null,
         h('section', { style: { ...T.card(t), marginTop: 14 }, 'aria-label': '数据健康' },
           h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 } }, h('strong', { style: { fontSize: 15 } }, '数据健康'), h('span', { style: { fontSize: 10.5, color: t.sub } }, '决定指标可信度')),
           h('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12, color: t.sub, marginBottom: 8 } },
@@ -815,6 +840,10 @@ window.__ModuleLoader__.load({
       const [sub, setSub] = React.useState('holdings'), [editing, setEditing] = React.useState(false)
       const sa = state.summary.accounts.find(x => x.accountId === accountId) || {}
       const hs = db.historySync?.[accountId]
+      // 券商口径的累计持有盈亏（同步来源自带，如 THS 的 hold_profit 汇总 / 爱基金 now_profit），
+      // 与快照无关、不依赖本机历史；sourceTotals 以来源币种计，按汇率折算展示。
+      const brokerPnl = typeof account.sourceTotals?.holdingProfit === 'number' && Number.isFinite(account.sourceTotals.holdingProfit)
+        ? account.sourceTotals.holdingProfit * (cur === account.currency ? 1 : (state.summary.fx[account.currency] || 1)) : null
       const subs = [['holdings', '持仓'], ['trades', '流水'], ['symbols', '个股'], ['analysis', '分析'], ['backfill', '补录账单']]
       const metric = (label, value, color) => h('div', null, h('span', { style: T.label(t) }, label), h('strong', { style: { color, fontSize: typeof value === 'string' && value.length > 12 ? 12 : undefined } }, value))
       return h('div', null,
@@ -830,6 +859,7 @@ window.__ModuleLoader__.load({
           h('div', { className: 'wealth-metrics', style: { paddingBottom: 12 } },
             metric('持仓成本', fmtMoney(sa.costBase, cur)),
             metric('浮动盈亏', fmtMoney(sa.pnlBase, cur), (sa.pnlBase || 0) >= 0 ? t.green : t.red),
+            brokerPnl != null ? metric('持有盈亏（券商）', fmtMoney(brokerPnl, cur), brokerPnl >= 0 ? t.green : t.red) : null,
             metric('最近同步', source ? (source.lastSuccessAt ? dateTimeText(source.lastSuccessAt) : '尚未同步') : '手动维护'),
             metric('流水已同步至', hs?.lastTo || (source ? '尚未同步' : '—')))),
         source && ['error', 'failed'].includes(source.lastStatus) && source.lastError ? h('div', { role: 'alert', style: { ...T.card(t), color: t.red, marginBottom: 14, fontSize: 12 } }, '上次同步失败：' + sourceErrorText(source.lastError)) : null,
@@ -849,7 +879,7 @@ window.__ModuleLoader__.load({
       const insMap = new Map(db.instruments.map((i) => [i.id, i]))
       const blank = () => ({ accountId: accountId || db.accounts[0]?.id || '', symbol: '', name: '', market: 'CN', assetClass: 'stock', sector: '', style: '', qty: '', avgCost: '', currency: '', manualPrice: '' })
       const [form, setForm] = React.useState(null), [editing, setEditing] = React.useState(false), [msg, setMsg] = React.useState(''), [acctFilter, setAcctFilter] = React.useState('')
-      const [group, setGroup] = React.useState('account')
+      const [group, setGroup] = React.useState('class')
       const [quoting, setQuoting] = React.useState(false)
       const refreshQuotes = async () => {
         setQuoting(true); setMsg('')
@@ -881,6 +911,7 @@ window.__ModuleLoader__.load({
       const styleLabel = key => ({ growth: '成长', value: '价值', blend: '均衡', other: '其他' })[key] || '未分类'
       const groupKey = ho => {
         const ins = insMap.get(ho.instrumentId)
+        if (group === 'class') return assetLabel(ins?.assetClass)
         if (group === 'account' && !accountId) return accMap.get(ho.accountId)?.name || ho.accountId
         if (group === 'sector') return (ins?.sector || '').trim() || '未分类'
         if (group === 'style') return ins?.style ? styleLabel(ins.style) : '未分类'
@@ -907,7 +938,7 @@ window.__ModuleLoader__.load({
                 h('option', { value: '' }, '全部账户'),
                 db.accounts.map((a) => h('option', { key: a.id, value: a.id }, a.name))),
               h('select', { 'aria-label': '持仓分组', value: group, onChange: e => setGroup(e.target.value), style: { ...T.input(t), minHeight: 30, width: 'auto', fontSize: 12 } },
-                (accountId ? [['sector', '按行业'], ['style', '按风格'], ['market', '按市场'], ['currency', '按币种']] : [['account', '按账户'], ['sector', '按行业'], ['style', '按风格'], ['market', '按市场'], ['currency', '按币种']]).map(([v, n]) => h('option', { key: v, value: v }, n))),
+                (accountId ? [['class', '按资产类别'], ['sector', '按行业'], ['style', '按风格'], ['market', '按市场'], ['currency', '按币种']] : [['class', '按资产类别'], ['account', '按账户'], ['sector', '按行业'], ['style', '按风格'], ['market', '按市场'], ['currency', '按币种']]).map(([v, n]) => h('option', { key: v, value: v }, n))),
               h('button', { style: T.btn(t, false), disabled: busy || quoting, onClick: refreshQuotes }, quoting ? '正在更新行情…' : '⟳ 更新行情'),
               h('button', { style: T.btn(t, true), disabled: busy || !db.accounts.length, onClick: () => open(blank()) }, '＋ 添加持仓'))),
           h('table', { style: { width: '100%', borderCollapse: 'collapse' } },

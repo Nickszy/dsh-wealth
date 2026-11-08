@@ -6,6 +6,7 @@
  */
 import { load, save, applyOp, summarize, OpError } from './store.mjs'
 import { refreshQuotes } from './quotes.mjs'
+import { forecast } from './forecast.mjs'
 import { previewImport } from './importer.mjs'
 import { modelInfo, chatTurn, applyChatOps } from './chat.mjs'
 import { createSyncService } from './sync.mjs'
@@ -146,6 +147,12 @@ export function apply(ctx, config = {}) {
           const ids = String(url.searchParams.get('accounts') || '').split(',').map(s => s.trim()).filter(Boolean)
           const db = load()
           send(res, 200, { ok: true, accounts: ids, analysis: analyze(ids.length ? scopeLedger(db, ids) : db) })
+          return
+        }
+        if (path === 'api/forecast') {
+          if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
+          const days = Math.min(365, Math.max(7, Number(url.searchParams.get('days')) || 30))
+          send(res, 200, { ok: true, ...forecast(load(), { days }) })
           return
         }
         if (path === 'api/sources/login/status') {
