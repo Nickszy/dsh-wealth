@@ -9,7 +9,8 @@ const row=(symbol='00700',extra={})=>({symbol,name:'测试标的',market:'HK',as
 const snapshot=(holdings=[row()],extra={})=>({holdings,complete:true,warnings:[],queriedAt:'2026-11-07T00:00:00Z',uploadedAt:null,quoteDate:null,...extra})
 function setup(extra={}) {
  let ledger={baseCurrency:'CNY',fx:{CNY:1,HKD:.9,USD:7},accounts:[{id:'a',name:'港股',currency:'HKD'},{id:'b',name:'人民币',currency:'CNY'}],instruments:[],holdings:[],trades:[],snapshots:[],updatedAt:null}
- let records=[],clock=Date.parse('2026-11-07T00:00:00Z'),writes=0
+ // 基准时钟取工作日（周五）：tick 在周六/周日默认跳过自动同步，周末行为由专门测试注入 clockStart 覆盖。
+ let records=[],clock=extra.clockStart ?? Date.parse('2026-11-06T00:00:00Z'),writes=0
  const config={read:()=>structuredClone(records),write:all=>{records=structuredClone(all)}}
  const entries={}
  const credentials={get:id=>structuredClone(entries[id]||{}),set:(id,_kind,value)=>{entries[id]={...(entries[id]||{}),...value}},remove:id=>{delete entries[id]},configured:id=>Object.keys(entries[id]||{}).length>0}
@@ -103,10 +104,15 @@ test('core reconciliation warns on mismatching totals and cash, skips matching a
  // qty 100 × manualPrice 400 = 40000，完全一致不告警。
  let r=mergeSnapshot(db,src,snapshot([row()],{sourceTotals:{totalAsset:40000}}))
  assert.deepEqual(warningsOf(r),[])
- // 超出 0.011 容差则告警，并同时写入结构化明细。
- r=mergeSnapshot(db,src,snapshot([row()],{sourceTotals:{totalAsset:40001}}))
+ // 跨口径推导天然差几毛：0.5% 以内（40000 的 0.2% = 80）视为正常，不告警。
+ r=mergeSnapshot(db,src,snapshot([row()],{sourceTotals:{totalAsset:40080}}))
+ assert.deepEqual(warningsOf(r),[])
+ // 超出相对容差（0.5% = 200）才告警，并同时写入结构化明细。
+ r=mergeSnapshot(db,src,snapshot([row()],{sourceTotals:{totalAsset:40250}}))
  assert.equal(warningsOf(r).length,1)
- assert.ok(r.snapshot.warningDetails.some(d=>d.code==='TOTAL_MISMATCH:totalAsset'&&d.severity==='degraded'))
+ assert.ok(r.snapshot.warningDetails.some(d=>d.code==='TOTAL_MISMATCH:totalAsset'&&d.severity==='info'))
+ // 跨价源推导差异只做提示：对账警告不能让健康来源变成 partial。
+ assert.equal(r.snapshot.warningDetails.filter(d=>d.severity==='degraded').length, 0)
  // 多币种无法对总资产：跳过且不告警。
  const mixed=[row(),row('AAPL',{market:'US',currency:'USD',qty:1,avgCost:100,manualPrice:100})]
  r=mergeSnapshot(db,src,snapshot(mixed,{sourceTotals:{totalAsset:1}}))
@@ -353,4 +359,129 @@ test('THS discovery annotates each book with thsType and connectSource forwards 
  const r=await f.service.connectSource({name:'爱基金',connector:'ths',accountId:'fund1',portfolioId:'100108832246',thsBookType:'ijj'},{cookie:'userid=123; v=fixture'})
  assert.equal(r.source.thsBookType,'ijj');assert.equal(r.source.portfolioId,'100108832246')
  assert.equal(r.account.name,'爱基金');assert.equal(r.created,true)
+})
+test('auth failure sets needsReauth without failCount; tick skips it until manual success clears',async()=>{
+ let calls=0,mode='ok' // 'ok' 成功 | 'net' 非认证失败 | 'auth' 认证失败
+ const f=setup({fetchSnapshot:async()=>{calls++;if(mode==='auth')throw Error('401 unauthorized, token expired');if(mode==='net')throw Error('network down');return snapshot()}})
+ const src=f.add({intervalMinutes:30})
+ await f.service.tick();assert.equal(calls,1)
+ let record=f.config.read()[0]
+ assert.equal(record.lastStatus,'ok');assert.equal(record.failCount,0);assert.equal(record.needsReauth,false)
+ // 非认证失败：failCount +1，不写 needsReauth。
+ mode='net';f.advance(30*60000)
+ await f.service.tick();assert.equal(calls,2)
+ record=f.config.read()[0]
+ assert.equal(record.lastStatus,'error');assert.equal(record.failCount,1);assert.equal(record.needsReauth,false)
+ // 认证失败：写 needsReauth，failCount 不变。
+ mode='auth';f.advance(5*60000) // failCount=1 → 退避 5 分钟
+ await f.service.tick();assert.equal(calls,3)
+ record=f.config.read()[0]
+ assert.equal(record.lastStatus,'error');assert.equal(record.needsReauth,true);assert.equal(record.failCount,1)
+ // tick 不再调度该来源。
+ f.advance(600*60000);await f.service.tick();assert.equal(calls,3)
+ // 手动同步仍然允许：再次认证失败也不累计 failCount。
+ await assert.rejects(f.service.sync(src.id),/unauthorized/);assert.equal(calls,4)
+ record=f.config.read()[0];assert.equal(record.failCount,1);assert.equal(record.needsReauth,true)
+ // 手动同步成功：清除标志与退避计数，tick 恢复调度。
+ mode='ok';await f.service.sync(src.id)
+ record=f.config.read()[0]
+ assert.equal(record.needsReauth,false);assert.equal(record.failCount,0);assert.equal(record.lastStatus,'ok')
+ f.advance(30*60000);await f.service.tick();assert.equal(calls,6) // 标志清除后 tick 恢复调度
+})
+test('re-authorization clears needsReauth on bound sources only; fresh credentials via saveSource clear too',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'wealth-reauth-'))
+ try{
+  let ledger={version:1,baseCurrency:'CNY',fx:{CNY:1},accounts:[{id:'a',name:'人民币账户',currency:'CNY'},{id:'d',name:'另一人民币账户',currency:'CNY'}],instruments:[],holdings:[],trades:[],snapshots:[],updatedAt:null}
+  const entries={}
+  const credentials={get:id=>structuredClone(entries[id]||{}),set:(id,_kind,value)=>{entries[id]={...(entries[id]||{}),...value}},remove:id=>{delete entries[id]},configured:id=>Object.keys(entries[id]||{}).length>0}
+  const config=sourceStore(dir)
+  const service=createSyncService({get:()=>null},{config,credentials,load:()=>structuredClone(ledger),save:db=>{ledger=structuredClone(db)},listAccounts:async()=>({accounts:[{id:'book',name:'股票账本',thsType:'common'},{id:'book2',name:'另一账本',thsType:'common'}],warnings:[]}),fetchSnapshot:async()=>snapshot()})
+  const bound=service.saveSource({name:'账本一',connector:'ths',transport:'native',accountId:'a',portfolioId:'book',intervalMinutes:15,enabled:true}).sources.at(-1)
+  const other=service.saveSource({name:'账本二',connector:'ths',transport:'native',accountId:'d',portfolioId:'book2',intervalMinutes:15,enabled:true}).sources.at(-1)
+  // 两个来源都处于「需重新授权」状态。
+  config.write(config.read().map(s=>({...s,needsReauth:true,failCount:2})))
+  // 重新授权 bound 所属的登录（legacy 来源：授权 id 即来源 id，按 connector 校验归属）。
+  const {auth}=await service.createAuthorization({connector:'ths',authId:bound.id},{cookie:'fresh-cookie'})
+  assert.equal(auth.legacy,false)
+  let rows=config.read()
+  assert.equal(rows.find(s=>s.id===bound.id).needsReauth,undefined)
+  assert.equal(rows.find(s=>s.id===other.id).needsReauth,true) // 其他登录的来源不受影响
+  // saveSource 存入新凭据同样清除该来源的标志并重置退避。
+  service.saveSource({id:other.id,name:'账本二',connector:'ths',transport:'native',accountId:'d',portfolioId:'book2',intervalMinutes:15,enabled:true},{cookie:'fresh-cookie-2'})
+  rows=config.read()
+  assert.equal(rows.find(s=>s.id===other.id).needsReauth,false)
+  assert.equal(rows.find(s=>s.id===other.id).failCount,0)
+ }finally{rmSync(dir,{recursive:true,force:true})}
+})
+test('empty sync errors use the generic hint without being treated as auth failures',async()=>{
+ const f=setup({fetchSnapshot:async()=>{throw ''}}),src=f.add({intervalMinutes:5})
+ await assert.rejects(f.service.sync(src.id),/同步失败，请检查连接/)
+ const record=f.config.read()[0]
+ assert.equal(record.needsReauth,undefined) // 通用提示里的「授权」只是排查建议
+ assert.equal(record.failCount,1)
+})
+test('non-auth failures back off exponentially capped at the configured interval; success resets',async()=>{
+ let calls=0,mode='net'
+ const f=setup({fetchSnapshot:async()=>{calls++;if(mode==='net')throw Error('network down');return snapshot()}})
+ const src=f.add({intervalMinutes:30})
+ await f.service.tick();assert.equal(calls,1) // failCount 1 → 5 分钟
+ assert.equal(f.config.read()[0].failCount,1)
+ f.advance(4*60000);await f.service.tick();assert.equal(calls,1)
+ f.advance(1*60000);await f.service.tick();assert.equal(calls,2) // failCount 2 → 10 分钟
+ f.advance(9*60000);await f.service.tick();assert.equal(calls,2)
+ f.advance(1*60000);await f.service.tick();assert.equal(calls,3) // failCount 3 → 20 分钟
+ f.advance(19*60000);await f.service.tick();assert.equal(calls,3)
+ f.advance(1*60000);await f.service.tick();assert.equal(calls,4) // failCount 4 → min(30, 40)=30 分钟（封顶）
+ f.advance(29*60000);await f.service.tick();assert.equal(calls,4)
+ f.advance(1*60000);await f.service.tick();assert.equal(calls,5) // failCount 5 → 5*16=80 封顶仍 30 分钟
+ mode='ok';f.advance(30*60000);await f.service.tick();assert.equal(calls,6)
+ const record=f.config.read()[0]
+ assert.equal(record.lastStatus,'ok');assert.equal(record.failCount,0)
+ await f.service.tick();assert.equal(calls,6) // 成功后回到完整间隔
+ f.advance(29*60000);await f.service.tick();assert.equal(calls,6)
+ f.advance(1*60000);await f.service.tick();assert.equal(calls,7)
+})
+test('tick skips weekends unless syncWeekends; manual sync is unaffected',async()=>{
+ // 取宿主本地时区的下一个周日中午，避免测试结果依赖机器时区。
+ const sunday=new Date();sunday.setDate(sunday.getDate()+((7-sunday.getDay())%7));sunday.setHours(12,0,0,0)
+ assert.equal(sunday.getDay(),0)
+ let calls=0
+ const f=setup({clockStart:sunday.getTime(),fetchSnapshot:async()=>{calls++;return snapshot()}})
+ const src=f.add({intervalMinutes:5})
+ await f.service.tick();assert.equal(calls,0) // 周日默认不自动同步
+ f.config.write(f.config.read().map(s=>({...s,syncWeekends:true})))
+ await f.service.tick();assert.equal(calls,1) // 显式 opt-in 后照常同步
+ f.config.write(f.config.read().map(s=>({...s,syncWeekends:false})))
+ await f.service.sync(src.id);assert.equal(calls,2) // 手动同步不受休市日限制
+})
+test('tick serializes sources on one connector and runs different connectors in parallel',async()=>{
+ const active=new Set();let maxActive=0;const pending=[]
+ const start=async source=>{active.add(source.id);maxActive=Math.max(maxActive,active.size);await Promise.resolve();return new Promise(resolve=>pending.push({source,resolve:()=>{active.delete(source.id);resolve(snapshot())}}))}
+ const f=setup({fetchSnapshot:start})
+ const db=f.db();db.accounts.push({id:'c',name:'第二港股账户',currency:'HKD'});f.setDb(db)
+ const a=f.add({name:'自定义A',accountId:'a',url:'http://127.0.0.1:1/a',intervalMinutes:5})
+ const b=f.add({name:'自定义B',accountId:'c',url:'http://127.0.0.1:1/b',intervalMinutes:5})
+ // 同一连接器（custom）：串行执行，B 等 A 结束后才开始。
+ const work=f.service.tick()
+ await new Promise(r=>setTimeout(r,0))
+ assert.equal(pending.length,1);assert.equal(maxActive,1)
+ assert.equal(pending[0].source.id,a.id)
+ pending[0].resolve();await new Promise(r=>setTimeout(r,0))
+ assert.equal(pending.length,2);assert.equal(maxActive,1) // A 结束后 B 才开始
+ assert.equal(pending[1].source.id,b.id)
+ pending[1].resolve();await work
+ assert.equal(maxActive,1)
+ assert.deepEqual(f.db().holdings.map(h=>h.accountId).sort(),['a','c'])
+})
+test('tick runs different connectors in parallel',async()=>{
+ const active=new Set();let maxActive=0;const pending=[]
+ const start=async source=>{active.add(source.id);maxActive=Math.max(maxActive,active.size);await Promise.resolve();return new Promise(resolve=>pending.push({source,resolve:()=>{active.delete(source.id);resolve(source.connector==='ths'?snapshot([row('600000',{name:'浦发银行',market:'CN',assetClass:'stock',currency:'CNY'})]):snapshot())}}))}
+ const f=setup({fetchSnapshot:start})
+ const a=f.add({name:'自定义',accountId:'a',url:'http://127.0.0.1:1/a',intervalMinutes:5})
+ const t=f.add({name:'同花顺',connector:'ths',transport:'native',accountId:'b',portfolioId:'book',intervalMinutes:5})
+ const work=f.service.tick()
+ await new Promise(r=>setTimeout(r,0))
+ assert.equal(pending.length,2);assert.equal(maxActive,2) // 跨连接器并行：两个来源同时进行中
+ pending.forEach(p=>p.resolve());await work
+ assert.equal(f.db().holdings.length,2)
 })

@@ -112,19 +112,23 @@ export function sourceStore(dir = DATA_DIR) {
 
 // v2 分段覆盖：快照 segment 使用资产类别键，etf 归入 stock 段查询。
 const coverageSegment = assetClass => assetClass === 'etf' ? 'stock' : assetClass
-// v2.4 信息性对账：来源汇总与快照持仓合计不一致时追加 degraded 警告（不阻断同步、不影响删除）。
-const RECONCILE_TOLERANCE = 0.011
+// v2.4 信息性对账：来源汇总与快照持仓合计不一致时追加 info 警告（不阻断同步、不影响删除、不打成 partial）。
+// 实测（2026-11-09，富途）：券商 totalAsset/netAssets 用实时估值，持仓接口的价格可能滞后数个百分点
+// （6.2%），跨价源的推导差异不可能收敛到任何容差内——降级判断是适配器（同源数据，如 THS value 列）的
+// 职责，核心对账只做提示。
+const RECONCILE_ABS_TOLERANCE = 0.011
+const reconcileTolerance = expected => Math.max(RECONCILE_ABS_TOLERANCE, Math.abs(expected) * 0.005)
 function reconcileTotals(snapshot) {
   const totals = snapshot.sourceTotals
   if (!totals) return
   const warn = key => {
     const message = `来源汇总与持仓合计不一致(${key})`
     snapshot.warnings.push(`TOTAL_MISMATCH:${key}:${message}`)
-    snapshot.warningDetails.push({ code:`TOTAL_MISMATCH:${key}`, severity:'degraded', message })
+    snapshot.warningDetails.push({ code:`TOTAL_MISMATCH:${key}`, severity:'info', message })
   }
   // 现金只有一个持仓行时才可对：现金行的 qty 就是金额。
   const cashRows = snapshot.holdings.filter(h=>h.assetClass === 'cash')
-  if (typeof totals.cash === 'number' && cashRows.length === 1 && Math.abs(totals.cash - cashRows[0].qty) > RECONCILE_TOLERANCE) warn('cash')
+  if (typeof totals.cash === 'number' && cashRows.length === 1 && Math.abs(totals.cash - cashRows[0].qty) > reconcileTolerance(totals.cash)) warn('cash')
   // 总资产只在快照为单币种时可对：非现金行 qty×(manualPrice??avgCost)，现金行按 qty 累加。
   if (new Set(snapshot.holdings.map(h=>h.currency)).size !== 1) return
   const sum = snapshot.holdings.reduce((total, h) => {
@@ -133,7 +137,7 @@ function reconcileTotals(snapshot) {
     return price == null ? NaN : total + h.qty * price
   }, 0)
   if (!Number.isFinite(sum)) return
-  for (const key of ['totalAsset','netAssets']) if (typeof totals[key] === 'number' && Math.abs(totals[key] - sum) > RECONCILE_TOLERANCE) warn(key)
+  for (const key of ['totalAsset','netAssets']) if (typeof totals[key] === 'number' && Math.abs(totals[key] - sum) > reconcileTolerance(totals[key])) warn(key)
 }
 
 /** Apply authoritative positions only to positions owned by this connection. */
@@ -432,12 +436,13 @@ export function createSyncService(ctx, options = {}) {
         if (missing) throw bad('新登录账号不包含已绑定账本，请为新账号创建授权')
         vault.set(target,'ths',secrets)
         updateAuth(target,{authorizedAt:iso(),lastError:null})
+        clearReauthForAuth(target,'ths')
       } else if (source) {
         const signal = AbortSignal.timeout(45000)
         const result = options.listAccounts ? await options.listAccounts(source,secrets,signal) : await listThsAccounts(source,secrets,signal)
         if (!result.accounts.some(a=>String(a.id) === String(source.portfolioId) && String(a.thsType || 'common') === String(source.thsBookType || 'common'))) throw bad('新登录账号不包含已绑定账本，请为新账号创建连接')
         vault.set(source.id,'ths',secrets)
-        updateRecord(source.id,{configRevision:randomUUID(),lastStatus:'never',lastError:null,lastAttemptAt:null})
+        updateRecord(source.id,{configRevision:randomUUID(),lastStatus:'never',lastError:null,lastAttemptAt:null,needsReauth:false,failCount:0})
       } else throw bad('待重新登录的同花顺连接不存在')
     }
     vault.set('pending-ths','ths',secrets)
@@ -525,6 +530,7 @@ export function createSyncService(ctx, options = {}) {
     // rename/remove may have landed meanwhile.
     persistAuths(authList().filter(a => a.id !== id).concat(auth))
     if (existing) syncSourceConfigFromAuth(id, authSettings)
+    clearReauthForAuth(id, connector)
     return { auth, ...list() }
   }
   function syncSourceConfigFromAuth(authId, settings) {
@@ -575,6 +581,17 @@ export function createSyncService(ctx, options = {}) {
     const all = config.read(), index = all.findIndex(s=>s.id === id)
     if (index < 0) throw bad('数据源不存在')
     all[index] = {...all[index], ...changes}; config.write(all); return all[index]
+  }
+  // 重新授权成功后，清除该登录下所有来源的 needsReauth，让 tick 恢复调度。
+  // legacy 来源（无 authId）一一对应旧记录：按 id 相同且连接器一致归属。
+  function clearReauthForAuth(authId, connector) {
+    const all = config.read()
+    let changed = false
+    for (const source of all) {
+      const bound = source.authId ? source.authId === authId : source.id === authId && source.connector === connector
+      if (bound && source.needsReauth) { delete source.needsReauth; changed = true }
+    }
+    if (changed) config.write(all)
   }
   function saveSource(input, credentials = {}, transaction = {}) {
     if (!plain(input)) throw bad('缺少 source 配置')
@@ -632,7 +649,7 @@ export function createSyncService(ctx, options = {}) {
     const identity = s => JSON.stringify([s.connector,s.transport,s.thsBookType || 'common',s.portfolioId,s.url,s.toolName,s.args,s.credentialRef,s.brokerAccountId,s.host,s.port,s.tls,s.tradeEnvironment,s.tradeMarket,s.currency,s.gatewayUrl,s.trustLocalGateway,s.mcpEndpoint])
     if (previous && identity(previous) !== identity(source) && db.holdings.some(h=>h.syncSourceId === source.id)) throw bad('已有持仓的连接不可更换来源标识或端点；请创建独立连接')
     if (previous && (identity(previous) !== identity(source) || Object.keys(incomingSecrets).length)) {
-      Object.assign(source, {lastStatus:'never',lastSuccessAt:null,lastAttemptAt:null,lastError:null,warnings:[],warningDetails:[],coverage:null,queriedAt:null,uploadedAt:null,quoteDate:null,...(identity(previous) !== identity(source) ? {uploadedAtWatermark:null,quoteDateWatermark:null} : {uploadedAtWatermark:previous.uploadedAtWatermark || previous.uploadedAt || null,quoteDateWatermark:previous.quoteDateWatermark || previous.quoteDate || null})})
+      Object.assign(source, {lastStatus:'never',lastSuccessAt:null,lastAttemptAt:null,lastError:null,warnings:[],warningDetails:[],coverage:null,queriedAt:null,uploadedAt:null,quoteDate:null,needsReauth:false,failCount:0,...(identity(previous) !== identity(source) ? {uploadedAtWatermark:null,quoteDateWatermark:null} : {uploadedAtWatermark:previous.uploadedAtWatermark || previous.uploadedAt || null,quoteDateWatermark:previous.quoteDateWatermark || previous.quoteDate || null})})
     }
     if (!previous) { source.lastStatus = 'never'; all.push(source) }
     else all[all.indexOf(previous)] = source
@@ -812,7 +829,7 @@ export function createSyncService(ctx, options = {}) {
       writeLedger(ledger)
       // v2.3：仅 degraded 警告或覆盖不完整才标 partial，纯 info 警告保持 ok。
       const degraded = snapshot.warningDetails.some(d => d.severity === 'degraded')
-      const updated = updateRecord(id, { lastSuccessAt:iso(),lastStatus:degraded || !snapshot.complete ? 'partial' : 'ok',lastError:null,warnings:snapshot.warnings,warningDetails:snapshot.warningDetails,coverage:snapshot.coverage ?? null,uploadedAt:snapshot.uploadedAt,quoteDate:snapshot.quoteDate,uploadedAtWatermark:latestDate(uploadWatermark,snapshot.uploadedAt),quoteDateWatermark:latestDate(quoteWatermark,snapshot.quoteDate),queriedAt:snapshot.queriedAt,imported,complete:snapshot.complete,snapshotHash:contentHash })
+      const updated = updateRecord(id, { lastSuccessAt:iso(),lastStatus:degraded || !snapshot.complete ? 'partial' : 'ok',lastError:null,warnings:snapshot.warnings,warningDetails:snapshot.warningDetails,coverage:snapshot.coverage ?? null,uploadedAt:snapshot.uploadedAt,quoteDate:snapshot.quoteDate,uploadedAtWatermark:latestDate(uploadWatermark,snapshot.uploadedAt),quoteDateWatermark:latestDate(quoteWatermark,snapshot.quoteDate),queriedAt:snapshot.queriedAt,imported,complete:snapshot.complete,snapshotHash:contentHash,needsReauth:false,failCount:0 })
       // 深扫过的账户随同步增量收尾新转账；失败或未开通游标都不影响本次持仓结果。
       let transferScan = null
       try { transferScan = await syncThsTransfers(current, abort.signal) } catch (error) { transferScan = { error: String(error?.message || error).slice(0, 200) } }
@@ -820,14 +837,20 @@ export function createSyncService(ctx, options = {}) {
     } catch (error) {
       // Adapter messages are curated and safe; still redact every known secret
       // before the message reaches the browser or sources.json.
-      let message = String(error?.message || error || '').trim() || '同步失败，请检查连接、授权及快照格式'
+      let message = String(error?.message || error || '').trim()
       try {
         for (const value of Object.values(vault.get(source.authId || source.id) || {})) if (value && String(value).length > 3) message = message.split(String(value)).join('[已隐藏]')
       } catch { /* vault unavailable; keep the message */ }
       const ref = source.credentialRef && process.env[source.credentialRef]
       if (ref) message = message.split(ref).join('[已隐藏]')
       if (abort.signal.aborted) message = '同步超时或已中止：' + message
-      updateRecord(id, {lastStatus:'error',lastError:message})
+      // 认证类失败（对脱敏后的消息判定）：停止自动轮询直到重新授权或一次成功；不计入退避。
+      // 其余失败：failCount +1，供 tick 指数退避。空消息的通用提示含「授权」二字，只是
+      // 排查建议，不能作为认证失败的判定依据。
+      const authFailed = message !== '' && AUTH_ERROR.test(message)
+      if (!message) message = '同步失败，请检查连接、授权及快照格式'
+      if (authFailed) updateRecord(id, {lastStatus:'error',lastError:message,needsReauth:true})
+      else updateRecord(id, {lastStatus:'error',lastError:message,failCount:(source.failCount || 0) + 1})
       throw bad(message)
     } finally { clearTimeout(timer);aborts.delete(abort) }
   }
@@ -861,17 +884,35 @@ export function createSyncService(ctx, options = {}) {
       throw bad('历史成交读取失败' + (detail ? '：' + detail : '') + '。可稍后重试，或使用账单文件补录')
     } finally {clearTimeout(timer);aborts.delete(abort)}
   }
+  // 失败退避：连续失败后到期间隔缩短为 min(intervalMinutes, 5*2^(failCount-1)) 分钟（首次 5 分钟，
+  // 之后逐次翻倍），永不超过配置的间隔；成功清零后回到完整间隔。
+  const dueMinutes = source => source.failCount >= 1 ? Math.min(source.intervalMinutes, 5 * 2 ** (source.failCount - 1)) : source.intervalMinutes
   async function tick() {
     if (disposed || tickBusy) return
     tickBusy = true
     try {
-      for (const source of config.read()) {
-        if (!source.enabled || !source.intervalMinutes || inFlight.has(source.id)) continue
+      // 周六/周日休市不自动同步；来源可用 syncWeekends 显式退出（为加密资产账户预留）。
+      const day = new Date(now()).getDay(), weekend = day === 0 || day === 6
+      const due = config.read().filter(source => {
+        if (!source.enabled || !source.intervalMinutes || inFlight.has(source.id)) return false
+        if (source.needsReauth) return false // 认证失效：只等手动同步或重新授权
+        if (weekend && source.syncWeekends !== true) return false
         const last = Date.parse(source.lastAttemptAt || '')
-        if (Number.isFinite(last) && now()-last < source.intervalMinutes*60000) continue
-        try { await sync(source.id) } catch { /* failure retained on source; retry next configured interval */ }
-        if (disposed) break
+        if (Number.isFinite(last) && now()-last < dueMinutes(source)*60000) return false
+        return true
+      })
+      // 同一连接器串行（一条链），跨连接器并行；一条 MCP 卡住不再拖住其他来源。
+      // tick 等全部链结束才返回；disposed 后不再发起新同步。
+      const chains = new Map()
+      for (const source of due) {
+        const run = async () => {
+          if (disposed) return
+          try { await sync(source.id) } catch { /* failure retained on source; retried after backoff */ }
+        }
+        const prev = chains.get(source.connector) || Promise.resolve()
+        chains.set(source.connector, prev.catch(() => {}).then(run))
       }
+      await Promise.all(chains.values())
     } finally { tickBusy=false }
   }
   return { list,saveSource,removeSource,sync,tick,listAccounts,listAuthAccounts,createAuthorization,renameAuthorization,removeAuthorization,connectSource,acceptThsLogin,readHistory,scanThsTransfers:scanThsTransfersDeep,listThsPortfolios:async()=>{const r=await listAccounts({connector:'ths'});return {portfolios:r.accounts.map(a=>({...a,selected:false})),warnings:r.warnings||[]}},dispose() { disposed=true; for (const controller of aborts) controller.abort() } }

@@ -6,6 +6,7 @@
 
 - **P0 完成**，**P1 完成**：`npm test` 433/433 通过；P1 期间 426 条原有测试未改动。
 - **P2 完成**（2026-11-09 晚）：`npm test` 478/478。成本可空（全部适配器不再伪造/因缺成本跳行，null 直接入库）；分段覆盖 coverage（mergeSnapshot 只删 full 段的消失持仓；etf 映射 stock 段）；警告分级（字符串默认 degraded、info 警告不再把来源打成 partial；warningDetails/coverage 持久化到来源记录）；核心对账 TOTAL_MISMATCH；水位死锁修复（拒绝也记哈希 + 账本同内容即放行）；THS quoteDate 只取净值日期；snapshot-schema.mjs 抽出打断全部循环引用；富途/长桥原生认证错误透传「请重新授权」；展示层成本「—」/「券商价」标签/编辑表单 null 往返；snapshot-schema.mjs 已加入 package.json files。
+- **P3 完成**（2026-11-09）：`npm test` 485/485。认证失败（脱敏消息匹配 AUTH_ERROR）写 `needsReauth` 且不计 `failCount`，tick 跳过、手动同步仍允许；成功、createAuthorization / THS 重新登录、saveSource 存入新凭据时清除，来源行显示「需重新授权」徽标。非认证失败 `failCount+1`，tick 到期改为 `min(intervalMinutes, 5*2^(failCount-1))` 分钟（成功清零，永不超过配置间隔；空消息的通用提示不作为认证依据）。tick 按连接器分组：同连接器串行、跨连接器并行（Promise.all 等全部链结束），保留 inFlight 去重与 disposed 中断。周六/周日自动同步默认跳过（来源 `syncWeekends: true` 可退出，手动同步不受限）。UI：估值提示把 unknown-cost 合并为一行「N 条持仓成本未知，未计入成本与盈亏」；导入预览 null 成本显示「—」。
 - 生产实测（只读，`%TEMP%\conn-probe\probe.mjs` / `e2e.mjs`）：真实同步服务跑在账本与 `sources.json` 的临时副本上，凭据只读并去掉 `refreshToken`，因此不会触发续期，生产文件不会被写入。8 个来源中 7 个同步成功，无持仓被误删；老虎由旧代码的失败变为 partial 成功（融资负债另有告警）。剩下的同花顺爱基金账本被水位拦截，见待办第 3 条。授权账户列表：6 条授权中 5 条可读，复星握手失败（服务端 `Handshake signature verification failed`，需在 H5 页面做「OpenAPI 参数重置」，与代码无关）。
 - 审查时补的修复：数量为 0 视为已清仓，不降级覆盖（富途、长桥 MCP）；长桥 MCP 的认证错误照常抛出，不降级为 partial；老虎负现金不写入 `sourceTotals.cash`。
 
@@ -43,7 +44,7 @@
 
 ### v2.4 核心对账（信息性）
 
-- mergeSnapshot 后按币种对账：sourceTotals.cash vs 现金持仓行、totalAsset/netAssets vs 快照内 qty×(manualPrice??avgCost) 合计（仅单币种时可对）。差异超 0.01 产出 COVERAGE 外的 `TOTAL_MISMATCH:<key>` degraded 警告；多币种不可对则跳过不警告。THS 适配器内部已有更严的对账，保持不动（会出现两条警告，可接受）。
+- mergeSnapshot 后按币种对账：sourceTotals.cash vs 现金持仓行、totalAsset/netAssets vs 快照内 qty×(manualPrice??avgCost) 合计（仅单币种时可对）。差异超容差（绝对 0.011，或总额 0.5% 中较大者）产出 `TOTAL_MISMATCH:<key>` **info** 警告；多币种不可对则跳过不警告。级别定为 info 是实测结论（2026-11-09）：富途券商汇总用实时估值、持仓接口价格滞后 6.2%，跨价源推导差异不可能收敛到任何容差，降级判断交给适配器（同源数据）。THS 适配器内部已有更严的对账，保持不动（会出现两条警告，可接受）。
 
 ### 兼容与迁移
 
