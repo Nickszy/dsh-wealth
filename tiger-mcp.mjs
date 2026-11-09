@@ -5,7 +5,7 @@
 // OAuth 2.1 device flow is used so the plugin needs no redirect listener:
 // register -> device_authorization -> user approves in browser -> poll token.
 // The refresh token is long-lived and rotated on every refresh.
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { cashSignOf, isFlowKind } from './model.mjs'
 import { createMcpHttpClient } from './mcp-http.mjs'
 
@@ -223,6 +223,67 @@ export async function refreshTigerToken({ refreshToken, clientId, signal, deps =
     accessToken,
     refreshToken: text(payload.refresh_token) || refreshToken,
     expiresAt: Number(payload.expires_in) > 0 ? Date.now() + Number(payload.expires_in) * 1000 : null,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Authorization-code flow (browser + loopback redirect). Official MCP clients
+// (Claude Code / Cursor) use this flow; device-flow tokens are rejected by the
+// MCP gateway as invalid, so the plugin logs in the same way.
+// ---------------------------------------------------------------------------
+
+/** Register a public client bound to the loopback redirect URI. */
+export async function registerTigerAuthCodeClient({ redirectUri, signal, deps = {} } = {}) {
+  if (!redirectUri) fail('老虎授权缺少回调地址')
+  const payload = await oauthPost('/oauth2/register', JSON.stringify({
+    client_name: 'dsh-wealth',
+    redirect_uris: [redirectUri],
+    grant_types: ['authorization_code', 'refresh_token'],
+    response_types: ['code'],
+    token_endpoint_auth_method: 'none',
+    scope: TIGER_SCOPE,
+  }), { headers: { 'content-type': 'application/json' }, signal, deps })
+  const clientId = text(payload.client_id)
+  if (!clientId) fail('老虎 OAuth 注册没有返回 client_id')
+  return { clientId }
+}
+
+export function createTigerPkce() {
+  const verifier = randomBytes(48).toString('base64url')
+  return { verifier, challenge: createHash('sha256').update(verifier).digest('base64url') }
+}
+
+/** 授权页地址；resource 参数按 RFC 8707 绑定 MCP 资源。 */
+export function buildTigerAuthorizeUrl({ clientId, redirectUri, challenge, state }) {
+  const url = new URL(TIGER_OAUTH_ISSUER + '/oauth2/authorize')
+  url.searchParams.set('response_type', 'code')
+  url.searchParams.set('client_id', clientId)
+  url.searchParams.set('redirect_uri', redirectUri)
+  url.searchParams.set('scope', TIGER_SCOPE)
+  url.searchParams.set('state', state)
+  url.searchParams.set('code_challenge', challenge)
+  url.searchParams.set('code_challenge_method', 'S256')
+  url.searchParams.set('resource', TIGER_RESOURCE)
+  return url.toString()
+}
+
+export async function exchangeTigerCode({ code, clientId, redirectUri, verifier, signal, deps = {} } = {}) {
+  if (!code || !clientId || !redirectUri || !verifier) fail('老虎授权回调参数不完整')
+  const payload = await oauthPost('/oauth2/token', formBody({
+    grant_type: 'authorization_code',
+    code,
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    code_verifier: verifier,
+    resource: TIGER_RESOURCE,
+  }), { headers: { 'content-type': 'application/x-www-form-urlencoded' }, signal, deps })
+  const accessToken = text(payload.access_token)
+  if (!accessToken) fail('老虎授权响应缺少 access_token')
+  return {
+    accessToken,
+    refreshToken: text(payload.refresh_token),
+    expiresIn: Number(payload.expires_in) > 0 ? Number(payload.expires_in) : null,
+    scope: text(payload.scope),
   }
 }
 

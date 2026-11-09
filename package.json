@@ -40,6 +40,7 @@
     "qieman-mcp.mjs",
     "qieman-login.mjs",
     "tiger-mcp.mjs",
+    "tiger-login.mjs",
     "fosun-client.mjs",
     "HISTORY-DESIGN.md",
     "chat.mjs",

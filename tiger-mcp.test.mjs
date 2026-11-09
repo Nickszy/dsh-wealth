@@ -1,7 +1,7 @@
 // 老虎 remote MCP adapter tests. Synthetic MCP/OAuth transport, no network.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { listTigerAccounts, fetchTigerSnapshot, fetchTigerHistory, startTigerDeviceAuth, pollTigerDeviceToken, refreshTigerToken } from './tiger-mcp.mjs'
+import { listTigerAccounts, fetchTigerSnapshot, fetchTigerHistory, startTigerDeviceAuth, pollTigerDeviceToken, refreshTigerToken, registerTigerAuthCodeClient, createTigerPkce, buildTigerAuthorizeUrl, exchangeTigerCode } from './tiger-mcp.mjs'
 
 const SECRETS = { accessToken: 'tok', refreshToken: 'refresh', clientId: 'client-1' }
 
@@ -123,4 +123,35 @@ test('老虎 OAuth device flow: register, pending, slow_down, ready and refresh'
     assert.equal(request.body.resource, 'https://mcp.tigerfintech.com/mcp', request.path + ' must bind the resource')
   }
   assert.equal(requests.filter(r => r.path === '/oauth2/token').length, 4)
+})
+
+test('authorization-code flow registers loopback client and exchanges code with PKCE', async () => {
+  const requests = []
+  const fetchImpl = async (url, init) => {
+    const body = init.body.startsWith('{') ? JSON.parse(init.body) : Object.fromEntries(new URLSearchParams(init.body))
+    requests.push({ url: String(url), body })
+    if (String(url).endsWith('/oauth2/register')) return { ok: true, status: 201, headers: { get: () => 'application/json' }, text: async () => JSON.stringify({ client_id: 'cli-ac' }) }
+    if (String(url).endsWith('/oauth2/token')) return { ok: true, status: 200, headers: { get: () => 'application/json' }, text: async () => JSON.stringify({ access_token: 'at-ac', refresh_token: 'rt-ac', expires_in: 3600 }) }
+    throw new Error('unexpected ' + url)
+  }
+  const registered = await registerTigerAuthCodeClient({ redirectUri: 'http://127.0.0.1:17410/callback', deps: { fetch: fetchImpl } })
+  assert.equal(registered.clientId, 'cli-ac')
+  assert.deepEqual(requests[0].body.redirect_uris, ['http://127.0.0.1:17410/callback'])
+  assert.ok(requests[0].body.grant_types.includes('authorization_code'))
+
+  const pkce = createTigerPkce()
+  const authorizeUrl = new URL(buildTigerAuthorizeUrl({ clientId: 'cli-ac', redirectUri: 'http://127.0.0.1:17410/callback', challenge: pkce.challenge, state: 'st' }))
+  assert.equal(authorizeUrl.searchParams.get('response_type'), 'code')
+  assert.equal(authorizeUrl.searchParams.get('redirect_uri'), 'http://127.0.0.1:17410/callback')
+  assert.equal(authorizeUrl.searchParams.get('code_challenge_method'), 'S256')
+  assert.equal(authorizeUrl.searchParams.get('resource'), 'https://mcp.tigerfintech.com/mcp')
+  assert.equal(authorizeUrl.searchParams.get('scope'), 'api.basic:read api.quote:read api.news:read api.account:read api.trade:read')
+
+  const token = await exchangeTigerCode({ code: 'ac1', clientId: 'cli-ac', redirectUri: 'http://127.0.0.1:17410/callback', verifier: pkce.verifier, deps: { fetch: fetchImpl } })
+  assert.equal(token.accessToken, 'at-ac')
+  assert.equal(token.refreshToken, 'rt-ac')
+  const exchange = requests.find(r => r.body.grant_type === 'authorization_code')
+  assert.equal(exchange.body.code, 'ac1')
+  assert.equal(exchange.body.code_verifier, pkce.verifier)
+  assert.equal(exchange.body.resource, 'https://mcp.tigerfintech.com/mcp')
 })

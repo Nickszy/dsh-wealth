@@ -21,6 +21,7 @@ import { previewImport } from './importer.mjs'
 import { modelInfo, chatTurn, applyChatOps } from './chat.mjs'
 import { createSyncService } from './sync.mjs'
 import { startTigerDeviceAuth, pollTigerDeviceToken } from './tiger-mcp.mjs'
+import { createTigerLogin } from './tiger-login.mjs'
 import { createQiemanLogin } from './qieman-login.mjs'
 import { generateFosunClientKey, fosunTicketCreate, checkFosunApiKey } from './fosun-client.mjs'
 import { checkThsToken, THS_ADMIN_URL } from './ths-data.mjs'
@@ -261,6 +262,25 @@ export function apply(ctx, config = {}) {
   }
   // Tiger's remote MCP uses the OAuth 2.1 device flow: no redirect listener, the
   // user enters a short code in the browser. The refresh token is long-lived.
+  // 浏览器授权码流（官方 MCP 客户端同款）；设备码流保留作为备用入口。
+  let tigerAuthTarget = null, tigerAuthSlot = null
+  const tigerAuthLogin = () => {
+    if (!tigerAuthSlot) {
+      tigerAuthSlot = createTigerLogin({ onToken: t => {
+        const owner = tigerAuthTarget ? 'pending-tiger-mcp:' + tigerAuthTarget : 'pending-tiger-mcp'
+        const fields = { accessToken: t.accessToken, clientId: t.clientId }
+        if (t.refreshToken) fields.refreshToken = t.refreshToken
+        vault.set(owner, 'tiger', fields)
+      } })
+    }
+    return tigerAuthSlot
+  }
+  const tigerAuthStatus = () => {
+    const current = tigerAuthLogin().status()
+    const status = current.status === 'ready' ? 'ready' : ['error', 'timeout', 'disposed'].includes(current.status) ? 'error' : ['starting', 'waiting'].includes(current.status) ? 'waiting' : 'idle'
+    return { status, message: current.message, ...(current.authorizeUrl ? { authorizeUrl: current.authorizeUrl } : {}) }
+  }
+  ctx.effect(() => () => tigerAuthSlot?.dispose(), 'dsh-wealth: own Tiger OAuth login lifecycle')
   let tigerLogin = null
   const tigerStatus = () => tigerLogin ? {
     status: tigerLogin.status,
@@ -597,6 +617,18 @@ export function apply(ctx, config = {}) {
         if (path === 'api/sources/qieman/mcp/status') {
           if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
           send(res, 200, { ok: true, ...qiemanStatus() }); return
+        }
+        if (path === 'api/sources/tiger/login/start') {
+          if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
+          const body = JSON.parse(await readBody(req).catch(() => '{}') || '{}')
+          const target = body.authId ? sync.list().authorizations.find(a => a.id === body.authId && a.connector === 'tiger') : null
+          tigerAuthTarget = target ? target.id : null
+          await tigerAuthLogin().start()
+          send(res, 200, { ok: true, ...tigerAuthStatus() }); return
+        }
+        if (path === 'api/sources/tiger/login/status') {
+          if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
+          send(res, 200, { ok: true, ...tigerAuthStatus() }); return
         }
         if (path === 'api/sources/tiger/oauth/start') {
           if (req.method !== 'POST') { res.writeHead(405); res.end(); return }

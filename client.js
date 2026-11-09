@@ -845,7 +845,7 @@ window.__ModuleLoader__.load({
       ['futu', '富途', '官方 MCP 浏览器授权', '富'],
       ['longbridge', '长桥', '官方 MCP 授权码', '长'],
       ['qieman', '且慢', '盈米官方 MCP · 长期 API Key', '且'],
-      ['tiger', '老虎证券', '官方远程 MCP · 设备码授权', '虎'],
+      ['tiger', '老虎证券', '官方远程 MCP · 浏览器授权', '虎'],
       ['fosun', '复星证券', '星财富 OpenAPI · 长期密钥', '复'],
       ['ib', 'Interactive Brokers', 'Client Portal Gateway', 'IB'],
       ['manual', '手动添加', '自己录入持仓和流水', '✎'],
@@ -1611,7 +1611,7 @@ window.__ModuleLoader__.load({
         ['futu', '富途', '官方 MCP 浏览器授权 · 支持本机 OpenD', '富'],
         ['longbridge', '长桥', '官方 MCP 授权码连接', '长'],
         ['qieman', '且慢', '盈米官方 MCP · 长期 API Key', '且'],
-        ['tiger', '老虎证券', '官方远程 MCP · 设备码授权', '虎'],
+        ['tiger', '老虎证券', '官方远程 MCP · 浏览器授权', '虎'],
         ['fosun', '复星证券', '星财富 OpenAPI · 长期密钥', '复'],
         ['ib', 'Interactive Brokers', '官方 Client Portal Gateway', 'IB'],
         ['custom', '高级 API / MCP', '标准化快照接口或只读工具', '⌘'],
@@ -1731,7 +1731,7 @@ window.__ModuleLoader__.load({
         }
         if (!auth && choice === 'longbridge' && form.lbInterface === 'mcp' && !credentials.mcpToken) throw new Error('请先在 open.longbridge.com/connect 生成授权码并点击兑换')
         if (!auth && choice === 'qieman' && !credentials.apiKey && !credentials.bearerToken && login?.status !== 'ready') throw new Error('请先完成且慢浏览器授权（账户与资产工具只对 OAuth 授权开放）')
-        if (!auth && choice === 'tiger' && !credentials.accessToken) throw new Error('请先完成老虎设备码授权')
+        if (!auth && choice === 'tiger' && !credentials.accessToken) throw new Error('请先完成老虎浏览器授权')
         if (!auth && choice === 'fosun' && !(credentials.apiKey && credentials.privateKey && credentials.serverPublicKey) && login?.status !== 'ready') throw new Error('请先扫码开通，或填入 API Key（ak_ 开头）、客户端私钥与服务端公钥')
         const out = await requestAuth()
         if (!current()) return
@@ -1834,7 +1834,20 @@ window.__ModuleLoader__.load({
         }, 2000)
         return () => { live = false; clearInterval(timer) }
       }, [login?.status, choice])
+      // 主路径：浏览器授权码流（官方 MCP 客户端同款），本机回环接回调。
       const startTigerAuth = () => {
+        if (disabled || lock.current) return
+        invalidate()
+        loginAttempt.current++
+        const attempt = loginAttempt.current
+        return act('tiger-auth', async current => {
+          const r = await post('sources/tiger/login/start', { authId: auth?.id || reauth?.id })
+          if (!current() || attempt !== loginAttempt.current) return
+          setLogin({ kind: 'browser', status: r.status || 'waiting', message: r.message, authorizeUrl: r.authorizeUrl })
+        })
+      }
+      // 备用：设备码流（部分环境浏览器回调不可达时使用）。
+      const startTigerDevice = () => {
         if (disabled || lock.current) return
         invalidate()
         loginAttempt.current++
@@ -1842,7 +1855,7 @@ window.__ModuleLoader__.load({
         return act('tiger-auth', async current => {
           const r = await post('sources/tiger/oauth/start', { authId: auth?.id || reauth?.id })
           if (!current() || attempt !== loginAttempt.current) return
-          setLogin({ status: r.status || 'waiting', message: r.message, userCode: r.userCode, verificationUri: r.verificationUri, verificationUriComplete: r.verificationUriComplete, authorizeUrl: r.verificationUriComplete || r.verificationUri })
+          setLogin({ kind: 'device', status: r.status || 'waiting', message: r.message, userCode: r.userCode, verificationUri: r.verificationUri, verificationUriComplete: r.verificationUriComplete })
         })
       }
       React.useEffect(() => {
@@ -1850,17 +1863,18 @@ window.__ModuleLoader__.load({
         let live = true, inflight = false
         const version = generation.current
         const current = () => live && mounted.current && version === generation.current
+        const endpoint = login?.kind === 'device' ? 'sources/tiger/oauth/status' : 'sources/tiger/login/status'
         const timer = setInterval(async () => {
           if (inflight || !current()) return
           inflight = true
           try {
-            const r = await get('sources/tiger/oauth/status')
-            if (current() && r.status !== 'waiting') setLogin({ status: r.status, message: r.message, userCode: login?.userCode, verificationUri: login?.verificationUri, verificationUriComplete: login?.verificationUriComplete, authorizeUrl: login?.authorizeUrl })
+            const r = await get(endpoint)
+            if (current() && r.status !== 'waiting') setLogin({ ...login, status: r.status, message: r.message })
           } catch { /* keep waiting; transient polling errors stay silent */ }
           finally { inflight = false }
-        }, 3000)
+        }, 2000)
         return () => { live = false; clearInterval(timer) }
-      }, [login?.status, choice])
+      }, [login?.status, login?.kind, choice])
       const selectAccount = account => { update(choice === 'ths' ? 'portfolioId' : 'brokerAccountId', String(account.id)); if (choice === 'ths') update('thsBookType', account.thsType || 'common'); if (!form.id) update('accountId', '') }
       const connect = () => act('connect', async current => {
         if (!auth) throw new Error('请先完成授权并读取账户')
@@ -1919,7 +1933,7 @@ window.__ModuleLoader__.load({
         futu: '两种接入：官方 MCP（推荐）在浏览器完成富途授权，插件自动读取持仓、余额与流水，无需安装 OpenD；或本机 OpenD 直连（需启用 WebSocket，核对交易环境、市场和资金币种）。不需要其他 DSH 插件。',
         longbridge: '官方 MCP 接入：在 open.longbridge.com/connect 生成一次性授权码，兑换后自动读取持仓、余额与流水；也可改用 OpenAPI 凭据（App Key / Secret / Access Token）。不需要其他 DSH 插件。',
         qieman: '盈米 / 且慢官方 MCP。点「浏览器授权」用且慢账号登录，插件通过官方 OAuth（动态注册 + PKCE + 本机回环）获取长期凭据并自动续期，读取总账户 / 子账户的基金持仓、资产与收益。且慢不提供逐笔流水，历史记录可用账单文件补录。',
-        tiger: '老虎官方远程 MCP（mcp.tigerfintech.com）。点「设备码授权」后在浏览器登录老虎账户并选择授权账户；refresh token 长期有效并自动续期，插件读取账户、持仓、现金与最近成交。无需安装 OpenD。',
+        tiger: '老虎官方远程 MCP（mcp.tigerfintech.com）。点「浏览器授权」登录老虎账户、勾选全部 5 项权限并选择授权账户；官方 OAuth（动态注册 + PKCE + 本机回环）与官方客户端同款。授权记录最长 15 天，到期后重新授权一次即可。无需安装 OpenD。',
         fosun: '复星证券 / 星财富官方 OpenAPI（默认网关 openapi.fosunxcz.com）。点「扫码开通」，用星财富 App 扫码完成授权，插件本机生成密钥对并自动保存 API Key、服务端公钥与客户端私钥；之后按官方 ECDH + 签名 + AES-GCM 协议读取账户、持仓、现金与资金流水。',
         ib: '需先启动并登录官方 IB Client Portal Gateway。本插件使用其账户接口；本地自签名证书须明确勾选信任。',
         custom: '高级选项：连接标准化持仓快照接口或已有只读 MCP 工具。请勿将密钥写入 URL 或工具参数。',
@@ -1995,13 +2009,17 @@ window.__ModuleLoader__.load({
           choice === 'tiger' ? h('div', { style: { marginTop: 18 } },
             h('div', { className: 'wealth-source-fields' }, field('MCP 地址（可选，默认官方 mcp.tigerfintech.com）', 'mcpEndpoint', { placeholder: 'https://mcp.tigerfintech.com/mcp', autoComplete: 'off' })),
             h('div', { className: 'wealth-source-actions', style: { alignItems: 'center' } },
-              h('button', { style: T.btn(t, false), disabled: disabled || login?.status === 'waiting', onClick: startTigerAuth }, working === 'tiger-auth' ? '正在生成设备码…' : login?.status === 'waiting' ? '等待浏览器授权…' : credentials.accessToken || auth ? '重新授权' : '设备码授权'),
-              h('span', { style: { color: login?.status === 'error' ? t.red : login?.status === 'ready' ? t.accent : t.sub, fontSize: 11 }, role: 'status' }, login ? loginText(login.status, login.message, { waiting: '请在浏览器输入设备码', ready: '老虎授权已保存，可读取账户', error: '授权未完成' }) : credentials.accessToken ? '✓ 已获得老虎 Token' : '授权后自动续期，无需反复登录')),
-            login?.userCode && login?.status === 'waiting' ? h('div', { style: { marginTop: 10, padding: 10, border: '1px solid ' + t.border, borderRadius: 10, background: t.panel, fontSize: 12 } },
-              h('div', null, '设备码：', h('strong', { style: { fontSize: 16, letterSpacing: 2 } }, login.userCode)),
-              h('div', { style: { marginTop: 6 } }, h('a', { href: login.verificationUriComplete || login.verificationUri, target: '_blank', rel: 'noreferrer', style: { color: t.accent } }, '打开老虎授权页面 ↗')),
-              h('div', { style: { marginTop: 6, color: t.sub, fontSize: 11 } }, '授权页面里选择要导入的账户；完成后本页会自动读取。')) : null,
-            h('details', { style: { marginTop: 10, fontSize: 12, color: t.sub } }, h('summary', { style: { cursor: 'pointer' } }, '手动粘贴 Token（可选备用方式）'), h('div', { style: { marginTop: 10 } }, secret('Access Token', 'accessToken'), secret('Refresh Token', 'refreshToken'), secret('OAuth Client ID', 'clientId')))) : null,
+              h('button', { style: T.btn(t, false), disabled: disabled || login?.status === 'waiting', onClick: startTigerAuth }, working === 'tiger-auth' ? '正在准备授权…' : login?.status === 'waiting' ? '等待浏览器授权…' : credentials.accessToken || auth ? '重新授权' : '浏览器授权'),
+              h('span', { style: { color: login?.status === 'error' ? t.red : login?.status === 'ready' ? t.accent : t.sub, fontSize: 11 }, role: 'status' }, login ? loginText(login.status, login.message, { waiting: '请在浏览器完成授权', ready: '老虎授权已保存，可读取账户', error: '授权未完成' }) : credentials.accessToken ? '✓ 已获得老虎 Token' : '授权后自动续期，无需反复登录')),
+            login?.authorizeUrl && login?.status === 'waiting' ? h('div', { style: { marginTop: 10, padding: 10, border: '1px solid ' + t.border, borderRadius: 10, background: t.panel, fontSize: 12 } },
+              h('div', null, h('a', { href: login.authorizeUrl, target: '_blank', rel: 'noreferrer', style: { color: t.accent } }, '打开老虎授权页面 ↗')),
+              h('div', { style: { marginTop: 6, color: t.sub, fontSize: 11 } }, '登录后请勾选全部 5 项权限（基础数据 / 行情 / 资讯 / 账户信息 / 交易查询）、选择要导入的账户并确认；完成后自动返回本页。')) : null,
+            h('details', { style: { marginTop: 10, fontSize: 12, color: t.sub } },
+              h('summary', { style: { cursor: 'pointer' } }, '设备码授权 / 手动粘贴 Token（备用）'),
+              h('div', { style: { marginTop: 10 } },
+                h('button', { style: { ...T.btn(t, false), marginBottom: 10 }, disabled: disabled || login?.status === 'waiting', onClick: startTigerDevice }, '使用设备码授权'),
+                login?.userCode && login?.status === 'waiting' ? h('div', { style: { marginBottom: 10 } }, '设备码：' + login.userCode + ' · ', h('a', { href: login.verificationUriComplete || login.verificationUri, target: '_blank', rel: 'noreferrer', style: { color: t.accent } }, '打开页面')) : null,
+                secret('Access Token', 'accessToken'), secret('Refresh Token', 'refreshToken'), secret('OAuth Client ID', 'clientId')))) : null,
           choice === 'fosun' ? h('div', { style: { marginTop: 18 } },
             h('div', { className: 'wealth-source-actions', style: { alignItems: 'center' } },
               h('button', { style: T.btn(t, false), disabled: disabled || login?.status === 'waiting', onClick: startFosunOnboard }, working === 'fosun-onboard' ? '正在签发开通码…' : login?.status === 'waiting' ? '等待扫码开通…' : credentials.apiKey || auth ? '重新扫码开通' : '扫码开通'),
