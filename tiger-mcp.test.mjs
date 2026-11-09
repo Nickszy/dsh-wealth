@@ -105,6 +105,9 @@ test('老虎 OAuth device flow: register, pending, slow_down, ready and refresh'
   assert.equal(device.clientId, 'cli-xyz')
   assert.equal(device.userCode, 'ABCD-1234')
   assert.ok(device.verificationUri.includes('activate'))
+  const deviceRequest = requests.find(r => r.path === '/oauth2/device_authorization')
+  // 网关按完整 scope 集校验 token，缺行情/基础/资讯会 401（docs.itigerup.com/docs/remote-mcp）。
+  assert.equal(deviceRequest.body.scope, 'api.basic:read api.quote:read api.news:read api.account:read api.trade:read')
   assert.equal((await pollTigerDeviceToken(device, { deps })).status, 'pending')
   const slow = await pollTigerDeviceToken(device, { deps })
   assert.equal(slow.status, 'slow_down')

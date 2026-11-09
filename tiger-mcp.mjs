@@ -11,7 +11,9 @@ import { createMcpHttpClient } from './mcp-http.mjs'
 
 export const TIGER_MCP_ENDPOINT = 'https://mcp.tigerfintech.com/mcp'
 export const TIGER_OAUTH_ISSUER = 'https://openapi-oauth2.tigerfintech.com'
-export const TIGER_SCOPE = 'api.account:read api.trade:read'
+// 网关的 WWW-Authenticate 挑战要求全部五个 scope（缺 quote/news/basic 会 401）：
+// scope="api.quote:read api.news:read api.basic:read api.account:read api.trade:read"
+export const TIGER_SCOPE = 'api.basic:read api.quote:read api.news:read api.account:read api.trade:read'
 // RFC 8707 resource indicator: the protected-resource metadata binds tokens to
 // this audience; without it the MCP endpoint rejects the token as invalid.
 export const TIGER_RESOURCE = TIGER_MCP_ENDPOINT
