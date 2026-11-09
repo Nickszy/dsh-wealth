@@ -483,6 +483,15 @@ export function generateFosunClientKey() {
   }
 }
 
+/** 从已保存的私钥推导配对公钥：网关登记的客户端公钥必须与私钥同源。 */
+export function fosunClientKeyFromPrivate(privatePem) {
+  const key = createPrivateKey({ key: String(privatePem || ''), format: 'pem' })
+  return {
+    privatePem: String(privatePem).trim(),
+    publicPem: createPublicKey(key).export({ type: 'spki', format: 'pem' }).toString().trim(),
+  }
+}
+
 function unwrapEnvelope(payload) {
   if (!payload || typeof payload !== 'object') fail('复星认证接口返回格式不正确')
   const code = payload.code

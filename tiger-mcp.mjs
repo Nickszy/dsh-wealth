@@ -491,9 +491,13 @@ export async function fetchTigerSnapshot(source, secrets, signal, deps = {}) {
       holdings.push(holding)
     }
     const summary = assets ? assetSummary(assets) : { total: null, cash: [], unrealized: null }
-    const cash = summary.cash
+    // 快照契约：qty 必须非负（与富途一致）。负现金是融资负债，不能作为持仓行，
+    // 用警告明示，来源总资产（sourceTotals）仍如实保存。
+    const cash = summary.cash.filter((row) => row.cash > 0)
+    for (const debt of summary.cash.filter((row) => row.cash < 0)) {
+      warnings.push(`TIGER_MARGIN_CASH:${debt.currency} ${debt.cash} 融资负债未计入现金行，持仓合计会比来源总资产偏高`)
+    }
     for (const row of cash) {
-      if (!row.cash) continue
       const key = 'CASH:' + row.currency
       if (seen.has(key)) continue
       seen.add(key)
@@ -503,16 +507,16 @@ export async function fetchTigerSnapshot(source, secrets, signal, deps = {}) {
 
     const sourceTotals = {}
     if (summary.total !== null) sourceTotals.totalAsset = summary.total
-    if (cash.length) sourceTotals.cash = cash.reduce((sum, row) => sum + row.cash, 0)
+    if (summary.cash.length) sourceTotals.cash = summary.cash.reduce((sum, row) => sum + row.cash, 0)
     if (summary.unrealized !== null) sourceTotals.holdingProfit = summary.unrealized
 
     const priced = holdings.filter((h) => h.market !== 'CASH').every((h) => h.manualPrice != null)
     if (!priced) warnings.push('部分证券缺少现价，按成本暂估')
-    if (!cash.length && holdings.some((h) => h.market !== 'CASH')) warnings.push('来源未提供现金明细，现金行缺失')
+    if (!summary.cash.length && holdings.some((h) => h.market !== 'CASH')) warnings.push('来源未提供现金明细，现金行缺失')
 
     return {
       holdings,
-      complete: priced && cash.length > 0,
+      complete: priced,
       warnings,
       queriedAt: new Date(deps.now?.() ?? Date.now()).toISOString(),
       uploadedAt: null,

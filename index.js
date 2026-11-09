@@ -563,7 +563,15 @@ export function apply(ctx, config = {}) {
           if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
           const body = JSON.parse(await readBody(req).catch(() => '{}') || '{}')
           const target = body.authId ? sync.list().authorizations.find(a => a.id === body.authId && a.connector === 'fosun') : null
-          const key = generateFosunClientKey()
+          // 客户端密钥对持久化复用：网关按「第一次绑定的公钥」校验签名，只要插件
+          // 每次都提交同一把公钥，页面显示的 Key/服务端公钥就永远与本机私钥配对，
+          // 不需要每次开通都重置。
+          let clientPrivatePem = vault.get('app:fosun-client').privateKey || ''
+          if (!clientPrivatePem) {
+            clientPrivatePem = generateFosunClientKey().privatePem
+            vault.set('app:fosun-client', 'fosun', { privateKey: clientPrivatePem })
+          }
+          const key = fosunClientKeyFromPrivate(clientPrivatePem)
           const macId = randomUUID().replace(/-/g, '')
           const gatewayUrl = String(body.gatewayUrl || '').trim() || undefined
           const ticket = await fosunTicketCreate({ gatewayUrl, clientPubKey: key.publicPem, macId })
