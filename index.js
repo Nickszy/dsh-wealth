@@ -561,6 +561,26 @@ export function apply(ctx, config = {}) {
           await pollFosunOnboard()
           send(res, 200, { ok: true, ...fosunOnboardStatus() }); return
         }
+        if (path === 'api/sources/fosun/onboard/complete') {
+          // 手动完成：手机页面上已显示 Key + 服务端公钥时，配合本会话生成的私钥直接配对入库。
+          if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
+          const body = JSON.parse(await readBody(req, 256 * 1024))
+          if (!fosunOnboard || fosunOnboard.status !== 'waiting') { send(res, 400, { ok: false, error: { code: 'bad-request', message: '请先点「扫码开通」生成密钥对后再粘贴凭据' } }); return }
+          const apiKey = String(body.apiKey || '').trim()
+          const serverPublicKey = String(body.serverPublicKey || '').trim()
+          if (!/^ak_/.test(apiKey)) { send(res, 400, { ok: false, error: { code: 'bad-request', message: 'API Key 应以 ak_ 开头（fsk_ 等平台型 Key 不适用于 OpenAPI）' } }); return }
+          if (!serverPublicKey.includes('BEGIN PUBLIC KEY')) { send(res, 400, { ok: false, error: { code: 'bad-request', message: '服务端公钥应为 -----BEGIN PUBLIC KEY----- 开头的 PEM 文本' } }); return }
+          const check = await checkFosunApiKey({ gatewayUrl: fosunOnboard.gatewayUrl, apiKey })
+          if (check.status !== 'valid') {
+            send(res, 400, { ok: false, error: { code: 'bad-request', message: '这个 Key 还未激活（校验状态：' + check.status + '）——请在星财富 App 里把开通/绑定流程走完后再试' } })
+            return
+          }
+          vault.set(pendingFosunOwner(), 'fosun', { apiKey, privateKey: fosunOnboard.privatePem, serverPublicKey })
+          fosunOnboard.status = 'ready'
+          fosunOnboard.message = '复星开通完成，凭据已保存，可以读取账户'
+          send(res, 200, { ok: true, ...fosunOnboardStatus() })
+          return
+        }
         if (path === 'api/sources/fosun/onboard/cancel') {
           if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
           fosunOnboard = null

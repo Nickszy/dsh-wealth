@@ -1804,6 +1804,9 @@ window.__ModuleLoader__.load({
         }, 3000)
         return () => { live = false; clearInterval(timer) }
       }, [login?.status, choice])
+      const completeFosunManual = () => act('fosun-complete', async () => {
+        await post('sources/fosun/onboard/complete', { apiKey: (credentials.apiKey || '').trim(), serverPublicKey: (credentials.serverPublicKey || '').trim() })
+      })
       const startQiemanAuth = () => {
         if (disabled || lock.current) return
         invalidate()
@@ -2009,6 +2012,12 @@ window.__ModuleLoader__.load({
                 h('div', null, '用「星财富」App 扫码，或在手机浏览器打开：'),
                 h('div', { style: { marginTop: 4, wordBreak: 'break-all', fontSize: 11 } }, h('a', { href: login.openUrl, target: '_blank', rel: 'noreferrer', style: { color: t.accent } }, login.openUrl)),
                 h('div', { style: { marginTop: 6, color: t.sub, fontSize: 11 } }, '完成后回到本页，凭据（API Key、服务端公钥、本机私钥）会自动保存。'))) : null,
+            login?.status === 'waiting' ? h('div', { style: { marginTop: 10, padding: 12, border: '1px solid ' + t.border, borderRadius: 10, background: t.panel } },
+              h('div', { style: { fontSize: 12, fontWeight: 600 } }, '手机页面已显示 Key 和公钥？直接粘贴完成（私钥无需输入）'),
+              h('div', { style: { marginTop: 8, display: 'grid', gap: 8 } },
+                secret('API Key（ak_ 开头）', 'apiKey'),
+                h('label', null, h('span', { style: T.label(t) }, '服务端公钥（PEM）'), h('textarea', { value: credentials.serverPublicKey || '', onChange: e => setCredentials(old => ({ ...old, serverPublicKey: e.target.value })), placeholder: '-----BEGIN PUBLIC KEY-----', rows: 3, spellCheck: false, disabled, style: { ...T.input(t), fontFamily: 'monospace', resize: 'vertical' } }))),
+              h('button', { style: { ...T.btn(t, true), marginTop: 8 }, disabled: busy || !!working || !(credentials.apiKey || '').trim() || !(credentials.serverPublicKey || '').includes('BEGIN PUBLIC KEY'), onClick: completeFosunManual }, working === 'fosun-complete' ? '校验中…' : '校验并完成开通')) : null,
             h('div', { className: 'wealth-source-fields', style: { marginTop: 12 } },
               field('OpenAPI 网关地址（默认官方网关）', 'gatewayUrl', { type: 'url', placeholder: 'https://openapi.fosunxcz.com', autoComplete: 'off' })),
             h('small', { style: { display: 'block', marginTop: 10, color: t.sub, fontSize: 11 } }, '扫码后插件在本机生成密钥对并自动保存三元组（API Key、服务端公钥、本机私钥）——私钥只存在你电脑的加密库里，页面不显示、也不需要手动输入。平台型 Key（fsk_ 等）不适用于 OpenAPI。')) : null,
