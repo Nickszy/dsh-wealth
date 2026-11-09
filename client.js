@@ -1149,7 +1149,7 @@ window.__ModuleLoader__.load({
       }
       const thsBook = a => a.thsType === 'ijj' ? '爱基金' : a.thsType === 'manFund' ? '基金账本' : ''
       const importAccount = auth => account => run('import:' + auth.id + ':' + account.id, async () => {
-        const source = { authId: auth.id, [auth.connector === 'ths' ? 'portfolioId' : 'brokerAccountId']: String(account.id), intervalMinutes: auth.intervalMinutes ?? 15, enabled: true }
+        const source = { authId: auth.id, [auth.connector === 'ths' ? 'portfolioId' : 'brokerAccountId']: String(account.id), schedule: { kind: 'daily', time: '21:00' }, enabled: true }
         if (auth.connector === 'ths') source.thsBookType = account.thsType || 'common'
         const r = await post('sources/connect', { source })
         if (onImported) onImported(r.account?.id)
@@ -1815,10 +1815,11 @@ window.__ModuleLoader__.load({
         ['ib', 'Interactive Brokers', '官方 Client Portal Gateway', 'IB'],
         ['custom', '高级 API / MCP', '标准化快照接口或只读工具', '⌘'],
       ]
-      const emptyForm = connector => ({ name: '', connector, transport: connector === 'custom' ? 'http' : 'native', lbInterface: 'mcp', futuInterface: 'mcp', accountId: '', portfolioId: '', thsBookType: 'common', brokerAccountId: '', intervalMinutes: '15', enabled: true, host: '127.0.0.1', port: '33333', tls: false, tradeEnvironment: 'REAL', tradeMarket: 'HK', currency: 'HKD', gatewayUrl: connector === 'ib' ? 'https://localhost:5000/v1/api' : '', trustLocalGateway: false, mcpEndpoint: '', url: '', toolName: '', args: '{}', credentialRef: '' })
+      // 自动更新默认每天 21:00（用户要求把默认更新放到晚上 9 点）。
+      const emptyForm = connector => ({ name: '', connector, transport: connector === 'custom' ? 'http' : 'native', lbInterface: 'mcp', futuInterface: 'mcp', accountId: '', portfolioId: '', thsBookType: 'common', brokerAccountId: '', scheduleKind: 'daily', scheduleTime: '21:00', scheduleMinutes: '15', enabled: true, host: '127.0.0.1', port: '33333', tls: false, tradeEnvironment: 'REAL', tradeMarket: 'HK', currency: 'HKD', gatewayUrl: connector === 'ib' ? 'https://localhost:5000/v1/api' : '', trustLocalGateway: false, mcpEndpoint: '', url: '', toolName: '', args: '{}', credentialRef: '' })
       const [choice, setChoice] = React.useState(reauth ? reauth.connector : (initialChoice || 'manual'))
       const [form, setForm] = React.useState(() => {
-        if (reauth) return { ...emptyForm(reauth.connector), ...(reauth.config || {}), name: reauth.label || '', lbInterface: reauth.connector === 'longbridge' ? (reauth.transport === 'mcp' ? 'mcp' : 'sdk') : 'mcp', futuInterface: reauth.connector === 'futu' ? (reauth.transport === 'mcp' ? 'mcp' : 'sdk') : 'mcp', intervalMinutes: String(reauth.intervalMinutes ?? 15) }
+        if (reauth) return { ...emptyForm(reauth.connector), ...(reauth.config || {}), name: reauth.label || '', lbInterface: reauth.connector === 'longbridge' ? (reauth.transport === 'mcp' ? 'mcp' : 'sdk') : 'mcp', futuInterface: reauth.connector === 'futu' ? (reauth.transport === 'mcp' ? 'mcp' : 'sdk') : 'mcp' }
         return emptyForm(initialChoice && initialChoice !== 'manual' ? initialChoice : 'ths')
       })
       const [credentials, setCredentials] = React.useState({}), [sources, setSources] = React.useState([])
@@ -1874,9 +1875,28 @@ window.__ModuleLoader__.load({
       const update = (key, value) => { setForm(old => ({ ...old, [key]: value, ...(['host','port','tls','tradeEnvironment','tradeMarket','currency','gatewayUrl','trustLocalGateway','lbInterface','futuInterface'].includes(key) ? { portfolioId: '', brokerAccountId: '' } : {}) })); if (['host','port','tls','tradeEnvironment','tradeMarket','currency','gatewayUrl','trustLocalGateway','lbInterface','futuInterface'].includes(key)) { invalidate(); if (!reauth) setAuth(null) } }
       const choose = id => { if (disabled) return; setChoice(id); setForm(emptyForm(id)); setCredentials({}); invalidate(); if (!reauth) setAuth(null); setAuthFromList(false); setError(''); setMessage(''); setLogin(null) }
       const cleanCredentials = () => Object.fromEntries(Object.entries(credentials).filter(([, value]) => typeof value === 'string' && value.trim()))
+      // 预填来源记录里的 schedule；旧记录只有 intervalMinutes 时按它回退。
+      const scheduleFields = source => {
+        const schedule = source?.schedule
+        if (schedule?.kind === 'interval' && Number.isInteger(schedule.minutes)) return { scheduleKind: 'interval', scheduleMinutes: String(schedule.minutes) }
+        if (schedule?.kind === 'daily' && schedule.time) return { scheduleKind: 'daily', scheduleTime: schedule.time }
+        if (Number.isInteger(source?.intervalMinutes)) return { scheduleKind: 'interval', scheduleMinutes: String(source.intervalMinutes) }
+        return { scheduleKind: 'daily', scheduleTime: '21:00' }
+      }
+      const scheduleValue = () => {
+        if (form.scheduleKind === 'interval') {
+          const minutes = Number(form.scheduleMinutes)
+          if (form.scheduleMinutes === '' || !Number.isInteger(minutes) || minutes < 0 || minutes > 1440) throw new Error('同步间隔须为 0–1440 的整数分钟（0 = 仅手动）')
+          return { kind: 'interval', minutes }
+        }
+        const time = String(form.scheduleTime || '')
+        const match = /^(\d{2}):(\d{2})$/.exec(time)
+        if (!match || Number(match[1]) > 23 || Number(match[2]) > 59) throw new Error('同步时间须为 HH:MM（00:00–23:59）')
+        return { kind: 'daily', time }
+      }
       const config = () => {
         const mcp = transportOf() === 'mcp'
-        const source = { id: form.id, name: form.name.trim(), connector: choice, transport: choice === 'custom' ? form.transport : (mcp ? 'mcp' : 'native'), accountId: form.accountId, intervalMinutes: Number(form.intervalMinutes), enabled: !!form.enabled }
+        const source = { id: form.id, name: form.name.trim(), connector: choice, transport: choice === 'custom' ? form.transport : (mcp ? 'mcp' : 'native'), accountId: form.accountId, schedule: scheduleValue(), enabled: !!form.enabled }
         if (choice === 'ths') { source.portfolioId = form.portfolioId; source.thsBookType = form.thsBookType || 'common' }
         if (['futu','longbridge','qieman','tiger','fosun','ib'].includes(choice)) source.brokerAccountId = (choice === 'longbridge' && mcp) ? 'main' : form.brokerAccountId
         if (choice === 'futu' && !mcp) Object.assign(source, { host: form.host.trim(), port: Number(form.port), tls: !!form.tls, tradeEnvironment: form.tradeEnvironment, tradeMarket: form.tradeMarket, currency: form.currency })
@@ -1947,7 +1967,7 @@ window.__ModuleLoader__.load({
         return sources.find(s => s.connector === choice && String(s[choice === 'ths' ? 'portfolioId' : 'brokerAccountId']) === String(account.id) && (choice !== 'ths' || (s.thsBookType || 'common') === (account.thsType || 'common')) && (choice !== 'futu' || (s.tradeEnvironment || 'REAL') === form.tradeEnvironment))
       }
       const openImported = source => act('open-source', async current => { const r = await get('sources'); if (!current()) return; accept(r); const latest = r.sources?.find(s => s.id === source.id); if (latest) edit(latest); else throw new Error('此账户状态已变化，请重新读取账户列表') })
-      const formFromAuth = target => ({ ...emptyForm(target.connector), ...(target.config || {}), name: target.label || '', lbInterface: target.connector === 'longbridge' ? (target.transport === 'mcp' ? 'mcp' : 'sdk') : 'mcp', futuInterface: target.connector === 'futu' ? (target.transport === 'mcp' ? 'mcp' : 'sdk') : 'mcp', intervalMinutes: String(target.intervalMinutes ?? 15) })
+      const formFromAuth = target => ({ ...emptyForm(target.connector), ...(target.config || {}), name: target.label || '', lbInterface: target.connector === 'longbridge' ? (target.transport === 'mcp' ? 'mcp' : 'sdk') : 'mcp', futuInterface: target.connector === 'futu' ? (target.transport === 'mcp' ? 'mcp' : 'sdk') : 'mcp' })
       // Reuse a saved login instead of forcing another browser authorization.
       const pickAuthorization = target => act('pick-auth', async current => {
         const found = await post('sources/auth/accounts', { authId: target.id })
@@ -2063,9 +2083,7 @@ window.__ModuleLoader__.load({
         if (!auth) throw new Error('请先完成授权并读取账户')
         if (!selected || !discovered) throw new Error('请先明确选择一个来源账户')
         if (boundSource(selected)) throw new Error('此来源账户已导入，可以继续导入这个授权下的其他账户')
-        const interval = Number(form.intervalMinutes)
-        if (form.intervalMinutes === '' || !Number.isInteger(interval) || (interval !== 0 && (interval < 5 || interval > 1440))) throw new Error('同步间隔须为 0 或 5–1440 的整数分钟')
-        const source = { authId: auth.id, [choice === 'ths' ? 'portfolioId' : 'brokerAccountId']: String(selected.id), intervalMinutes: interval, enabled: !!form.enabled }
+        const source = { authId: auth.id, [choice === 'ths' ? 'portfolioId' : 'brokerAccountId']: String(selected.id), schedule: scheduleValue(), enabled: !!form.enabled }
         if (choice === 'ths') source.thsBookType = selected.thsType || form.thsBookType || 'common'
         const r = await post('sources/connect', { source })
         if (!current()) return
@@ -2086,21 +2104,29 @@ window.__ModuleLoader__.load({
         const account = state.ledger.accounts.find(a => a.id === form.accountId)
         if (!account || !eligible(account)) throw new Error('请选择可绑定的专用空账户；可先到「账户」页创建')
         if (choice !== 'custom' && !(choice === 'ths' ? form.portfolioId : form.brokerAccountId)) throw new Error('请先读取来源账户，并明确选择要同步的账户')
-        const interval = Number(form.intervalMinutes)
-        if (form.intervalMinutes === '' || !Number.isInteger(interval) || (interval !== 0 && (interval < 5 || interval > 1440))) throw new Error('同步间隔须为 0 或 5–1440 的整数分钟')
         if (choice === 'futu' && form.futuInterface !== 'mcp' && (!form.host.trim() || !Number.isInteger(Number(form.port)) || Number(form.port) < 1 || Number(form.port) > 65535)) throw new Error('请填写 OpenD 地址和有效端口')
         if (choice === 'custom' && form.transport === 'http') { let u; try { u = new URL(form.url.trim()) } catch (_) { throw new Error('请填写有效的快照接口 URL') }; if (!['http:','https:'].includes(u.protocol) || u.username || u.password) throw new Error('接口仅支持 HTTP(S)，地址内不可含凭据'); if (form.credentialRef && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(form.credentialRef)) throw new Error('凭据引用须为环境变量名称') }
         if (choice === 'custom' && form.transport === 'mcp' && !form.toolName.trim()) throw new Error('请填写完整的只读 MCP 工具名')
         const r = await post('sources/save', payload(config())); if (!current()) return; accept(r); setCredentials({}); setForm(emptyForm(choice)); invalidate(); setMessage('连接已保存。'); if (onDone) onDone(r)
       })
-      const edit = source => { setChoice(source.connector); setForm({ ...emptyForm(source.connector), ...source, lbInterface: source.connector === 'longbridge' ? (source.transport === 'mcp' ? 'mcp' : 'sdk') : emptyForm(source.connector).lbInterface, futuInterface: source.connector === 'futu' ? (source.transport === 'mcp' ? 'mcp' : 'sdk') : emptyForm(source.connector).futuInterface, args: JSON.stringify(source.args || {}, null, 2), intervalMinutes: String(source.intervalMinutes || 0) }); setCredentials({}); invalidate(); setLogin(null); setMessage('凭据留空将保留已保存的凭据。'); setError('') }
+      const edit = source => { setChoice(source.connector); setForm({ ...emptyForm(source.connector), ...source, lbInterface: source.connector === 'longbridge' ? (source.transport === 'mcp' ? 'mcp' : 'sdk') : emptyForm(source.connector).lbInterface, futuInterface: source.connector === 'futu' ? (source.transport === 'mcp' ? 'mcp' : 'sdk') : emptyForm(source.connector).futuInterface, args: JSON.stringify(source.args || {}, null, 2), ...scheduleFields(source) }); setCredentials({}); invalidate(); setLogin(null); setMessage('凭据留空将保留已保存的凭据。'); setError('') }
       React.useEffect(() => { if (mode === 'edit' && editSource) edit(editSource) }, [])
       const safeSource = source => {
-        const allowed = ['id','name','connector','transport','accountId','intervalMinutes','enabled','portfolioId','thsBookType','host','port','tls','tradeEnvironment','tradeMarket','currency','brokerAccountId','mcpEndpoint','gatewayUrl','trustLocalGateway','url','toolName','args','credentialRef']
+        const allowed = ['id','name','connector','transport','accountId','intervalMinutes','schedule','enabled','portfolioId','thsBookType','host','port','tls','tradeEnvironment','tradeMarket','currency','brokerAccountId','mcpEndpoint','gatewayUrl','trustLocalGateway','url','toolName','args','credentialRef']
         return Object.fromEntries(allowed.filter(key => source[key] !== undefined).map(key => [key,source[key]]))
       }
       const sync = source => act('sync:' + source.id, async current => { await post('sources/sync', { id: source.id }); if (!current()) return; await reload(); if (!current()) return; const r = await get('sources'); if (!current()) return; accept(r); setMessage('「' + source.name + '」已同步，请核对来源警告与行情日期。') })
-      const toggle = source => act('toggle:' + source.id, async current => { const r = await post('sources/save', { source: { ...safeSource(source), enabled: !source.enabled } }); if (!current()) return; accept(r); setMessage(source.enabled ? '自动同步已停止。' : '连接已启用；间隔 0 为仅手动同步。') })
+      const syncAll = () => act('sync-all', async current => {
+        const r = await post('sources/sync-all', {})
+        if (!current()) return
+        const results = r.results || [], failed = results.filter(x => !x.ok)
+        await reload(); if (!current()) return
+        const latest = await get('sources'); if (!current()) return; accept(latest)
+        setMessage(failed.length
+          ? '已同步 ' + (results.length - failed.length) + ' 个来源；' + failed.length + ' 个失败：' + failed.map(x => (x.name || x.id) + '：' + (x.error || '未知错误')).join('；')
+          : '已同步 ' + results.length + ' 个来源，请核对来源警告与行情日期。')
+      })
+      const toggle = source => act('toggle:' + source.id, async current => { const r = await post('sources/save', { source: { ...safeSource(source), enabled: !source.enabled } }); if (!current()) return; accept(r); setMessage(source.enabled ? '自动同步已停止。' : '连接已启用；按设置的每天定时或固定间隔执行。') })
       const remove = source => { if (!window.confirm('移除「' + source.name + '」连接？已同步的账户数据会保留。')) return; act('remove:' + source.id, async current => { await post('sources/remove', { id: source.id }); if (!current()) return; const r = await get('sources'); if (!current()) return; accept(r); if (form.id === source.id) { setForm(emptyForm(choice)); setCredentials({}); invalidate() }; setMessage('连接已移除，账户数据已保留。') }) }
       const warningText = w => typeof w === 'string' ? w : w?.message || JSON.stringify(w)
       const dateText = value => { if (!value) return '尚无记录'; const d = new Date(value); return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleString('zh-CN') }
@@ -2109,6 +2135,18 @@ window.__ModuleLoader__.load({
       const secret = (label, key) => h('label', null, h('span', { style: T.label(t) }, label), h('input', { type: 'password', value: credentials[key] || '', onChange: e => { setCredentials(old => ({ ...old, [key]: e.target.value })); invalidate(); setForm(old => ({ ...old, portfolioId: '', brokerAccountId: '' })) }, placeholder: form.id ? '留空保留已保存凭据' : '仅发送到本机服务端', autoComplete: 'new-password', spellCheck: false, disabled, style: T.input(t) }))
       const selectField = (label, key, values) => h('label', null, h('span', { style: T.label(t) }, label), h('select', { value: form[key], onChange: e => update(key, e.target.value), disabled, style: T.input(t) }, values.map(([value, name]) => h('option', { key: value, value }, name))))
       const check = (label, key) => h('label', { style: { display: 'flex', alignItems: 'center', gap: 7, color: t.sub, fontSize: 12 } }, h('input', { type: 'checkbox', checked: !!form[key], disabled, onChange: e => update(key, e.target.checked) }), label)
+      const scheduleControl = () => h('div', { style: { display: 'grid', gap: 10 } },
+        selectField('更新方式', 'scheduleKind', [['daily', '每天定时'], ['interval', '固定间隔']]),
+        form.scheduleKind === 'interval'
+          ? field('更新间隔（分钟）', 'scheduleMinutes', { type: 'number', min: 0, max: 1440, placeholder: '0 = 仅手动；默认 15' })
+          : field('更新时间（本机时区）', 'scheduleTime', { type: 'time' }))
+      const scheduleSummary = source => {
+        const schedule = source.schedule
+        if (schedule?.kind === 'interval') return schedule.minutes > 0 ? '每 ' + schedule.minutes + ' 分钟' : '仅手动同步'
+        if (schedule?.kind === 'daily' && schedule.time) return '每天 ' + schedule.time
+        if (Number.isInteger(source.intervalMinutes)) return source.intervalMinutes > 0 ? '每 ' + source.intervalMinutes + ' 分钟' : '仅手动同步'
+        return '每天 21:00'
+      }
       const accountKey = choice === 'ths' ? 'portfolioId' : 'brokerAccountId'
       const thsBookLabel = a => a.thsType === 'ijj' ? '爱基金' : a.thsType === 'manFund' ? '基金账本' : null
       const descriptions = {
@@ -2156,7 +2194,7 @@ window.__ModuleLoader__.load({
           form.id || choice === 'custom' ? h('div', { className: 'wealth-source-fields', style: { marginTop: 16 } },
             field('连接名称', 'name', { placeholder: '如 我的港股账户', maxLength: 120 }),
             form.id ? h('div', null, h('span', { style: T.label(t) }, '已导入账户'), h('div', { style: { paddingTop: 8, fontSize: 12 } }, state.ledger.accounts.find(a => a.id === form.accountId)?.name || form.accountId)) : h('label', null, h('span', { style: T.label(t) }, '使用账户'), h('select', { value: form.accountId, disabled, onChange: e => update('accountId', e.target.value), style: T.input(t) }, h('option', { value: '' }, '请选择专用空账户'), state.ledger.accounts.filter(eligible).map(a => h('option', { key: a.id, value: a.id }, a.name + ' · ' + a.currency)))),
-            field('自动同步间隔（分钟）', 'intervalMinutes', { type: 'number', min: 0, max: 1440, placeholder: '0 = 手动；5–1440' })) : null,
+            scheduleControl()) : null,
           choice === 'custom' && !form.id ? h('div', { style: { marginTop: 12, color: t.sub, fontSize: 11 } }, '高级接口使用专用空账户。', h('button', { disabled, onClick: openAccounts, style: { ...T.btn(t, false), marginLeft: 8 } }, '创建本地账户 ↗')) : null,
           choice === 'ths' ? h('div', { style: { marginTop: 18 } },
             h('div', { className: 'wealth-source-actions', style: { alignItems: 'center' } }, h('button', { style: T.btn(t, false), disabled: disabled || ['opening','waiting'].includes(login?.status), onClick: startLogin }, ['opening','waiting'].includes(login?.status) ? '等待浏览器登录…' : login?.status === 'ready' || auth ? '重新登录' : '浏览器登录'), h('span', { style: { color: login?.status === 'error' ? t.red : t.sub, fontSize: 11 }, role: 'status' }, login ? loginText(login.status, login.message, { opening: '正在打开登录窗口', waiting: '请在登录窗口完成登录', ready: '登录已就绪，可读取账本', error: '登录未完成' }) : '登录状态由本机服务保存')),
@@ -2226,7 +2264,7 @@ window.__ModuleLoader__.load({
              h('strong', { style: { fontSize: 14 } }, '3 导入账户'),
              h('p', { style: { fontSize: 13, color: t.text } }, selected.name || selected.id, h('span', { style: { color: t.sub, marginLeft: 8, fontSize: 12 } }, selected.currency || (choice === 'futu' ? form.currency : state.ledger.baseCurrency))),
              h('p', { style: { fontSize: 12, color: t.sub } }, '账户、当前持仓和来源能提供的全部历史流水将一起导入，之后点账户上的「同步」即可更新到最新。'),
-             h('details', { style: { marginTop: 14, fontSize: 12, color: t.sub } }, h('summary', { style: { cursor: 'pointer' } }, '自动更新设置'), h('div', { style: { marginTop: 12 } }, field('更新间隔（分钟）', 'intervalMinutes', { type: 'number', min: 0, max: 1440, placeholder: '0 = 手动；5–1440' })), h('div', { style: { marginTop: 12 } }, check('启用自动更新', 'enabled'))),
+             h('details', { style: { marginTop: 14, fontSize: 12, color: t.sub } }, h('summary', { style: { cursor: 'pointer' } }, '自动更新设置'), h('div', { style: { marginTop: 12 } }, scheduleControl()), h('div', { style: { marginTop: 12 } }, check('启用自动更新', 'enabled'))),
              h('button', { style: { ...T.btn(t, true), marginTop: 18 }, disabled, onClick: connect }, working === 'connect' ? '正在导入账户和持仓…' : '导入此账户')) : null,
           auth && !form.id ? h('div', { className: 'wealth-source-actions', style: { marginTop: 18, alignItems: 'center' } },
             h('button', { style: T.btn(t, true), disabled, onClick: () => onDone ? onDone({ account: imported }) : (openAccounts && openAccounts()) }, imported ? '完成，查看账户' : '完成'),
@@ -2234,14 +2272,17 @@ window.__ModuleLoader__.load({
           choice === 'custom' || form.id ? h('div', { className: 'wealth-source-actions', style: { marginTop: 20, alignItems: 'center' } }, h('button', { style: T.btn(t, true), disabled, onClick: save }, working === 'save' ? '保存中…' : form.id ? '保存连接' : '添加连接'), check('启用连接', 'enabled'), h('small', { style: { color: t.sub } }, 'DSH 运行时执行自动同步')) : null),
         imported && !embedded ? h('button', { style: { ...T.btn(t, true), marginBottom: 16 }, disabled, onClick: openAccounts }, '查看导入的账户 ↗') : null,
         embedded ? null : h('section', { style: { marginTop: 24 }, 'aria-label': '已配置的数据源' },
-          h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 } }, h('strong', { style: { fontWeight: 600 } }, '已连接 · ' + sources.length), h('button', { style: T.btn(t, false), disabled, onClick: () => act('refresh', async () => accept(await get('sources'))) }, '刷新状态')),
+          h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 12 } }, h('strong', { style: { fontWeight: 600 } }, '已连接 · ' + sources.length), h('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
+            h('button', { style: T.btn(t, true), disabled: disabled || !sources.some(s => s.enabled), onClick: syncAll }, working === 'sync-all' ? '同步中…' : '全部同步'),
+            h('button', { style: T.btn(t, false), disabled, onClick: () => act('refresh', async () => accept(await get('sources'))) }, '刷新状态'))),
           !sources.length ? h('div', { style: T.card(t) }, h('div', { style: { color: t.sub, fontSize: 12 } }, '还没有自动数据源。选择上方来源，开始连接你的投资账户。')) : sources.map(source => {
             const account = state.ledger.accounts.find(a => a.id === source.accountId)
             const status = ({ never:'尚未同步',success:'同步成功',ok:'同步成功',error:'同步失败',failed:'同步失败',syncing:'同步中',partial:'部分成功',warning:'有警告' })[source.lastStatus] || source.lastStatus || '尚未同步'
             const reauthTag = source.needsReauth ? h('span', { style: { marginLeft: 6, padding: '1px 8px', borderRadius: 999, fontSize: 10, fontWeight: 700, whiteSpace: 'nowrap', background: t.red + '18', color: t.red } }, '需重新授权') : null
+            const scheduleTag = h('span', { style: { marginLeft: 6, padding: '1px 8px', borderRadius: 999, fontSize: 10, fontWeight: 700, whiteSpace: 'nowrap', background: t.soft, color: t.sub } }, scheduleSummary(source))
             return h('article', { key: source.id, style: { ...T.card(t), marginBottom: 12 } },
-              h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', marginBottom: 16 } }, h('div', null, h('strong', null, source.name), h('div', { style: { color: t.sub, fontSize: 11, marginTop: 5 } }, (options.find(x => x[0] === source.connector)?.[1] || source.connector) + ' · ' + source.transport + ' → ' + (account?.name || '账户不存在'))), h('span', { style: { color: t.sub, fontSize: 11 } }, !source.enabled ? '已停用' : source.intervalMinutes > 0 ? '每 ' + source.intervalMinutes + ' 分钟' : '仅手动同步')),
-              h('div', { className: 'wealth-source-meta' }, [['状态',reauthTag ? h('span', null, status, reauthTag) : status],['上次成功',dateText(source.lastSuccessAt)],['上次尝试',dateText(source.lastAttemptAt)],['上游上传',dateText(source.uploadedAt)],['行情日期',source.quoteDate || '来源未提供'],['凭据',source.credentialsConfigured ? '已配置' : '未配置 / 无需凭据']].map(([label,value]) => h('div', { key: label }, h('span', { style: T.label(t) }, label), h('span', { style: { fontSize: 11 } }, value)))),
+              h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', marginBottom: 16 } }, h('div', null, h('strong', null, source.name), h('div', { style: { color: t.sub, fontSize: 11, marginTop: 5 } }, (options.find(x => x[0] === source.connector)?.[1] || source.connector) + ' · ' + source.transport + ' → ' + (account?.name || '账户不存在'))), h('span', { style: { color: t.sub, fontSize: 11 } }, source.enabled ? '自动更新已启用' : '已停用')),
+              h('div', { className: 'wealth-source-meta' }, [['状态',h('span', null, reauthTag ? h('span', null, status, reauthTag) : status, scheduleTag)],['上次成功',dateText(source.lastSuccessAt)],['上次尝试',dateText(source.lastAttemptAt)],['上游上传',dateText(source.uploadedAt)],['行情日期',source.quoteDate || '来源未提供'],['凭据',source.credentialsConfigured ? '已配置' : '未配置 / 无需凭据']].map(([label,value]) => h('div', { key: label }, h('span', { style: T.label(t) }, label), h('span', { style: { fontSize: 11 } }, value)))),
               source.lastError ? h('div', { role: 'alert', style: { color: t.red, fontSize: 12, marginTop: 10 } }, warningText(source.lastError)) : null,
               (source.warnings || []).map((w,i) => h('div', { key: i, style: { color: t.sub, fontSize: 11, marginTop: 7 } }, warningText(w))),
               h('div', { className: 'wealth-source-actions', style: { marginTop: 16 } }, h('button', { style: T.btn(t, true), disabled: disabled || source.lastStatus === 'syncing', onClick: () => sync(source) }, working === 'sync:' + source.id ? '同步中…' : '立即同步'), h('button', { style: T.btn(t, false), disabled: disabled || !account, onClick: () => openHistory(source.accountId) }, '补充历史流水'), h('button', { style: T.btn(t, false), disabled, onClick: () => edit(source) }, '编辑配置'), h('button', { style: T.btn(t, false), disabled, onClick: () => toggle(source) }, source.enabled ? '停用' : '启用'), h('button', { style: { ...T.btn(t, false), color: t.red }, disabled, onClick: () => remove(source) }, '移除')))

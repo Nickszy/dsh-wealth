@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {mkdtempSync,rmSync,readFileSync} from 'node:fs'
+import {mkdtempSync,rmSync,readFileSync,writeFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {createSyncService,mergeSnapshot,snapshotContentHash,sourceStore} from './sync.mjs'
@@ -497,4 +497,137 @@ test('tick runs different connectors in parallel',async()=>{
  assert.equal(pending.length,2);assert.equal(maxActive,2) // 跨连接器并行：两个来源同时进行中
  pending.forEach(p=>p.resolve());await work
  assert.equal(f.db().holdings.length,2)
+})
+// ---- Configurable schedules: daily HH:MM (default 21:00) or fixed interval ----
+const localTime=(y,month,day,hour,minute=0)=>new Date(y,month-1,day,hour,minute,0,0).getTime()
+const pinAttempt=(f,ms)=>f.config.write(f.config.read().map(s=>({...s,lastAttemptAt:new Date(ms).toISOString()})))
+
+test('new sources default to daily 21:00; legacy intervalMinutes keeps interval semantics',()=>{
+ const f=setup()
+ const daily=f.add({intervalMinutes:undefined})
+ assert.deepEqual(daily.schedule,{kind:'daily',time:'21:00'})
+ assert.equal(daily.intervalMinutes,undefined)
+ const g=setup()
+ const interval=g.add({intervalMinutes:30})
+ assert.deepEqual(interval.schedule,{kind:'interval',minutes:30})
+ assert.equal(interval.intervalMinutes,30)
+})
+
+test('connectSource defaults new imports to daily 21:00',async()=>{
+ const f=setup({listAccounts:async()=>({accounts:[{id:'book',name:'账户',thsType:'common'}],warnings:[]})})
+ const r=await f.service.connectSource({connector:'ths',transport:'native',accountId:'b',portfolioId:'book'},{cookie:'test-cookie'})
+ assert.deepEqual(r.source.schedule,{kind:'daily',time:'21:00'})
+ assert.equal(r.source.intervalMinutes,undefined)
+})
+
+test('daily schedule fires when the local time passes, then waits until the next day',async()=>{
+ let calls=0
+ const start=localTime(2026,11,6,20,0) // 周五 20:00 本地时间
+ const f=setup({clockStart:start,fetchSnapshot:async()=>{calls++;return snapshot()}})
+ f.add({schedule:{kind:'daily',time:'21:00'}})
+ pinAttempt(f,start)
+ await f.service.tick();assert.equal(calls,0)
+ f.advance(60*60000)
+ await f.service.tick();assert.equal(calls,1)
+ await f.service.tick();assert.equal(calls,1)
+ // 周六 20:59：每天定时不受周末跳过影响，但仍等到达 21:00。
+ f.advance(23*60*60000+59*60000)
+ await f.service.tick();assert.equal(calls,1)
+ f.advance(60000)
+ await f.service.tick();assert.equal(calls,2)
+})
+
+test('daily schedule catches up after a missed occurrence',async()=>{
+ let calls=0
+ const now=localTime(2026,11,6,14,0) // 周五 14:00，今天的 21:00 还没到
+ const f=setup({clockStart:now,fetchSnapshot:async()=>{calls++;return snapshot()}})
+ f.add({schedule:{kind:'daily',time:'21:00'}})
+ pinAttempt(f,localTime(2026,11,5,10,0)) // 周四 10:00，早于最近一次（周四 21:00）
+ await f.service.tick();assert.equal(calls,1)
+})
+
+test('custom daily times are honoured',async()=>{
+ let calls=0
+ const start=localTime(2026,11,6,8,0)
+ const f=setup({clockStart:start,fetchSnapshot:async()=>{calls++;return snapshot()}})
+ f.add({schedule:{kind:'daily',time:'08:30'}})
+ pinAttempt(f,start)
+ await f.service.tick();assert.equal(calls,0)
+ f.advance(29*60000);await f.service.tick();assert.equal(calls,0)
+ f.advance(60000);await f.service.tick();assert.equal(calls,1)
+})
+
+test('a failed daily source retries after min(120, 5*2^(n-1)) minutes',async()=>{
+ let calls=0,fail=true
+ const start=localTime(2026,11,6,20,55)
+ const f=setup({clockStart:start,fetchSnapshot:async()=>{calls++;if(fail)throw Error('network down');return snapshot()}})
+ f.add({schedule:{kind:'daily',time:'21:00'}})
+ pinAttempt(f,start)
+ f.advance(5*60000);await f.service.tick();assert.equal(calls,1) // 21:00 失败 → 5 分钟
+ f.advance(4*60000);await f.service.tick();assert.equal(calls,1)
+ f.advance(60000);await f.service.tick();assert.equal(calls,2) // failCount 2 → 10 分钟
+ f.advance(9*60000);await f.service.tick();assert.equal(calls,2)
+ f.advance(60000);await f.service.tick();assert.equal(calls,3) // failCount 3 → 20 分钟
+ fail=false
+ f.advance(19*60000);await f.service.tick();assert.equal(calls,3)
+ f.advance(60000);await f.service.tick();assert.equal(calls,4)
+ assert.equal(f.config.read()[0].failCount,0)
+ f.advance(23*60*60000);await f.service.tick();assert.equal(calls,4) // 成功后等下一次定时
+})
+
+test('daily retry backoff caps at 120 minutes',async()=>{
+ let calls=0
+ const start=localTime(2026,11,6,21,0)
+ const f=setup({clockStart:start,fetchSnapshot:async()=>{calls++;throw Error('network down')}})
+ f.add({schedule:{kind:'daily',time:'21:00'}})
+ f.config.write(f.config.read().map(s=>({...s,lastAttemptAt:new Date(start).toISOString(),failCount:6})))
+ await f.service.tick();assert.equal(calls,0)
+ f.advance(119*60000);await f.service.tick();assert.equal(calls,0)
+ f.advance(60000);await f.service.tick();assert.equal(calls,1)
+})
+
+test('a rate-limited daily source waits for the next scheduled occurrence',async()=>{
+ let calls=0
+ const start=localTime(2026,11,6,20,50)
+ const f=setup({clockStart:start,fetchSnapshot:async()=>{calls++;throw Error('MCP 返回 HTTP 429')}})
+ f.add({schedule:{kind:'daily',time:'21:00'}})
+ pinAttempt(f,start)
+ f.advance(10*60000);await f.service.tick();assert.equal(calls,1)
+ f.advance(5*60000);await f.service.tick();assert.equal(calls,1) // 限流不提前重试
+ f.advance((24*60-5)*60000);await f.service.tick();assert.equal(calls,2) // 次日 21:00
+})
+
+test('tick uses schedule over a stale intervalMinutes field',async()=>{
+ let calls=0
+ const start=localTime(2026,11,6,20,0)
+ const f=setup({clockStart:start,fetchSnapshot:async()=>{calls++;return snapshot()}})
+ f.add({intervalMinutes:5,schedule:{kind:'daily',time:'21:00'}})
+ pinAttempt(f,start)
+ await f.service.tick();assert.equal(calls,0)
+ f.advance(10*60000);await f.service.tick();assert.equal(calls,0) // 5 分钟间隔字段不会触发
+ f.advance(50*60000);await f.service.tick();assert.equal(calls,1)
+})
+
+test('version 2 sources.json migrates every source to daily 21:00 and persists version 3',()=>{
+ const dir=mkdtempSync(join(tmpdir(),'wealth-schedule-migrate-'))
+ try{
+  writeFileSync(join(dir,'sources.json'),JSON.stringify({version:2,authorizations:[],sources:[{id:'a',intervalMinutes:30},{id:'b',schedule:{kind:'interval',minutes:5}}]}))
+  const rows=sourceStore(dir).read()
+  assert.deepEqual(rows.map(s=>s.schedule),[{kind:'daily',time:'21:00'},{kind:'daily',time:'21:00'}])
+  assert.equal(rows[0].intervalMinutes,undefined)
+  const persisted=JSON.parse(readFileSync(join(dir,'sources.json'),'utf8'))
+  assert.equal(persisted.version,3)
+  assert.deepEqual(persisted.sources.map(s=>s.schedule),[{kind:'daily',time:'21:00'},{kind:'daily',time:'21:00'}])
+  // version 3 文件原样信任：显式 schedule 不被改写，缺失 schedule 也不补写。
+  writeFileSync(join(dir,'sources.json'),JSON.stringify({version:3,authorizations:[],sources:[{id:'c',schedule:{kind:'interval',minutes:45}},{id:'d'}]}))
+  const trusted=sourceStore(dir).read()
+  assert.deepEqual(trusted[0].schedule,{kind:'interval',minutes:45})
+  assert.equal(trusted[1].schedule,undefined)
+ }finally{rmSync(dir,{recursive:true,force:true})}
+})
+
+test('schedule validation rejects malformed times and intervals',()=>{
+ const f=setup()
+ for(const schedule of [{kind:'daily',time:'24:00'},{kind:'daily',time:'9:00'},{kind:'daily',time:'21:60'},{kind:'interval',minutes:-1},{kind:'interval',minutes:1.5},{kind:'weekly'}])assert.throws(()=>f.add({schedule}),/同步/)
+ assert.throws(()=>f.add({schedule:'daily'}),/同步计划/)
 })

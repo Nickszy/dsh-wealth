@@ -20,7 +20,7 @@ test('login-discovered source imports account and holdings with no pre-created l
  const result=await f.service.connectSource(f.source('book2'),{cookie:'userid=fixture; v=test'})
  assert.equal(result.created,true);assert.equal(result.account.name,'官方股票账户二');assert.equal(result.account.currency,'CNY');assert.equal(result.account.externalAccountId,'book2')
  assert.equal(result.ledger.holdings[0].qty,100);assert.equal(result.ledger.instruments[0].symbol,'600001')
- assert.equal(result.source.accountId,result.account.id);assert.equal(result.source.lastStatus,'ok');assert.equal(result.source.intervalMinutes,15)
+ assert.equal(result.source.accountId,result.account.id);assert.equal(result.source.lastStatus,'ok');assert.deepEqual(result.source.schedule,{kind:'daily',time:'21:00'})
  assert.equal(f.counts().writes,1);assert.ok(!JSON.stringify(result).includes('userid=fixture'))
 })
 test('duplicate import reuses the already imported account without fetching or saving again',async()=>{

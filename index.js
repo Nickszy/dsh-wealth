@@ -698,6 +698,25 @@ export function apply(ctx, config = {}) {
           send(res, 200, { ok: true, token })
           return
         }
+        if (path === 'api/sources/sync-all') {
+          if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
+          await readBody(req).catch(() => '')
+          const sources = sync.list().sources.filter(s => s.enabled)
+          // 与单个同步相同的 inFlight 去重；不同连接器可以并行，失败逐条返回。
+          // 同步后照单个 sources/sync 的行为补历史流水（尽力而为，不影响持仓结果）。
+          const settled = await Promise.allSettled(sources.map(async (s) => {
+            const result = await sync.sync(s.id)
+            const accountId = result.account?.id || s.accountId
+            const history = accountId ? await syncHistory(accountId) : {}
+            return { ...result, ...history }
+          }))
+          send(res, 200, {
+            ok: true,
+            results: settled.map((r, i) => ({ id: sources[i].id, name: sources[i].name, ok: r.status === 'fulfilled', error: r.status === 'rejected' ? String(r.reason?.message || r.reason) : r.value?.historyError ?? null })),
+            sources: sync.list().sources,
+          })
+          return
+        }
         if (['api/sources/save','api/sources/sync','api/sources/remove','api/sources/connect'].includes(path)) {
           if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
           const body = JSON.parse(await readBody(req))

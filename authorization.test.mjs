@@ -181,7 +181,7 @@ test('existing one-account connections appear as a migrated authorization', () =
 
     store.write([{ id:'SRC_OLD', name:'改名', connector:'ths', transport:'native', accountId:'ACC1', portfolioId:'book1', thsBookType:'common' }])
     const file = JSON.parse(readFileSync(join(dir, 'sources.json'), 'utf8'))
-    assert.equal(file.version, 2)
+    assert.equal(file.version, 3)
     // Derived legacy records are never persisted; they are rebuilt from the source.
     assert.equal(file.authorizations.length, 0)
     assert.equal(file.sources[0].id, 'SRC_OLD')

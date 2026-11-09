@@ -12,6 +12,61 @@ import { fetchNativeHistory } from './history-provider.mjs'
 
 const plain = x => x !== null && typeof x === 'object' && !Array.isArray(x)
 const keyOf = row => JSON.stringify([row.market, row.symbol, row.currency])
+
+// 自动更新计划：宿主本地时间。daily = 每天 HH:MM，interval = 固定间隔分钟。
+// 旧来源记录只有 intervalMinutes，tick 在缺少 schedule 时按它回退。
+export const DEFAULT_DAILY_SCHEDULE = Object.freeze({ kind: 'daily', time: '21:00' })
+const SCHEDULE_TIME = /^(\d{2}):(\d{2})$/
+function validScheduleTime(value) {
+  const match = SCHEDULE_TIME.exec(String(value ?? ''))
+  if (!match) return false
+  return Number(match[1]) <= 23 && Number(match[2]) <= 59
+}
+const scheduleInterval = value => {
+  if (value === undefined || value === null || value === '') return undefined
+  return Number(value)
+}
+// 读取时容错：坏掉的 schedule 不抛错，回退到 intervalMinutes 或默认每天 21:00。
+export function normalizeSchedule(schedule, intervalMinutes) {
+  if (plain(schedule)) {
+    if (schedule.kind === 'daily' && validScheduleTime(schedule.time)) return { kind: 'daily', time: String(schedule.time) }
+    if (schedule.kind === 'interval' && Number.isInteger(schedule.minutes) && schedule.minutes >= 0) return { kind: 'interval', minutes: schedule.minutes }
+  }
+  const interval = scheduleInterval(intervalMinutes)
+  if (interval !== undefined && Number.isInteger(interval) && interval >= 0) return { kind: 'interval', minutes: interval }
+  return { ...DEFAULT_DAILY_SCHEDULE }
+}
+// 写入时严格校验：非法输入明确报错（API 映射为 bad-request）。
+// 兼容旧客户端：请求仍带 intervalMinutes 且与 schedule 冲突时，以 intervalMinutes 为准。
+function resolveSchedule(input, previous) {
+  if (input.schedule !== undefined && input.schedule !== null) {
+    if (!plain(input.schedule)) throw bad('同步计划格式无效')
+    if (input.schedule.kind === 'daily') {
+      const time = String(input.schedule.time ?? '')
+      if (!validScheduleTime(time)) throw bad('同步时间须为 HH:MM（00:00–23:59）')
+      return { kind: 'daily', time }
+    }
+    if (input.schedule.kind === 'interval') {
+      const minutes = Number(input.schedule.minutes)
+      // 0 保留为旧版的「仅手动同步」，其余必须是非负整数。
+      if (!Number.isInteger(minutes) || minutes < 0) throw bad('同步间隔须为 0 或正整数分钟')
+      const legacy = scheduleInterval(input.intervalMinutes)
+      if (legacy !== undefined) {
+        if (!Number.isInteger(legacy) || (legacy !== 0 && (legacy < 5 || legacy > 1440))) throw bad('同步间隔须为 0，或 5 至 1440 分钟')
+        if (legacy !== minutes) return { kind: 'interval', minutes: legacy }
+      }
+      return { kind: 'interval', minutes }
+    }
+    throw bad('同步计划类型无效，请选择每天定时或固定间隔')
+  }
+  const legacy = scheduleInterval(input.intervalMinutes)
+  if (legacy !== undefined) {
+    if (!Number.isInteger(legacy) || (legacy !== 0 && (legacy < 5 || legacy > 1440))) throw bad('同步间隔须为 0，或 5 至 1440 分钟')
+    return { kind: 'interval', minutes: legacy }
+  }
+  if (previous) return normalizeSchedule(previous.schedule, previous.intervalMinutes)
+  return { ...DEFAULT_DAILY_SCHEDULE }
+}
 const secretKey = /^(?:password|secret|token|api[_-]?key|cookie|authorization|access[_-]?token|refresh[_-]?token)$/i
 function checkArgs(value) {
   if (!plain(value)) throw bad('工具参数必须是 JSON 对象')
@@ -83,21 +138,39 @@ function withLegacyAuthorizations(authorizations, sources) {
 /** Uses a separate config file; credentials themselves are never persisted here. */
 export function sourceStore(dir = DATA_DIR) {
   const file = join(dir, 'sources.json')
-  const readFile = () => {
-    if (!existsSync(file)) return { authorizations: [], sources: [] }
+  const parseFile = () => {
+    if (!existsSync(file)) return { version: 3, authorizations: [], sources: [] }
     const data = JSON.parse(readFileSync(file, 'utf8'))
     const sources = Array.isArray(data) ? data : data?.sources
     if (!Array.isArray(sources)) throw bad('数据源配置文件损坏，请检查 sources.json')
-    return { authorizations: Array.isArray(data.authorizations) ? data.authorizations : [], sources }
+    // 数组形式是 version 之前的旧文件；按 0 处理以走同一迁移。
+    if (Array.isArray(data)) return { version: 0, authorizations: [], sources }
+    return {
+      version: Number.isInteger(data.version) ? data.version : 1,
+      authorizations: Array.isArray(data.authorizations) ? data.authorizations : [],
+      sources,
+    }
   }
-  const writeFile = (authorizations, sources) => {
+  const persist = (authorizations, sources) => {
     mkdirSync(dir, { recursive: true, mode: 0o700 })
     if (existsSync(file)) copyFileSync(file, file + '.bak')
-    writeFileSync(file + '.tmp', JSON.stringify({ version: 2, authorizations, sources }, null, 2), { mode: 0o600 })
+    writeFileSync(file + '.tmp', JSON.stringify({ version: 3, authorizations, sources }, null, 2), { mode: 0o600 })
     renameSync(file + '.tmp', file)
     // Windows ignores POSIX modes; on other platforms keep the file (and its backup)
     // private because it now caches broker account ids and names.
     for (const path of [file, file + '.bak']) try { chmodSync(path, 0o600) } catch { /* file may not exist yet */ }
+  }
+  const readFile = () => {
+    const raw = parseFile()
+    // v2 → v3：用户要求把所有自动更新统一挪到每天 21:00。version ≥ 3 的文件原样信任。
+    if (raw.version >= 3) return raw
+    const sources = raw.sources.map(source => {
+      const next = { ...source, schedule: { ...DEFAULT_DAILY_SCHEDULE } }
+      delete next.intervalMinutes
+      return next
+    })
+    try { persist(raw.authorizations, sources) } catch { /* 只读磁盘：迁移结果仍可在内存中使用 */ }
+    return { version: 3, authorizations: raw.authorizations, sources }
   }
   return {
     read() { return readFile().sources },
@@ -105,8 +178,8 @@ export function sourceStore(dir = DATA_DIR) {
     readAll() { const { authorizations, sources } = readFile(); return { authorizations: withLegacyAuthorizations(authorizations, sources), sources } },
     // Derived legacy records are read-time only: persisting them would freeze a
     // stale copy that later outlives edits to the source it came from.
-    write(sources) { writeFile(readFile().authorizations, sources) },
-    writeAuths(authorizations) { const { sources } = readFile(); writeFile((authorizations || []).filter(a => a && a.id && !a.legacy), sources) },
+    write(sources) { persist(readFile().authorizations, sources) },
+    writeAuths(authorizations) { persist((authorizations || []).filter(a => a && a.id && !a.legacy), readFile().sources) },
   }
 }
 
@@ -257,7 +330,7 @@ export function createSyncService(ctx, options = {}) {
       // IB 与 OpenD 在账本之外完成认证；其他登录需要库里保存的凭据。
       credentialsConfigured: getConnector(a.connector)?.credentialsAlwaysConfigured?.(a.transport) ? true : vault.configured(a.id,a.connector),
       status: a.lastError ? 'error' : a.authorizedAt ? 'authorized' : 'ready',
-      sources: sources.filter(s=>s.authId === a.id).map(s=>({ id:s.id, name:s.name, accountId:s.accountId, intervalMinutes:s.intervalMinutes, enabled:s.enabled, lastStatus:s.lastStatus, lastSuccessAt:s.lastSuccessAt, portfolioId:s.portfolioId, brokerAccountId:s.brokerAccountId, thsBookType:s.thsBookType })),
+      sources: sources.filter(s=>s.authId === a.id).map(s=>({ id:s.id, name:s.name, accountId:s.accountId, intervalMinutes:s.intervalMinutes, schedule:s.schedule, enabled:s.enabled, lastStatus:s.lastStatus, lastSuccessAt:s.lastSuccessAt, portfolioId:s.portfolioId, brokerAccountId:s.brokerAccountId, thsBookType:s.thsBookType })),
     }))
     return { sources, authorizations, connectors: connectors() }
   }
@@ -618,11 +691,14 @@ export function createSyncService(ctx, options = {}) {
     if (db.holdings.some(h=>h.accountId === account.id && (!owner || h.syncSourceId !== owner)) || (!previous && db.trades.some(t=>t.accountId === account.id && (!owner || t.source !== owner)))) throw bad('此账户不是独立空账户，包含其他记录')
     if (all.some(s=>s.id !== previous?.id && s.accountId === account.id)) throw bad('该账户已绑定其他数据源')
     if (previous && previous.accountId !== account.id) throw bad('已有连接不可更换绑定账户，请新增连接')
-    const interval = Number(input.intervalMinutes ?? 0)
-    if (!Number.isInteger(interval) || (interval !== 0 && (interval < 5 || interval > 1440))) throw bad('同步间隔须为 0，或 5 至 1440 分钟')
+    const schedule = resolveSchedule(input, previous)
+    const inputInterval = scheduleInterval(input.intervalMinutes)
+    const interval = schedule.kind === 'interval' ? schedule.minutes : inputInterval
     if (typeof input.enabled !== 'boolean') throw bad('enabled 必须为布尔值')
     const sourceEntry = getConnector(input.connector)
-    const source = { ...(previous || {}), id:previous?.id || transaction.sourceId || 'SRC_'+randomUUID(), name:String(input.name || '').trim(), connector:input.connector, transport:resolveSaveTransport(input.connector, input.transport), accountId:account.id, ...(auth?.id || input.authId || previous?.authId ? { authId: auth?.id || input.authId || previous?.authId } : {}), intervalMinutes:interval, enabled:input.enabled, configRevision:randomUUID(), updatedAt:iso() }
+    const source = { ...(previous || {}), id:previous?.id || transaction.sourceId || 'SRC_'+randomUUID(), name:String(input.name || '').trim(), connector:input.connector, transport:resolveSaveTransport(input.connector, input.transport), accountId:account.id, ...(auth?.id || input.authId || previous?.authId ? { authId: auth?.id || input.authId || previous?.authId } : {}), ...(interval !== undefined ? { intervalMinutes: interval } : {}), schedule, enabled:input.enabled, configRevision:randomUUID(), updatedAt:iso() }
+    // 来源切换到每天定时后，删掉不再对应的旧 intervalMinutes。
+    if (interval === undefined) delete source.intervalMinutes
     if (!source.name || source.name.length > 120) throw bad('请输入不超过 120 字的数据源名称')
     delete source.url; delete source.toolName; delete source.args; delete source.credentialRef; delete source.portfolioId; delete source.thsBookType; delete source.mcpEndpoint; delete source.gatewayUrl; delete source.trustLocalGateway
     if (sourceEntry) {
@@ -728,7 +804,8 @@ export function createSyncService(ctx, options = {}) {
         if (!/^[A-Z]{3}$/.test(currency)) throw bad('来源账户币种无效，导入未保存')
         const {account} = applyOp(ledger,'account.upsert',{name,type:'broker',currency,note:'从'+entry.name+'导入'})
         account.externalAccountId = remoteId;account.connector = input.connector
-        const sourceInput = {...input,name:String(input.name || entry.name+' · '+name).trim(),accountId:account.id,transport:(input.transport === 'mcp' ? 'mcp' : 'native'),intervalMinutes:input.intervalMinutes ?? 15,enabled:input.enabled !== false}
+        // 新导入未指定计划时由 saveSource 默认成每天 21:00。
+        const sourceInput = {...input,name:String(input.name || entry.name+' · '+name).trim(),accountId:account.id,transport:(input.transport === 'mcp' ? 'mcp' : 'native'),enabled:input.enabled !== false}
         // 先建账户与来源，再尝试首次读取：上游慢或临时失败时账户照常出现，错误显示在账户上，由自动同步/手动同步重试。
         let staged = ledger, snapshot = null, firstError = null
         try {
@@ -884,24 +961,47 @@ export function createSyncService(ctx, options = {}) {
       throw bad('历史成交读取失败' + (detail ? '：' + detail : '') + '。可稍后重试，或使用账单文件补录')
     } finally {clearTimeout(timer);aborts.delete(abort)}
   }
-  // 失败退避：连续失败后到期间隔缩短为 min(intervalMinutes, 5*2^(failCount-1)) 分钟（首次 5 分钟，
-  // 之后逐次翻倍），永不超过配置的间隔；成功清零后回到完整间隔。
+  // 固定间隔的失败退避：连续失败后到期间隔缩短为 min(minutes, 5*2^(failCount-1)) 分钟
+  // （首次 5 分钟，之后逐次翻倍），永不超过配置的间隔；成功清零后回到完整间隔。
   // 例外：服务端限流（HTTP 429/限流）不能提前重试——越快撞墙越严重，必须等满配置间隔。
   const RATE_LIMIT = /\b429\b|限流|rate.?limit|too many requests/i
-  const dueMinutes = source => (source.failCount >= 1 && !RATE_LIMIT.test(String(source.lastError || '')))
-    ? Math.min(source.intervalMinutes, 5 * 2 ** (source.failCount - 1)) : source.intervalMinutes
+  const dueMinutes = (source, minutes) => (source.failCount >= 1 && !RATE_LIMIT.test(String(source.lastError || '')))
+    ? Math.min(minutes, 5 * 2 ** (source.failCount - 1)) : minutes
+  // 每天定时：以「最近一次 HH:MM」为水位，错过就补同步（应用关闭时跨过 21:00，下次 tick 立即补）。
+  const latestDailyOccurrence = (at, time) => {
+    const [hours, minutes] = String(time).split(':').map(Number)
+    const occurrence = new Date(at)
+    occurrence.setHours(hours, minutes, 0, 0)
+    if (occurrence.getTime() > at) occurrence.setDate(occurrence.getDate() - 1)
+    return occurrence.getTime()
+  }
+  const dailyDue = (source, schedule) => {
+    const last = Date.parse(source.lastAttemptAt || '')
+    const occurrence = latestDailyOccurrence(now(), schedule.time)
+    if (!Number.isFinite(last) || last < occurrence) return true
+    // 失败后可提前重试（上限 120 分钟）；限流例外，直接等下一个定时点。
+    if (source.failCount >= 1 && !RATE_LIMIT.test(String(source.lastError || ''))) {
+      const retry = Math.min(120, 5 * 2 ** (source.failCount - 1)) * 60000
+      return now() - last >= retry
+    }
+    return false
+  }
   async function tick() {
     if (disposed || tickBusy) return
     tickBusy = true
     try {
       // 周六/周日休市不自动同步；来源可用 syncWeekends 显式退出（为加密资产账户预留）。
+      // 每天定时由用户明确选择时间，不受周末规则影响。
       const day = new Date(now()).getDay(), weekend = day === 0 || day === 6
       const due = config.read().filter(source => {
-        if (!source.enabled || !source.intervalMinutes || inFlight.has(source.id)) return false
+        if (!source.enabled || inFlight.has(source.id)) return false
         if (source.needsReauth) return false // 认证失效：只等手动同步或重新授权
+        const schedule = normalizeSchedule(source.schedule, source.intervalMinutes)
+        if (schedule.kind === 'daily') return dailyDue(source, schedule)
+        if (!(schedule.minutes > 0)) return false // 0 = 仅手动同步
         if (weekend && source.syncWeekends !== true) return false
         const last = Date.parse(source.lastAttemptAt || '')
-        if (Number.isFinite(last) && now()-last < dueMinutes(source)*60000) return false
+        if (Number.isFinite(last) && now()-last < dueMinutes(source, schedule.minutes)*60000) return false
         return true
       })
       // 同一连接器串行（一条链），跨连接器并行；一条 MCP 卡住不再拖住其他来源。
