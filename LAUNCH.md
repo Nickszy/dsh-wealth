@@ -63,13 +63,45 @@
 
 ## 发布前检查清单
 
-- [ ] 英文界面（至少核心页面：总览 / 账户 / 分析 / 流水 / 设置）
+- [x] 英文界面（导航 / 总览 / 账户 / 分析 / 流水 / 设置等核心标签，右上角 EN ↔ 中文切换并记住选择；长段解释性文案暂保留中文）
 - [ ] 演示视频（60–90 秒：连接同花顺 → 看到净值曲线 → 导入微信账单 → 问 AI）
+
+### 演示视频分镜脚本（照此录制即可，60–75 秒）
+
+| 镜头 | 时长 | 画面 | 旁白/字幕 |
+|---|---|---|---|
+| 1 | 0–8s | 空账本 onboarding 三步 | "All your brokers, bills and cash — one local ledger." |
+| 2 | 8–20s | 授权弹窗：登录同花顺 → 账户自动出现 | "One login to THS Ledger (or Futu / Longbridge / IB). Positions sync automatically." |
+| 3 | 20–35s | 分析页：历史净值曲线 + 资产类别/行业/风格 | "See how your money actually moved — rebuilt from your own flows and historical prices." |
+| 4 | 35–50s | 导入微信账单 CSV → 分类 → 预算条 | "Import WeChat/Alipay statements. Spending is categorized and budgeted automatically." |
+| 5 | 50–65s | 资产助手：'把招商轮船的行业改成航运' → 待确认 → 应用 | "The AI reads and edits the same ledger — always preview before apply." |
+| 6 | 65–75s | 总览收尾：净值 + 今日提醒 | "Local-first. Encrypted. Your data never leaves this machine." |
 - [ ] 截图按上表补齐（浅色 + 深色各一套）
-- [ ] 首次启动引导已验证（三步 onboarding）
+- [x] 首次启动引导已验证（三步 onboarding，预览 fixture 验证）
 - [ ] 错误路径演示：同步失败、重复导入、授权失效的处理文案
-- [ ] 隐私说明与数据目录文档
-- [ ] DSH 插件安装说明与版本号
+- [x] 隐私说明（本机账本、AES-256-GCM 凭据、不出机）
+- [ ] DSH 插件安装说明与版本号（v0.9.0 → 发布前确认）
+
+## Product Hunt 就绪自评（2026-11-08）
+
+对照目标逐项评估，避免"功能存在但发布条件不足"：
+
+| 目标能力 | 状态 | 证据 / 差距 |
+|---|---|---|
+| 券商自动同步（THS / 富途 / 长桥 / IB） | ✅ | 真实账本多账户同步通过；THS 快照含累计入金/出金 |
+| 统一资产负债表 + 现金/理财/基金/股票分类 | ✅ | 账户页按组汇总；分析页换手资产类别/行业/风格 |
+| 现金流量表（累计入金/出金、分红、费用） | ✅ | 含 THS 接口口径；推定入金在下限场景兜底 |
+| 历史资产变化（合并视图） | ✅ | 分析页合并净值曲线；单账户支持最大回撤 |
+| 报表（预计收支、预算、年度现金流） | ✅ | forecast / budgetStatus / yearly 表 |
+| 生活账单（微信/支付宝 CSV、分类、预算） | ✅ | 导入去重 + 关键词分类 + 月度汇总 |
+| AI 读写账本（先预览后应用） | ✅ | chat ops / historyEvent / budget；全部经 applyOp 校验 |
+| 其他 session 取数（CLI / API） | ✅ | cli.mjs 全覆盖 + 本机 API |
+| 银证转账逐笔还原 | ✅ | asset_change 二分定位到日（实测 60 请求 5 笔） |
+| 英文界面 | 🟡 | 核心标签完成；长句与动态拼接文案待补 |
+| 真实用户验证 / 演示视频 / 截图 | ❌ | 需真人录制与真机截图，代码无法替代 |
+| PH 提交与首发运营 | ❌ | 需要账号、排期与首批反馈渠道 |
+
+**结论：产品能力已具备发布条件，发布物料与真人验证是剩余瓶颈。** 冲刺第一名的关键不在再加功能，而在：60 秒内讲清"一个本机账本 + 所有券商 + 生活账单 + AI 直接改账"这一差异点，以及首批用户的可信评价。
 
 ## 已知限制（发布时如实说明）
 
