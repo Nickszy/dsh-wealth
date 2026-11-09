@@ -153,7 +153,8 @@ function position(row, accountId, warnings) {
   if (!Object.hasOwn(classes, row.assetClass)) fail('IB position assetClass is unsupported; only long cash stocks, ETFs and funds are supported')
   if (row.multiplier != null && numeric(row.multiplier, 'position multiplier') !== 1) fail('IB position multiplier is unsupported')
   const symbol = nonempty(row.ticker) ? row.ticker.trim() : `CONID-${conid}`
-  const avgCost = numeric(row.avgCost, 'position average cost')
+  // v2.1: IB normally supplies avgCost; when it is absent the row still imports with null cost.
+  const avgCost = row.avgCost == null ? null : numeric(row.avgCost, 'position average cost')
   const manualPrice = row.mktPrice == null ? null : numeric(row.mktPrice, 'position market price')
   if (manualPrice === null) warnings.push(`PRICE_UNAVAILABLE: IBKR:${conid}; current market price is unavailable`)
   return {
@@ -212,6 +213,8 @@ export async function fetchIbSnapshot(source, secrets = {}, signal, deps = {}) {
     }
     if (!finished) fail('IB positions page limit reached; no truncated snapshot returned')
     holdings.push(...cashFrom(await get(`/portfolio/${encodeURIComponent(accountId)}/ledger`), accountId))
-    return { holdings, complete: true, warnings, queriedAt: new Date().toISOString(), uploadedAt: null, quoteDate: null }
+    // v2.2: positions (stock/ETF/fund) and the ledger (cash) are distinct segments. Any call
+    // failure still rejects the whole snapshot, so success always means every segment is full.
+    return { holdings, coverage: { stock: 'full', fund: 'full', cash: 'full' }, warnings, queriedAt: new Date().toISOString(), uploadedAt: null, quoteDate: null }
   })
 }

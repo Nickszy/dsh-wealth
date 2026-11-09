@@ -334,16 +334,19 @@ export async function listTigerAccounts(source, secrets, signal, deps = {}) {
 
 function positionRows(payload) {
   const rows = []
+  // A row with a symbol but no quantity is malformed: it belongs in the ledger
+  // but cannot be imported, so its segment can no longer be full.
+  let malformed = 0
   eachArray(payload, (list) => {
     for (const item of list) {
       if (!item || typeof item !== 'object' || Array.isArray(item)) continue
       const symbol = text(pick(item, CODE_FIELDS))
       if (!symbol) continue
-      if (number(pick(item, QTY_FIELDS)) === null) continue
+      if (number(pick(item, QTY_FIELDS)) === null) { malformed++; continue }
       rows.push(item)
     }
   })
-  return rows
+  return { rows, malformed }
 }
 
 /**
@@ -428,9 +431,8 @@ function unrealizedTotal(payload) {
 }
 
 /**
- * Map one position row. `coverageLost` is true when the row belongs in the ledger
- * but had to be skipped (unknown cost): the snapshot can then no longer delete
- * holdings that are absent from it.
+ * Map one position row. Unknown cost becomes `avgCost: null` (v2.1) instead of a
+ * fabricated price or a skipped row, so a missing cost never reduces coverage.
  */
 function positionToHolding(row, warnings) {
   const symbol = text(pick(row, CODE_FIELDS))
@@ -447,12 +449,8 @@ function positionToHolding(row, warnings) {
   const market = marketOf(row)
   const currency = (text(pick(row, CURRENCY_FIELDS)) || CURRENCY_BY_MARKET[market] || 'HKD').toUpperCase()
   const price = number(pick(row, PRICE_FIELDS))
-  let cost = number(pick(row, COST_FIELDS))
-  if (cost === null && price !== null) { cost = price; warnings.push(`TIGER_COST_ASSUMED:${symbol} 来源未提供成本，按现价暂估`) }
-  if (cost === null) {
-    warnings.push(`TIGER_COST_UNAVAILABLE:${symbol} 成本未知，已跳过`)
-    return { holding: null, coverageLost: true }
-  }
+  // 未知成本保留为 null，不伪造、也不跳过该行。
+  const cost = number(pick(row, COST_FIELDS))
   return {
     holding: {
       symbol,
@@ -474,31 +472,32 @@ export async function fetchTigerSnapshot(source, secrets, signal, deps = {}) {
   const mcp = createClient(secrets, signal, deps)
   try {
     const warnings = []
-    // complete 只表示覆盖完整：任一持仓/现金接口失败、可能被截断、或有行被跳过时为 false。
-    // 缺价格只影响展示，不影响 complete。
-    let complete = true
+    // v2 分段覆盖：complete 由覆盖率派生。缺价格/缺成本只影响展示，不影响覆盖。
+    const coverage = { cash: 'full', stock: 'full', fund: 'full' }
     const authError = (error) => /认证|授权|401|403|expired|unauthor/i.test(String(error?.message || error))
     // 不要传 base_currency：服务端只接受具体币种（baseCurrency，camelCase），
     // 传 ALL/下划线会被整段拒绝；segments 本身按币种返回。
     const assets = await mcp.call('get_assets', { account }).catch((error) => {
       if (authError(error)) throw error
-      complete = false
+      coverage.cash = 'failed'
       warnings.push('TIGER_ASSET_SUMMARY_UNAVAILABLE:老虎资产汇总读取失败：' + String(error?.message || error))
       return null
     })
     const positions = []
     for (const secType of ['STK', 'FUND']) {
+      const segment = secType === 'STK' ? 'stock' : 'fund'
       try {
         const payload = await mcp.call('get_positions', { account, sec_type: secType, limit: 200 })
-        const rows = positionRows(payload)
+        const { rows, malformed } = positionRows(payload)
+        if (malformed > 0) coverage[segment] = 'partial'
         if (rows.length >= 200) {
-          complete = false
+          coverage[segment] = 'partial'
           warnings.push(`TIGER_POSITIONS_PAGE_LIMIT:${secType} 可能被截断，请拆分账户查看`)
         }
         positions.push(...rows)
       } catch (error) {
         if (authError(error)) throw error
-        complete = false
+        coverage[segment] = 'failed'
         const label = secType === 'STK' ? '股票' : '基金'
         warnings.push(`TIGER_${secType}_POSITIONS_UNAVAILABLE:老虎${label}持仓读取失败：` + String(error?.message || error))
       }
@@ -507,8 +506,7 @@ export async function fetchTigerSnapshot(source, secrets, signal, deps = {}) {
     const seen = new Set()
     const holdings = []
     for (const row of positions) {
-      const { holding, coverageLost } = positionToHolding(row, warnings)
-      if (coverageLost) complete = false
+      const { holding } = positionToHolding(row, warnings)
       if (!holding) continue
       const key = holding.market + ':' + holding.symbol + ':' + holding.currency
       if (seen.has(key)) continue
@@ -545,7 +543,7 @@ export async function fetchTigerSnapshot(source, secrets, signal, deps = {}) {
 
     return {
       holdings,
-      complete,
+      coverage,
       warnings,
       queriedAt: new Date(deps.now?.() ?? Date.now()).toISOString(),
       uploadedAt: null,

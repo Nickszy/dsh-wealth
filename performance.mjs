@@ -43,7 +43,7 @@ export function buildPerformance(db, timeline, { prices, fx, baseCurrency = db.b
   for (const id of new Set(timeline.states.flatMap((s) => Object.keys(s.positions)))) {
     if (prices.has(id)) continue
     const h = holdingById.get(id), ins = insById.get(id)
-    const price = h?.manualPrice ?? h?.quotePrice ?? h?.avgCost ?? null
+    const price = h?.manualPrice ?? h?.quotePrice ?? h?.sourcePrice ?? h?.avgCost ?? null
     if (typeof price === 'number' && Number.isFinite(price) && price > 0) {
       flat.set(id, price)
       warnings.push('PERF_FLAT_PRICE:' + (ins?.symbol || id))

@@ -38,11 +38,13 @@ test('requires explicit account and refuses foreign account before position fetc
   await assert.rejects(fetchStandaloneThsSnapshot({ portfolioId: 'foreign' }, secrets, undefined, d), { code: 'PORTFOLIO_NOT_FOUND' })
   assert.equal(d.calls.length, 1)
 })
-test('missing quantity/cost skips row and cannot prune; null cash never becomes zero', async () => {
+test('missing quantity skips row and cannot prune; null cash never becomes zero', async () => {
   const f = fixture({ money_remain: null }); f.position[0].count = null
   const result = await fetchStandaloneThsSnapshot(source, secrets, undefined, deps(f))
   assert.equal(result.complete, false); assert.deepEqual(result.holdings, [])
   assert.equal(result.sourceTotals.cash, null); assert.ok(result.warnings.some(v => v.startsWith('MISSING_POSITION_FIELDS')))
+  // 现金字段缺失时现金行不存在：只降级存在的 stock 段。
+  assert.deepEqual(result.coverage, { stock: 'partial' })
 })
 test('null quote stays null and does not lose coverage', async () => {
   const f = fixture(); f.position[0].price = null
@@ -57,14 +59,41 @@ test('contract: normal THS snapshot passes the shared snapshot contract', async 
   const normalized = assertSnapshotContract(raw, { complete: true })
   assert.deepEqual(normalized.holdings.map(h => [h.symbol, h.assetClass]), [['600000', 'stock'], ['CASH:CNY', 'cash']])
   assert.deepEqual(normalized.sourceTotals, { cash: 50, totalValue: 200, totalAsset: 250, totalLiability: 0, investedPct: 80, holdingProfit: 40, dayProfit: -2 })
+  assert.deepEqual(normalized.coverage, { stock: 'full', cash: 'full' })
   assertNoCrossCurrencySum(raw, ['cash'])
 })
-test('contract: a cost-less position is skipped and coverage is marked incomplete', async () => {
+test('contract: a cost-less position imports with avgCost null and coverage stays full', async () => {
   const f = fixture(); f.position[0].cost = null
   const raw = await fetchStandaloneThsSnapshot(source, secrets, undefined, deps(f))
-  assertSnapshotContract(raw, { complete: false, warning: /^MISSING_POSITION_FIELDS:2:600000/ })
-  assert.ok(!raw.holdings.some(h => h.symbol === '600000'))
-  assert.deepEqual(raw.holdings.map(h => h.assetClass), ['cash'])
+  const normalized = assertSnapshotContract(raw, { complete: true })
+  const row = normalized.holdings.find(h => h.symbol === '600000')
+  assert.equal(row.avgCost, null)
+  assert.notEqual(row.avgCost, 0)
+  assert.ok(!normalized.warnings.some(w => w.startsWith('MISSING_POSITION_FIELDS')))
+  assert.deepEqual(normalized.coverage, { stock: 'full', cash: 'full' })
+  assert.deepEqual(normalized.holdings.map(h => h.assetClass), ['stock', 'cash'])
+})
+test('contract: a per-row value mismatch degrades only the stock segment', async () => {
+  // 行市值改成错账：行照常入库，stock 段 partial；现金段不受影响。
+  const f = fixture({ total_value: '999', total_asset: '1049' }); f.position[0].value = '999'
+  const raw = await fetchStandaloneThsSnapshot(source, secrets, undefined, deps(f))
+  const normalized = assertSnapshotContract(raw, { complete: false, warning: /^POSITION_VALUE_MISMATCH:2:600000/ })
+  assert.deepEqual(normalized.coverage, { stock: 'partial', cash: 'full' })
+  assert.deepEqual(normalized.holdings.map(h => h.assetClass), ['stock', 'cash'])
+})
+test('contract: a missing asset field degrades every present segment', async () => {
+  const f = fixture({ total_value: null })
+  const raw = await fetchStandaloneThsSnapshot(source, secrets, undefined, deps(f))
+  const normalized = assertSnapshotContract(raw, { complete: false, warning: /^MISSING_ASSET_FIELD:totalValue/ })
+  assert.deepEqual(normalized.coverage, { stock: 'partial', cash: 'partial' })
+})
+test('contract: info-severity warnings keep the run clean and complete', async () => {
+  // 价格/市值缺失与上传时间缺失都是 info：不影响 complete，也不降级任何段。
+  const f = fixture({ upload_time: '' }); f.position[0].price = null; f.position[0].value = null
+  const raw = await fetchStandaloneThsSnapshot(source, secrets, undefined, deps(f))
+  const normalized = assertSnapshotContract(raw, { complete: true, severity: { PRICE_UNAVAILABLE: 'info', MISSING_POSITION_VALUE: 'info', UPLOAD_TIME_UNAVAILABLE: 'info' } })
+  assert.equal(normalized.holdings[0].manualPrice, null)
+  assert.deepEqual(normalized.coverage, { stock: 'full', cash: 'full' })
 })
 test('contract: a failed holdings call returns no snapshot instead of a prunable one', async () => {
   const base = deps()
@@ -88,8 +117,21 @@ test('contract: a NAV-less fund holding warns without losing coverage', async ()
     fund: [{ fundcode: '110022', fundname: '消费龙头', fundcount: '100', fundcost: '85', fundnav: '', fundvalue: '', date: '2026-11-01', percost: '' }],
     currencyfund: [], onwayfund: [], clearfund: [], empty: 'false' }
   const raw = await fetchStandaloneThsSnapshot({ portfolioId: '100108832246', thsBookType: 'ijj' }, secrets, undefined, fundDeps({ merge }))
-  const normalized = assertSnapshotContract(raw, { complete: true, warning: /^PRICE_UNAVAILABLE:110022/ })
+  // 净值/市值缺失是 info 级：行照常入库，complete 与 coverage 都不受影响。
+  const normalized = assertSnapshotContract(raw, { complete: true, warning: /^PRICE_UNAVAILABLE:110022/, severity: { PRICE_UNAVAILABLE: 'info', MISSING_FUND_VALUE: 'info' } })
   assert.equal(normalized.holdings[0].manualPrice, null)
+  assert.deepEqual(normalized.coverage, { fund: 'full' })
+})
+test('contract: a cost-less fund row imports with avgCost null and full coverage', async () => {
+  // percost 与 fundcost 都拿不到：成本未知（null）照常入库，不再跳行。
+  const merge = { account: { cust_id: '100108832246', username: '爱基金', total_asset: '90', total_cost: '0', trans_date: '2026-11-01' },
+    fund: [{ fundcode: '110022', fundname: '消费龙头', fundcount: '100', fundcost: '', fundnav: '0.9', fundvalue: '90', date: '2026-11-01', percost: '' }],
+    currencyfund: [], onwayfund: [], clearfund: [], empty: 'false' }
+  const raw = await fetchStandaloneThsSnapshot({ portfolioId: '100108832246', thsBookType: 'ijj' }, secrets, undefined, fundDeps({ merge }))
+  const normalized = assertSnapshotContract(raw, { complete: true })
+  assert.equal(normalized.holdings[0].avgCost, null)
+  assert.ok(!normalized.warnings.some(w => w.startsWith('MISSING_FUND_FIELDS')))
+  assert.deepEqual(normalized.coverage, { fund: 'full' })
 })
 test('missing upstream arrays, null data, error results reject without snapshot', async () => {
   for (const data of [null, {}, { position: null }]) await assert.rejects(fetchStandaloneThsSnapshot(source, secrets, undefined, deps(data)), { code: 'INVALID_RESPONSE' })
@@ -267,6 +309,37 @@ test('fund snapshot (ijj) maps merge_fund to holdings with percost avg cost and 
   assert.equal(result.quoteDate, '2026-11-06')
   assert.equal(result.complete, true)
 })
+test('fund snapshot quoteDate comes only from NAV dates, never from trans_date', async () => {
+  // trans_date（11-08，周日）会逐日前进，而净值日期只在基金披露时前进；快照水位必须取净值日期。
+  const merge = { account: { cust_id: '100108832246', username: '爱基金', total_asset: '100', total_cost: '95', trans_date: '2026-11-08' },
+    fund: [
+      { fundcode: '110022', fundname: '消费龙头', fundcount: '100', fundcost: '85', fundnav: '0.9', fundvalue: '90', date: '2026-11-06', percost: '' },
+      { fundcode: '110023', fundname: '另一只', fundcount: '10', fundcost: '10', fundnav: '1', fundvalue: '10', date: '2026-11-05', percost: '1' },
+    ], currencyfund: [], onwayfund: [], clearfund: [], empty: 'false' }
+  const result = await fetchStandaloneThsSnapshot({ portfolioId: '100108832246', thsBookType: 'ijj' }, secrets, undefined, fundDeps({ merge }))
+  assert.equal(result.quoteDate, '2026-11-06')
+})
+test('fund snapshot without NAV rows leaves quoteDate null instead of using trans_date', async () => {
+  const merge = { account: { cust_id: '100108832246', username: '爱基金', total_asset: '0', total_cost: '0', trans_date: '2026-11-08' }, fund: [], currencyfund: [], onwayfund: [], clearfund: [], empty: 'false' }
+  const result = await fetchStandaloneThsSnapshot({ portfolioId: '100108832246', thsBookType: 'ijj' }, secrets, undefined, fundDeps({ merge }))
+  assert.equal(result.quoteDate, null)
+})
+test('onway/clear fund rows are not holdings: skipped with warnings and coverage stays complete', async () => {
+  // 在途申购（onwayfund）与已清仓（clearfund）都不是已确认持仓：跳过它们不会漏删任何活跃持仓。
+  const merge = { account: { cust_id: '100108832246', username: '爱基金', total_asset: '90', total_cost: '85', trans_date: '2026-11-08' },
+    fund: [{ fundcode: '110022', fundname: '消费龙头', fundcount: '100', fundcost: '85', fundnav: '0.9', fundvalue: '90', date: '2026-11-06', percost: '' }],
+    currencyfund: [],
+    onwayfund: [{ fundcode: '000001', fundname: '在途申购', fundcount: '0', fundcost: '0', fundnav: '1', fundvalue: '0', date: '2026-11-06' }],
+    clearfund: [{ fundcode: '000002', fundname: '已清仓', fundcount: '0', fundcost: '0', fundnav: '1', fundvalue: '0', date: '2026-11-06' }],
+    empty: 'false' }
+  const result = await fetchStandaloneThsSnapshot({ portfolioId: '100108832246', thsBookType: 'ijj' }, secrets, undefined, fundDeps({ merge }))
+  assert.equal(result.complete, true)
+  // 在途/已清仓不是持仓缺口：告警照发，coverage 不降级。
+  assert.deepEqual(result.coverage, { fund: 'full' })
+  assert.deepEqual(result.holdings.map(h => h.symbol), ['110022'])
+  assert.ok(result.warnings.includes('THS_FUND_SKIPPED:onwayfund:1'))
+  assert.ok(result.warnings.includes('THS_FUND_SKIPPED:clearfund:1'))
+})
 test('fund snapshot (manFund) uses fundid and derives avg cost when percost missing', async () => {
   const merge = { account: { cust_id: '', username: '南洋基金', total_asset: '9000', total_cost: '8500', trans_date: '2026-11-01' }, fund: [{ fundcode: '110022', fundname: '消费龙头', fundtype: '0', fundcount: '100', fundcost: '85', fundnav: '0.9', fundvalue: '90', date: '2026-11-01', percost: '', onway: '0', unconf_count: 0 }], currencyfund: [], onwayfund: [], clearfund: [], empty: 'false' }
   const d = fundDeps({ merge }), result = await fetchStandaloneThsSnapshot({ portfolioId: '24507604', thsBookType: 'manFund' }, secrets, undefined, d)
@@ -280,6 +353,7 @@ test('fund snapshot rejects foreign book, invalid codes, bad values and skips on
   const bad = fundDeps({ merge: { account: { cust_id: '100108832246', username: '爱基金', total_asset: '10', total_cost: '9', trans_date: '2026-11-06' }, fund: [{ fundcode: 'AB12', fundname: '坏代码', fundcount: '1', fundcost: '1', fundnav: '1', fundvalue: '1', date: '2026-11-06' }, { fundcode: '110022', fundname: '缺数量', fundcount: '0', fundcost: '1', fundnav: '1', fundvalue: '0', date: '2026-11-06' }, { fundcode: '110023', fundname: '价值不符', fundcount: '10', fundcost: '10', fundnav: '1', fundvalue: '99', date: '2026-11-06' }], currencyfund: [], onwayfund: [{ fundcode: '000001' }], clearfund: [], empty: 'false' } })
   const result = await fetchStandaloneThsSnapshot({ portfolioId: '100108832246', thsBookType: 'ijj' }, secrets, undefined, bad)
   assert.equal(result.complete, false)
+  assert.deepEqual(result.coverage, { fund: 'partial' })
   assert.ok(result.warnings.some(w => w.startsWith('INVALID_FUND_CODE')))
   assert.ok(result.warnings.some(w => w.startsWith('MISSING_FUND_FIELDS')))
   assert.ok(result.warnings.some(w => w.startsWith('FUND_VALUE_MISMATCH')))

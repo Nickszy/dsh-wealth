@@ -470,7 +470,7 @@ window.__ModuleLoader__.load({
           kpi({ label: '持仓成本', icon: 'analysis', value: fmtMoney(s.totalCostBase), color: t.terra,
             sub: h('span', null, db.holdings.length + ' 项持仓 · ' + db.accounts.length + ' 个账户') }),
           kpi({ label: '浮动盈亏', icon: 'overview', value: fmtMoney(s.totalPnlBase), color: s.totalPnlBase >= 0 ? t.green : t.red, valueColor: s.totalPnlBase >= 0 ? t.green : t.red,
-            sub: h('span', null, '成本回报 ' + fmtPct(pnlPct)) }),
+            sub: h('span', null, '成本回报 ' + fmtPct(pnlPct) + (s.holdingsWithoutCost ? ' · ' + s.holdingsWithoutCost + ' 条成本未知' : '')) }),
           kpi({ label: '账户 / 持仓', icon: 'accounts', value: db.accounts.length + ' / ' + db.holdings.length, color: t.accent2 || t.accent,
             sub: h('span', null, groupCount.cash + ' 现金 · ' + groupCount.invest + ' 投资 · ' + groupCount.credit + ' 信用') })),
         h(DashboardCharts, { t, state, call, busy }),
@@ -1310,7 +1310,8 @@ window.__ModuleLoader__.load({
                   h('div', { style: { display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginTop: -4, fontSize: 12.5 } },
                     h('span', { style: { padding: '4px 11px', borderRadius: 999, fontWeight: 700, fontVariantNumeric: 'tabular-nums', background: (pnl >= 0 ? t.green : t.red) + '18', color: pnl >= 0 ? t.green : t.red } },
                       (pnl >= 0 ? '▲ ' : '▼ ') + fmtMoney(Math.abs(pnl), cur) + ' · ' + (state.summary.totalCostBase > 0 ? fmtPct(pnl / state.summary.totalCostBase) : '—')),
-                    h('span', { style: { color: t.sub } }, '浮动盈亏')))),
+                    h('span', { style: { color: t.sub } }, '浮动盈亏'),
+                    state.summary.holdingsWithoutCost ? h('span', { style: { color: t.sub, fontSize: 11 } }, '· ' + state.summary.holdingsWithoutCost + ' 条成本未知') : null))),
               h('div', { className: 'wealth-metrics', style: { paddingTop: 14 } },
                 h('div', null, h('span', { style: T.label(t) }, '资产合计'), h('strong', null, fmtMoney(assets, cur))),
                 h('div', null, h('span', { style: T.label(t) }, '负债合计'), h('strong', { style: { color: liabilities ? t.terra : t.text } }, fmtMoney(liabilities, cur))),
@@ -1401,6 +1402,9 @@ window.__ModuleLoader__.load({
       // 与快照无关、不依赖本机历史；sourceTotals 以来源币种计，按汇率折算展示。
       const brokerPnl = typeof account.sourceTotals?.holdingProfit === 'number' && Number.isFinite(account.sourceTotals.holdingProfit)
         ? account.sourceTotals.holdingProfit * (cur === account.currency ? 1 : (state.summary.fx[account.currency] || 1)) : null
+      // 成本未知的持仓不计入成本与盈亏；在盈亏卡片上注明条数，避免把缺失当成 0。
+      const accountHoldingIds = new Set(db.holdings.filter(h => h.accountId === accountId).map(h => h.id))
+      const unknownCostRows = (state.summary.warnings || []).filter(w => w && w.code === 'unknown-cost' && accountHoldingIds.has(w.holdingId)).length
       const subs = [['holdings', '持仓'], ['trades', '流水'], ['symbols', '个股'], ['analysis', '分析'], ['backfill', '补录账单']]
       const metric = (label, value, color) => h('div', null, h('span', { style: T.label(t) }, label), h('strong', { style: { color, fontSize: typeof value === 'string' && value.length > 12 ? 12 : undefined } }, value))
       return h('div', null,
@@ -1416,7 +1420,7 @@ window.__ModuleLoader__.load({
               h('button', { style: { ...T.btn(t, false), color: t.red }, disabled: busy, onClick: removeAccount }, '删除'))),
           h('div', { className: 'wealth-metrics', style: { paddingBottom: 12 } },
             metric('持仓成本', fmtMoney(sa.costBase, cur)),
-            metric('浮动盈亏', fmtMoney(sa.pnlBase, cur), (sa.pnlBase || 0) >= 0 ? t.green : t.red),
+            metric('浮动盈亏' + (unknownCostRows ? ' · ' + unknownCostRows + ' 条成本未知' : ''), fmtMoney(sa.pnlBase, cur), (sa.pnlBase || 0) >= 0 ? t.green : t.red),
             brokerPnl != null ? metric('持有盈亏（券商）', fmtMoney(brokerPnl, cur), brokerPnl >= 0 ? t.green : t.red) : null,
             metric('最近同步', source ? (source.lastSuccessAt ? dateTimeText(source.lastSuccessAt) : '尚未同步') : '手动维护'),
             metric('流水已同步至', hs?.lastTo || (source ? '尚未同步' : '—')))),
@@ -1454,7 +1458,9 @@ window.__ModuleLoader__.load({
       const open = (f, isEdit) => { setForm(f); setEditing(!!isEdit); setMsg('') }
       const submit = async () => {
         if (!form.accountId || !form.symbol.trim()) { setMsg('请选择账户并填写代码'); return }
-        const r = await call('holding.upsert', { holding: { ...form, currency: form.currency || undefined, qty: form.qty, avgCost: form.avgCost, manualPrice: form.manualPrice === '' ? null : form.manualPrice } })
+        // 成本留空 = 未知（null），与真实的 0 成本区分；输入的 0 仍按数字保存。
+        const avgCost = String(form.avgCost ?? '').trim() === '' ? null : form.avgCost
+        const r = await call('holding.upsert', { holding: { ...form, currency: form.currency || undefined, qty: form.qty, avgCost, manualPrice: form.manualPrice === '' ? null : form.manualPrice } })
         if (!r.ok) { setMsg(r.error?.message || '保存失败'); return }
         const ins = r.ledger.instruments.find(i => i.symbol === form.symbol && i.market === form.market)
         if (ins && (ins.assetClass !== form.assetClass || (form.name && ins.name !== form.name) || (form.sector || '') !== (ins.sector || '') || (form.style || '') !== (ins.style || ''))) {
@@ -1483,7 +1489,9 @@ window.__ModuleLoader__.load({
         if (!g) { g = { key, rows: [], mv: 0 }; groups.push(g) }
         const ins = insMap.get(ho.instrumentId)
         const rate = ho.currency === db.baseCurrency ? 1 : db.fx[ho.currency]
-        if (Number.isFinite(rate) && rate > 0) g.mv += ho.qty * (ho.manualPrice ?? ho.quotePrice ?? ho.avgCost ?? 0) * rate
+        // 估值链：手填价 > 行情价 > 券商快照价 > 平均成本；全空时不计入（绝不按 0 计）。
+        const price = ho.manualPrice ?? ho.quotePrice ?? ho.sourcePrice ?? ho.avgCost
+        if (Number.isFinite(rate) && rate > 0 && price != null) g.mv += ho.qty * price * rate
         g.rows.push([ho, ins])
       }
       const totalMv = groups.reduce((s, g) => s + g.mv, 0)
@@ -1505,10 +1513,12 @@ window.__ModuleLoader__.load({
               h('tr', { key: 'g:' + g.key }, T.td(h('span', { style: { fontWeight: 650, fontSize: 12 } }, g.key, h('small', { style: { display: 'block', color: t.sub, fontWeight: 400 } }, g.rows.length + ' 项 · ' + fmtMoney(g.mv, db.baseCurrency) + (totalMv ? ' · ' + (g.mv / totalMv * 100).toFixed(1) + '%' : ''))), t, { colSpan: accountId ? 7 : 8 })),
               g.rows.map(([ho, ins]) => {
                 const acc = accMap.get(ho.accountId)
-                const price = ho.manualPrice ?? ho.quotePrice ?? ho.avgCost ?? 0
+                // 估值链：手填价 > 行情价 > 券商快照价 > 平均成本；全空时市值为「—」，绝不按 0 计。
+                const price = ho.manualPrice ?? ho.quotePrice ?? ho.sourcePrice ?? ho.avgCost
                 const rate = ho.currency === db.baseCurrency ? 1 : db.fx[ho.currency]
-                const mv = Number.isFinite(rate) && rate > 0 ? ho.qty * price * rate : null
+                const mv = Number.isFinite(rate) && rate > 0 && price != null ? ho.qty * price * rate : null
                 const quoteTag = ho.manualPrice == null && ho.quotePrice != null ? h('small', { style: { display: 'block', color: t.sub, fontSize: 10 } }, '行情' + (ho.quoteAt ? ' ' + String(ho.quoteAt).slice(5, 10) : '')) : null
+                const sourceTag = ho.manualPrice == null && ho.quotePrice == null && ho.sourcePrice != null ? h('small', { style: { display: 'block', color: t.sub, fontSize: 10 } }, '券商价') : null
                 return h('tr', { key: ho.id },
                   T.td(h('span', null, (ins ? ins.name + ' ' + ins.symbol : ho.instrumentId), ins?.sector ? h('small', { style: { display: 'block', color: t.sub } }, ins.sector + (ins.style ? ' · ' + styleLabel(ins.style) : '')) : null), t),
                   accountId ? null : T.td(acc ? acc.name : ho.accountId, t),
@@ -1516,7 +1526,7 @@ window.__ModuleLoader__.load({
                   T.td(fmtMoney(ho.avgCost), t),
                   T.td(h('span', null,
                     h('input', { defaultValue: ho.manualPrice ?? '', placeholder: ho.quotePrice != null ? String(ho.quotePrice) : '手填', title: ho.manualPrice != null ? '手填价格（清空则改用行情/成本）' : ho.quotePrice != null ? '输入框为空：使用行情价 ' + ho.quotePrice + '；填写后以手填优先' : '手填现价，离开输入框保存', onBlur: (e) => { const v = e.target.value; if (String(ho.manualPrice ?? '') !== v) call('price.set', { holdingId: ho.id, price: v === '' ? null : Number(v) }) }, style: { ...T.input(t), width: 78 } }),
-                    quoteTag), t),
+                    quoteTag, sourceTag), t),
                   T.td(ho.currency, t),
                   T.td(fmtMoney(mv, db.baseCurrency), t),
                   T.td(h('span', null,

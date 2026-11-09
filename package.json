@@ -46,6 +46,7 @@
     "chat.mjs",
     "sync.mjs",
     "connectors.mjs",
+    "snapshot-schema.mjs",
     "connector-registry.mjs",
     "credentials.mjs",
     "ths-client.mjs",

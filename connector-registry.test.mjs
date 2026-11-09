@@ -114,3 +114,26 @@ test('adapter modules never import the registry (dependency is one-way)', () => 
     assert.doesNotMatch(readFileSync(new URL('./' + file, import.meta.url), 'utf8'), /connector-registry/, file)
   }
 })
+
+test('ths-client imports the snapshot schema directly so the registry cycle stays broken', () => {
+  const read = file => readFileSync(new URL('./' + file, import.meta.url), 'utf8')
+  // 旧环：connector-registry → ths-client → connectors → connector-registry。
+  assert.doesNotMatch(read('ths-client.mjs'), /from '\.\/connectors\.mjs'/, 'ths-client.mjs must not import connectors.mjs')
+  assert.match(read('ths-client.mjs'), /from '\.\/snapshot-schema\.mjs'/, 'ths-client.mjs imports the schema directly')
+  assert.match(read('connectors.mjs'), /from '\.\/connector-registry\.mjs'/, 'connectors.mjs keeps the registry import for the catalogue')
+  const schema = read('snapshot-schema.mjs')
+  assert.doesNotMatch(schema, /connector-registry/, 'snapshot-schema.mjs must not import the registry')
+  assert.doesNotMatch(schema, /from '\.\/connectors\.mjs'/, 'snapshot-schema.mjs must stay a leaf module')
+})
+
+test('the registry imports native history from adapters, never from history-provider', () => {
+  const read = file => readFileSync(new URL('./' + file, import.meta.url), 'utf8')
+  const registry = read('connector-registry.mjs')
+  // history-provider -> registry is the only direction: the dispatcher looks transports up.
+  assert.doesNotMatch(registry, /history-provider/, 'connector-registry.mjs must not import history-provider.mjs')
+  assert.match(registry, /futuHistory[^\n]*from '\.\/futu-mcp\.mjs'/)
+  assert.match(registry, /longbridgeHistory[^\n]*from '\.\/lb-mcp\.mjs'/)
+  assert.match(read('futu-mcp.mjs'), /export async function futuHistory\b/)
+  assert.match(read('lb-mcp.mjs'), /export async function longbridgeHistory\b/)
+  assert.match(read('history-provider.mjs'), /from '\.\/connector-registry\.mjs'/)
+})

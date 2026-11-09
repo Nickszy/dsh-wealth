@@ -1,7 +1,10 @@
-import { normalizeSnapshot } from './connectors.mjs'
+import { normalizeSnapshot } from './snapshot-schema.mjs'
 
 // Endpoint/form contracts and v3 cookie encoding adapted from dsh-ths-holdings
 // (MIT); see THS-NOTICE.txt. This module has no DSH or plugin runtime imports.
+// v2.3 警告分级：价格/市值/上传时间等数据质量警告标 info（SAFE_PARTIAL 同族），
+// 展示文本（message）保持既有字符串原样，warningDetails 里携带结构化分级。
+const infoWarning = (code, message) => ({ code, severity: 'info', message })
 const BASE = 'https://tzzb.10jqka.com.cn/caishen_httpserver/tzzb/caishen_fund/'
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36'
 export class ThsError extends Error {
@@ -122,25 +125,27 @@ export async function fetchStandaloneThsSnapshot(source, secrets, signal, deps =
   if (!Array.isArray(data.position)) fail('INVALID_RESPONSE', '同花顺持仓数据不完整，已保留现有持仓')
   if (data.currency !== undefined && !['CNY', 'RMB', '156'].includes(scalar(data.currency))) fail('UNSUPPORTED_ACCOUNT', '仅支持人民币沪深股票及 ETF 普通账本')
   const warnings = [], sourceTotals = {}, holdings = [], seen = new Set()
-  let complete = true
-  const missing = warning => { complete = false; warnings.push(warning) }
+  // v2.2 分段覆盖：stock 段固定存在（position 数组必填），cash 段只在现金行入库时
+  // 存在；degraded 里缺席的段在组装 coverage 时自然忽略。任一资产字段缺失即整体降级。
+  const degraded = new Set(), present = new Set(['stock'])
+  const degradeAll = () => { degraded.add('stock'); degraded.add('cash') }
   for (const [canonical, native] of [['cash', 'money_remain'], ['totalValue', 'total_value'], ['totalAsset', 'total_asset'], ['totalLiability', 'total_liability'], ['investedPct', 'position_rate']]) {
     const n = decimal(data[native])
     sourceTotals[canonical] = n === null ? null : canonical === 'investedPct' ? n * 100 : n
-    if (n === null) missing('MISSING_ASSET_FIELD:' + canonical)
+    if (n === null) { degradeAll(); warnings.push('MISSING_ASSET_FIELD:' + canonical) }
     if (n !== null && n < 0) fail('UNSUPPORTED_ACCOUNT', '不支持负资产或融资融券账本')
   }
   if (sourceTotals.totalLiability !== null && sourceTotals.totalLiability !== 0) fail('UNSUPPORTED_ACCOUNT', '仅支持无融资负债的普通账本')
   let holdingProfit = 0, dayProfit = 0
   for (const raw of data.position) {
     const row = record(raw), symbol = scalar(row.code), market = scalar(row.market)
-    const skip = warning => { complete = false; warnings.push(warning) }
+    const partial = warning => { degraded.add('stock'); warnings.push(warning) }
     // 港股通（market 15，5 位港股代码）：最新价与成本价是港币（A股行 value=数量×价格，
     // 港股行 value=数量×价格×汇率，即折算后的人民币），统一按港股 HKD 导入；value 列
     // 与 qty×price 不同币种，不参与逐行对账，人民币估值交给账本的 HKD 汇率。
     const hkConnect = market === '15' && /^\d{4,5}$/.test(symbol)
     if (!hkConnect && !(market === '1' ? /^[013]\d{5}$/.test(symbol) : market === '2' && /^[56]\d{5}$/.test(symbol))) {
-      skip('THS_POSITION_SKIPPED:UNSUPPORTED_MARKET:' + market + ':' + symbol)
+      partial('THS_POSITION_SKIPPED:UNSUPPORTED_MARKET:' + market + ':' + symbol)
       continue
     }
     const key = `${market}:${symbol}`
@@ -148,16 +153,17 @@ export async function fetchStandaloneThsSnapshot(source, secrets, signal, deps =
     seen.add(key)
     const qty = decimal(row.count), avgCost = decimal(row.cost), manualPrice = decimal(row.price), value = decimal(row.value)
     // 摊薄成本可以为负（分红总额超过投入成本）；数量、现价、市值为负才不可用。
-    if (qty !== null && qty < 0) { skip('THS_POSITION_SKIPPED:NEGATIVE_QTY:' + market + ':' + symbol); continue }
-    if ((manualPrice !== null && manualPrice < 0) || (value !== null && value < 0)) { skip('THS_POSITION_SKIPPED:NEGATIVE_VALUE:' + market + ':' + symbol); continue }
+    if (qty !== null && qty < 0) { partial('THS_POSITION_SKIPPED:NEGATIVE_QTY:' + market + ':' + symbol); continue }
+    if ((manualPrice !== null && manualPrice < 0) || (value !== null && value < 0)) { partial('THS_POSITION_SKIPPED:NEGATIVE_VALUE:' + market + ':' + symbol); continue }
     const hp = decimal(row.hold_profit), dp = decimal(row.pre_profit)
     holdingProfit = holdingProfit === null || hp === null ? null : holdingProfit + hp
     dayProfit = dayProfit === null || dp === null ? null : dayProfit + dp
-    if (qty === null || avgCost === null) { missing('MISSING_POSITION_FIELDS:' + key); continue }
-    // 价格/市值缺失只影响估值与对账质量，持仓行仍然可入库：complete 不受影响（P0 契约）。
-    if (manualPrice === null) warnings.push('PRICE_UNAVAILABLE:' + key)
-    if (value === null) warnings.push('MISSING_POSITION_VALUE:' + key)
-    if (manualPrice !== null && value !== null && !hkConnect && Math.abs(qty * manualPrice - value) > 0.011) missing('POSITION_VALUE_MISMATCH:' + key)
+    // v2.1：只有缺数量才跳行；缺成本（null）照常入库（成本未知 ≠ 零成本），不影响覆盖。
+    if (qty === null) { partial('MISSING_POSITION_FIELDS:' + key); continue }
+    // 价格/市值缺失只是数据质量（v2.3 info 级），持仓行仍然可入库，不影响覆盖。
+    if (manualPrice === null) warnings.push(infoWarning('PRICE_UNAVAILABLE', 'PRICE_UNAVAILABLE:' + key))
+    if (value === null) warnings.push(infoWarning('MISSING_POSITION_VALUE', 'MISSING_POSITION_VALUE:' + key))
+    if (manualPrice !== null && value !== null && !hkConnect && Math.abs(qty * manualPrice - value) > 0.011) partial('POSITION_VALUE_MISMATCH:' + key)
     holdings.push({
       symbol, name: scalar(row.name).trim() || symbol, market: hkConnect ? 'HK' : 'CN',
       assetClass: hkConnect || !/^(?:5[168]|15)/.test(symbol) ? 'stock' : 'etf',
@@ -166,18 +172,21 @@ export async function fetchStandaloneThsSnapshot(source, secrets, signal, deps =
     })
   }
   sourceTotals.holdingProfit = holdingProfit; sourceTotals.dayProfit = dayProfit
-  if (sourceTotals.cash !== null) holdings.push({ symbol: 'CASH:CNY', name: '人民币现金', market: 'CASH', assetClass: 'cash', currency: 'CNY', qty: sourceTotals.cash, avgCost: 1, manualPrice: 1, externalId: 'cash:CNY' })
+  if (sourceTotals.cash !== null) { present.add('cash'); holdings.push({ symbol: 'CASH:CNY', name: '人民币现金', market: 'CASH', assetClass: 'cash', currency: 'CNY', qty: sourceTotals.cash, avgCost: 1, manualPrice: 1, externalId: 'cash:CNY' }) }
   const values = data.position.map(row => decimal(row.value))
   if (values.every(v => v !== null)) {
     const sum = values.reduce((a, b) => a + b, 0)
-    if (sourceTotals.totalValue !== null && Math.abs(sum - sourceTotals.totalValue) > 0.011) missing('TOTAL_VALUE_MISMATCH')
-    if (sourceTotals.cash !== null && sourceTotals.totalAsset !== null && Math.abs(sum + sourceTotals.cash - sourceTotals.totalAsset) > 0.011) missing('TOTAL_ASSET_MISMATCH')
+    // 总额对不上说明手工账本缺行：所有存在的段一起降级（missing rows 的保守口径）。
+    if (sourceTotals.totalValue !== null && Math.abs(sum - sourceTotals.totalValue) > 0.011) { degradeAll(); warnings.push('TOTAL_VALUE_MISMATCH') }
+    if (sourceTotals.cash !== null && sourceTotals.totalAsset !== null && Math.abs(sum + sourceTotals.cash - sourceTotals.totalAsset) > 0.011) { degradeAll(); warnings.push('TOTAL_ASSET_MISMATCH') }
   }
   const uploaded = scalar(data.upload_time)
   const uploadedAt = /^\d{13}$/.test(uploaded) && Number.isFinite(new Date(Number(uploaded)).getTime()) ? new Date(Number(uploaded)).toISOString() : null
-  if (!uploadedAt) warnings.push('UPLOAD_TIME_UNAVAILABLE')
+  if (!uploadedAt) warnings.push(infoWarning('UPLOAD_TIME_UNAVAILABLE', 'UPLOAD_TIME_UNAVAILABLE'))
   await attachAssetChange(post, 'common', id, sourceTotals, warnings, deps)
-  return normalizeSnapshot({ holdings, complete, warnings, queriedAt: (deps.now ?? (() => new Date()))().toISOString(), uploadedAt, quoteDate: null, sourceTotals })
+  const coverage = {}
+  for (const segment of present) coverage[segment] = degraded.has(segment) ? 'partial' : 'full'
+  return normalizeSnapshot({ holdings, coverage, warnings, queriedAt: (deps.now ?? (() => new Date()))().toISOString(), uploadedAt, quoteDate: null, sourceTotals })
 }
 
 // 基金账本快照（fund/v1/merge_fund）：爱基金 ijj 用 custid，手动基金 manFund 用 fundid。
@@ -191,46 +200,53 @@ async function fundSnapshot(post, source, id, deps) {
   const data = record(await post('fund/v1/merge_fund', params))
   const account = record(data.account)
   const warnings = [], sourceTotals = {}, holdings = [], seen = new Set()
-  let complete = true
-  const missing = warning => { complete = false; warnings.push(warning) }
+  // v2.2 分段覆盖：基金账本只有 fund 段（fund 与 currencyfund 都按 fund 入库）。
+  const degraded = new Set()
+  const partial = warning => { degraded.add('fund'); warnings.push(warning) }
   const totalAsset = decimal(account.total_asset), totalCost = decimal(account.total_cost)
   sourceTotals.totalAsset = totalAsset
   sourceTotals.totalCost = totalCost
   // 券商口径的持有盈亏（爱基金 now_profit），与股票账本逐行 hold_profit 汇总同义。
   const holdingProfit = decimal(account.now_profit)
   if (holdingProfit !== null) sourceTotals.holdingProfit = holdingProfit
-  if (totalAsset === null) missing('MISSING_ASSET_FIELD:totalAsset')
+  if (totalAsset === null) partial('MISSING_ASSET_FIELD:totalAsset')
   const groups = [['fund', 'fund'], ['currencyfund', 'cash']]
   for (const [key] of groups) {
     const rows = Array.isArray(data[key]) ? data[key] : fail('INVALID_RESPONSE', '同花顺基金账本持仓数据不完整，已保留现有持仓')
     for (const raw of rows) {
       const row = record(raw)
       const symbol = scalar(row.fundcode).trim()
-      if (!/^\d{6}$/.test(symbol)) { missing('INVALID_FUND_CODE:' + symbol); continue }
+      if (!/^\d{6}$/.test(symbol)) { partial('INVALID_FUND_CODE:' + symbol); continue }
       if (seen.has(symbol)) fail('INVALID_RESPONSE', '同花顺基金持仓重复')
       seen.add(symbol)
       const qty = decimal(row.fundcount), costTotal = decimal(row.fundcost), manualPrice = decimal(row.fundnav), value = decimal(row.fundvalue)
-      // 摊薄成本可以为负（分红超过投入）；净值或市值为负的行跳过并标记不完整。
-      if ((manualPrice !== null && manualPrice < 0) || (value !== null && value < 0)) { missing('THS_FUND_SKIPPED:negative_value:' + symbol); continue }
-      if (qty === null || qty <= 0 || costTotal === null) { missing('MISSING_FUND_FIELDS:' + symbol); continue }
+      // 摊薄成本可以为负（分红超过投入）；净值或市值为负的行跳过并降级 fund 段。
+      if ((manualPrice !== null && manualPrice < 0) || (value !== null && value < 0)) { partial('THS_FUND_SKIPPED:negative_value:' + symbol); continue }
+      // v2.1：MISSING_FUND_FIELDS 只覆盖数量缺失（含 0 份额的已清仓行）；成本未知照常入库。
+      if (qty === null || qty <= 0) { partial('MISSING_FUND_FIELDS:' + symbol); continue }
       const percost = decimal(row.percost)
-      const avgCost = percost !== null && percost > 0 ? percost : Math.round((costTotal / qty) * 1e6) / 1e6
+      // percost 优先，其次按总成本/份额摊薄；两者都拿不到则成本未知（null），不再伪造。
+      const avgCost = percost !== null && percost > 0 ? percost : costTotal !== null ? Math.round((costTotal / qty) * 1e6) / 1e6 : null
       const quoteDate = thsDay(scalar(row.date).trim(), '净值日期')
       if (quoteDate && (sourceTotals.quoteDate === undefined || quoteDate > sourceTotals.quoteDate)) sourceTotals.quoteDate = quoteDate
       holdings.push({ symbol, name: scalar(row.fundname).trim() || symbol, market: 'CN', assetClass: 'fund', currency: 'CNY', qty, avgCost, manualPrice, externalId: symbol })
-      // 净值/市值缺失只影响估值与对账质量，基金行仍然可入库：complete 不受影响（P0 契约）。
-      if (manualPrice === null) warnings.push('PRICE_UNAVAILABLE:' + symbol)
-      if (value === null) warnings.push('MISSING_FUND_VALUE:' + symbol)
-      if (manualPrice !== null && value !== null && Math.abs(qty * manualPrice - value) > 0.011) missing('FUND_VALUE_MISMATCH:' + symbol)
+      // 净值/市值缺失只是数据质量（v2.3 info 级），基金行仍然可入库，不影响覆盖。
+      if (manualPrice === null) warnings.push(infoWarning('PRICE_UNAVAILABLE', 'PRICE_UNAVAILABLE:' + symbol))
+      if (value === null) warnings.push(infoWarning('MISSING_FUND_VALUE', 'MISSING_FUND_VALUE:' + symbol))
+      if (manualPrice !== null && value !== null && Math.abs(qty * manualPrice - value) > 0.011) partial('FUND_VALUE_MISMATCH:' + symbol)
     }
   }
+  // onwayfund 是在途申购（份额尚未确认，确认后才会出现在 fund 行里；行内 onway/onway_amount/
+  // unconf_count 已标注在途金额），clearfund 是已清仓的残留记录。两者都不是已确认持仓，
+  // 跳过它们不会漏删活跃持仓，因此 complete 保持不变；只在出现时留告警。
   for (const key of ['onwayfund', 'clearfund']) {
     if (Array.isArray(data[key]) && data[key].length) warnings.push('THS_FUND_SKIPPED:' + key + ':' + data[key].length)
   }
-  sourceTotals.quoteDate = sourceTotals.quoteDate || scalar(account.trans_date).trim() || null
+  // 水位只认净值日期：trans_date 会逐日前进（周末也走），用它会让水位跑到任何未来快照之前。
+  sourceTotals.quoteDate = sourceTotals.quoteDate || null
   // 基金账本的 asset_change「资金流动」是申购/赎回口径（实测 money_in 759k、money_out 548k
   // 与转换流水同量级），不是银行侧转账，主界面不展示；需要时用 fetchThsAssetChange 直接读取。
-  return normalizeSnapshot({ holdings, complete, warnings, queriedAt: (deps.now ?? (() => new Date()))().toISOString(), uploadedAt: null, quoteDate: sourceTotals.quoteDate, sourceTotals })
+  return normalizeSnapshot({ holdings, coverage: { fund: degraded.has('fund') ? 'partial' : 'full' }, warnings, queriedAt: (deps.now ?? (() => new Date()))().toISOString(), uploadedAt: null, quoteDate: sourceTotals.quoteDate, sourceTotals })
 }
 
 // ---- 资产变动（analysis/v1/asset_change）----

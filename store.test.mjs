@@ -79,7 +79,7 @@ test('holding and price validation rejects invalid, negative, blank, nonfinite a
   for (const value of [-1, '', ' ', 'abc', Infinity, NaN, true, [], null]) {
     bad(fixture(), 'holding.upsert', { accountId: 'a', symbol: 'TEST', qty: value })
   }
-  for (const value of ['', ' ', 'abc', Infinity, NaN, true, [], null]) {
+  for (const value of ['', ' ', 'abc', Infinity, NaN, true, []]) {
     bad(fixture(), 'holding.upsert', { accountId: 'a', symbol: 'TEST', avgCost: value })
   }
   const db = fixture()
@@ -433,4 +433,57 @@ test('quotePrice fills valuation below manualPrice and suppresses cost-estimate 
   const afterClear = summarize(db)
   assert.equal(afterClear.totalValueBase, 160)
   assert.ok(afterClear.warnings.some(w => w.code === 'cost-estimate-price'))
+})
+
+test('holding upsert keeps unknown cost as null while an absent cost still defaults to zero', () => {
+  const db = fixture()
+  const unknown = applyOp(db, 'holding.upsert', { accountId: 'a', symbol: 'UNKNOWN', market: 'US', qty: 10, avgCost: null, manualPrice: 3 }).holding
+  assert.equal(unknown.avgCost, null)
+  const bare = applyOp(db, 'holding.upsert', { accountId: 'a', symbol: 'BARE', market: 'US', qty: 1, manualPrice: 1 }).holding
+  assert.equal(bare.avgCost, 0)
+  // 对已有持仓再次 upsert 且显式给 null：保持未知，不降级为 0，也不崩溃
+  applyOp(db, 'holding.upsert', { holding: { id: bare.id, accountId: 'a', instrumentId: bare.instrumentId, avgCost: null } })
+  assert.equal(db.holdings.find((h) => h.id === bare.id).avgCost, null)
+  assert.equal(summarize(db).holdingsWithoutCost, 2)
+})
+
+test('summary values unknown-cost holdings but keeps them out of cost and pnl totals', () => {
+  const db = fixture()
+  holding(db) // qty 10, avgCost 2, manualPrice 3, USD→CNY 8
+  const unknown = applyOp(db, 'holding.upsert', { accountId: 'a', symbol: 'NOCOST', market: 'US', qty: 10, avgCost: null, manualPrice: 3 }).holding
+  const summary = summarize(db)
+  assert.equal(summary.totalValueBase, 480)
+  assert.equal(summary.totalCostBase, 160)
+  assert.equal(summary.totalPnlBase, 80)
+  assert.equal(summary.holdingsWithoutCost, 1)
+  assert.equal(summary.excludedCount, 0)
+  const warning = summary.warnings.find((w) => w.code === 'unknown-cost')
+  assert.equal(warning.holdingId, unknown.id)
+  assert.equal(warning.currency, 'USD')
+})
+
+test('summary prices manual > quote > broker source > cost, and suppresses cost estimates for source prices', () => {
+  const db = fixture()
+  const h = holding(db, { symbol: 'CHAIN', manualPrice: null }) // avgCost 2, qty 10, USD→CNY 8
+  h.sourcePrice = 5
+  assert.equal(summarize(db).totalValueBase, 400)
+  assert.ok(!summarize(db).warnings.some((w) => w.code === 'cost-estimate-price'))
+  h.quotePrice = 7
+  assert.equal(summarize(db).totalValueBase, 560)
+  h.manualPrice = 9
+  assert.equal(summarize(db).totalValueBase, 720)
+  delete h.quotePrice; delete h.manualPrice
+  h.sourcePrice = null
+  assert.equal(summarize(db).totalValueBase, 160)
+  assert.ok(summarize(db).warnings.some((w) => w.code === 'cost-estimate-price'))
+})
+
+test('a holding with no price and unknown cost is excluded as no-price instead of valued at zero', () => {
+  const db = fixture()
+  const h = applyOp(db, 'holding.upsert', { accountId: 'a', symbol: 'DARK', market: 'US', qty: 10, avgCost: null, manualPrice: null }).holding
+  const summary = summarize(db)
+  assert.equal(summary.totalValueBase, 0)
+  assert.equal(summary.holdingsWithoutCost, 0)
+  assert.deepEqual(summary.excludedHoldings[0], { holdingId: h.id, accountId: 'a', instrumentId: h.instrumentId, currency: 'USD', reason: 'no-price' })
+  assert.ok(summary.warnings.some((w) => w.code === 'no-price' && w.message === '没有价格且成本未知，无法估值'))
 })

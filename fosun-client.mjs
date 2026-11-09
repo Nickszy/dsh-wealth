@@ -306,13 +306,13 @@ export async function fetchFosunSnapshot(source, secrets, signal, deps = {}) {
   if (!accountId) fail('请选择复星交易账户')
   const session = await openSession(source, secrets, signal, deps)
   const warnings = []
-  // complete 只表示覆盖完整；缺价格只警告，不影响 complete。
-  let complete = true
+  // v2 分段覆盖：Holdings 一次调用同时提供股票与基金，失败/截断同时影响两段。
+  const coverage = { stock: 'full', fund: 'full', cash: 'full' }
   const authError = (error) => /认证|授权|401|403|expired|unauthor/i.test(String(error?.message || error))
 
   const summary = await session.post('/v1/portfolio/CashSummary', { subAccountId: accountId }).catch((error) => {
     if (authError(error)) throw error
-    complete = false
+    coverage.cash = 'failed'
     warnings.push('FOSUN_CASH_SUMMARY_UNAVAILABLE:复星资金汇总读取失败：' + String(error?.message || error))
     return null
   })
@@ -343,13 +343,8 @@ export async function fetchFosunSnapshot(source, secrets, signal, deps = {}) {
         const market = marketOf(row)
         const currency = (text(pick(row, CURRENCY_FIELDS)) || CURRENCY_BY_MARKET[market] || 'HKD').toUpperCase()
         const price = number(pick(row, PRICE_FIELDS))
-        let cost = number(pick(row, COST_FIELDS))
-        if (cost === null && price !== null) { cost = price; warnings.push(`FOSUN_COST_ASSUMED:${symbol} 来源未提供成本，按现价暂估`) }
-        if (cost === null) {
-          warnings.push(`FOSUN_COST_UNAVAILABLE:${symbol} 成本未知，已跳过`)
-          complete = false
-          continue
-        }
+        // 未知成本保留为 null，不伪造、也不跳过该行。
+        const cost = number(pick(row, COST_FIELDS))
         const key = market + ':' + symbol + ':' + currency
         if (seen.has(key)) continue
         seen.add(key)
@@ -367,11 +362,13 @@ export async function fetchFosunSnapshot(source, secrets, signal, deps = {}) {
     }
   } catch (error) {
     if (authError(error)) throw error
-    complete = false
+    coverage.stock = 'failed'
+    coverage.fund = 'failed'
     warnings.push('FOSUN_HOLDINGS_UNAVAILABLE:复星持仓读取失败：' + String(error?.message || error))
   }
   if (truncated) {
-    complete = false
+    coverage.stock = 'partial'
+    coverage.fund = 'partial'
     warnings.push('FOSUN_POSITIONS_PAGE_LIMIT:持仓分页达到 20 页上限，可能被截断')
   }
 
@@ -381,7 +378,7 @@ export async function fetchFosunSnapshot(source, secrets, signal, deps = {}) {
     holdings.push({ symbol: 'CASH:' + currency, name: currency + ' cash', market: 'CASH', assetClass: 'cash', currency, qty: cash, avgCost: 1, manualPrice: 1, externalId: 'CASH:' + currency })
   } else if (cash === null) {
     warnings.push('FOSUN_CASH_UNAVAILABLE 未读到现金余额')
-    complete = false
+    coverage.cash = 'failed'
   }
   if (!holdings.length) fail('复星 OpenAPI 没有返回任何持仓或现金；请确认账户内有资产')
 
@@ -396,7 +393,7 @@ export async function fetchFosunSnapshot(source, secrets, signal, deps = {}) {
 
   return {
     holdings,
-    complete,
+    coverage,
     warnings,
     queriedAt: new Date(deps.now?.() ?? Date.now()).toISOString(),
     uploadedAt: null,

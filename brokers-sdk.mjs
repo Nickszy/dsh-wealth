@@ -13,6 +13,12 @@ function numeric(v, field, signed = false) {
   if (!Number.isFinite(n) || (!signed && n < 0) || (n === 0 && /[1-9]/.test(String(v).split(/[eE]/)[0]))) fail(`${field} is unsupported (negative, nonfinite, or underflow)`)
   return n
 }
+// v2.1: cost is nullable. Missing/invalid cost imports as null; only structurally invalid rows fail.
+function cost(v, field) { if (v == null) return null; try { return numeric(v, field) } catch { return null } }
+// 认证类失败不能降级成 partial：过期 token 若被当成「某个接口挂了」，
+// 用户只会看到「无法验证账户通道」这类误导文案，而不是重新授权提示。
+const AUTH_LIKE = /\b40[13]\b|unauthori[sz]ed|not authorized|invalid.{0,10}token|token.{0,12}(expired|invalid|revoked)|授权|失效|过期/i
+const shouldPropagate = (error) => /timed out|abort/i.test(error?.message ?? '') || AUTH_LIKE.test(String(error?.message ?? error))
 function currency(v, field = 'currency') { const c = text(v, field).toUpperCase(); if (!/^[A-Z]{3}$/.test(c)) fail(`${field} must be a three-letter currency`); return c }
 function uint64(v, field = 'account ID') {
   if (typeof v === 'number' && !Number.isSafeInteger(v)) fail(`${field} is an unsafe number; pass a decimal string`)
@@ -20,10 +26,14 @@ function uint64(v, field = 'account ID') {
   if (!/^\d+$/.test(s) || BigInt(s) > 18446744073709551615n || BigInt(s) === 0n) fail(`${field} must be a positive uint64 decimal string`)
   return BigInt(s).toString()
 }
-function snapshot(holdings, warnings, complete, deps) {
+function snapshot(holdings, warnings, complete, deps, coverage) {
   const keys = new Set()
   for (const h of holdings) { const key = JSON.stringify([h.market, h.symbol, h.currency]); if (keys.has(key)) fail(`Duplicate holding ${h.symbol}/${h.currency}`); keys.add(key) }
-  return { holdings, complete, warnings, queriedAt: new Date(deps.now?.() ?? Date.now()).toISOString(), uploadedAt: null, quoteDate: null }
+  // v2.2: coverage derives complete in normalizeSnapshot; omit the explicit flag to avoid two sources of truth.
+  const out = { holdings, warnings, queriedAt: new Date(deps.now?.() ?? Date.now()).toISOString(), uploadedAt: null, quoteDate: null }
+  if (coverage) out.coverage = coverage
+  else out.complete = complete
+  return out
 }
 function cash(c, qty) { return { symbol: `CASH:${c}`, name: `${c} cash`, market: 'CASH', assetClass: 'cash', currency: c, qty: numeric(qty, `${c} cash (margin liabilities unsupported)`), avgCost: 1, manualPrice: 1 } }
 function deadline(signal, deps) {
@@ -79,7 +89,7 @@ export async function withFutu(config, secrets, signal, deps, fn) {
     const call = async (method, c2s) => {
       let response
       try { response = await d.run(() => client[method]({ c2s })) }
-      catch (error) { if (/timed out|abort/i.test(error?.message ?? '')) throw error; fail(`Futu ${method} failed; check OpenD permissions and selected account`) }
+      catch (error) { if (/timed out|abort/i.test(error?.message ?? '')) throw error; if (AUTH_LIKE.test(String(error?.message ?? error))) fail(`Futu ${method} failed；OpenD 登录或授权可能已失效，请重新登录 OpenD/重新授权`); fail(`Futu ${method} failed; check OpenD permissions and selected account`) }
       if (response?.retType !== 0 || !response.s2c) fail(`Futu ${method} returned an unsuccessful response`)
       return response.s2c
     }
@@ -111,36 +121,54 @@ export async function fetchFutuSnapshot(source, secrets, signal, deps = {}) {
     if (!acc || !acc.tradeMarkets.includes(source.tradeMarket)) fail('Selected Futu account/environment/market was not authorized by GetAccList')
     // protobufjs uint64 writer accepts decimal strings; never round via Number.
     const header = { trdEnv: env, accID: id, trdMarket: market }
-    const positions = await call('GetPositionList', { header })
-    const fundsResponse = await call('GetFunds', { header, currency: cNum })
+    // v2.2: each endpoint owns its segment. A failed call degrades only that segment;
+    // cancellation/timeout still aborts the whole sync.
+    const attempt = async (method, c2s) => {
+      try { return await call(method, c2s) } catch (error) {
+        if (shouldPropagate(error)) throw error
+        return null
+      }
+    }
+    const positions = await attempt('GetPositionList', { header })
+    const fundsResponse = await attempt('GetFunds', { header, currency: cNum })
     for (const response of [positions, fundsResponse]) {
+      if (!response) continue
       const h = response.header
       if (!h || uint64(h.accID) !== id || h.trdEnv !== env || h.trdMarket !== market) fail('Futu response account/environment/market does not match selection')
     }
-    const funds = fundsResponse.funds
-    if (!funds || ftCurrency(funds.currency) !== c) fail('Futu funds currency does not match source.currency')
-    for (const key of ['debtCash', 'shortMv']) if (funds[key] != null && numeric(funds[key], key, true) !== 0) fail('Futu margin liabilities or short positions are unsupported')
-    const warnings = ['QUOTE_TIME_UNAVAILABLE: Futu position prices have no quote timestamp'], holdings = []
-    for (const p of array(positions.positionList, 'Futu positionList')) {
+    const coverage = { stock: positions ? 'full' : 'failed', cash: fundsResponse ? 'full' : 'failed' }
+    const warnings = [{ code: 'QUOTE_TIME_UNAVAILABLE', severity: 'info', message: 'Futu position prices have no quote timestamp' }], holdings = []
+    if (!positions) warnings.push('POSITIONS_UNAVAILABLE: Futu GetPositionList failed; existing stock holdings must not be pruned')
+    if (!fundsResponse) warnings.push('CASH_UNAVAILABLE: Futu GetFunds failed; existing cash must not be pruned')
+    const funds = fundsResponse?.funds
+    if (fundsResponse) {
+      if (!funds || ftCurrency(funds.currency) !== c) fail('Futu funds currency does not match source.currency')
+      for (const key of ['debtCash', 'shortMv']) if (funds[key] != null && numeric(funds[key], key, true) !== 0) fail('Futu margin liabilities or short positions are unsupported')
+    }
+    for (const p of array(positions?.positionList ?? [], 'Futu positionList')) {
       if (p.positionSide !== 0) fail('Futu short/unknown position side is unsupported')
       const qty = numeric(p.qty, 'Futu position quantity')
       if (qty === 0) continue
       const m = FT_MARKETS[p.trdMarket ?? p.secMarket]
       if (!m) fail('Futu position market is unknown or unsupported')
-      // Invalid/missing costs cannot be represented by the ledger's nonnullable avgCost.
-      if (p.costPriceValid === false || p.costPriceValid === 0 || p.averageCostPriceValid === false || !Object.hasOwn(p, 'costPrice')) fail('Futu position cost is unknown/invalid; refusing to substitute zero')
       const symbol = text(p.code, 'Futu position code')
       if (!/^[A-Z0-9.\-]+$/i.test(symbol) || /\d{6}[CP]\d/i.test(symbol)) fail('Futu derivative position is unsupported')
-      // Missing quotes are a quality issue only: warn and keep manualPrice null, never affect complete.
+      // Missing quotes are a quality issue only: warn and keep manualPrice null, never affect coverage.
       if (p.price == null) warnings.push(`PRICE_UNAVAILABLE:${symbol}`)
-      holdings.push({ symbol, name: typeof p.name === 'string' && p.name.trim() ? p.name : symbol, market: m, assetClass: 'stock', currency: ftCurrency(p.currency), qty, avgCost: numeric(p.costPrice, 'Futu position cost'), manualPrice: p.price == null ? null : numeric(p.price, 'Futu position price') })
+      // v2.1: unknown/invalid cost imports as null, never a fabricated zero and never a dropped row.
+      const costValid = p.costPriceValid !== false && p.costPriceValid !== 0 && p.averageCostPriceValid !== false
+      holdings.push({ symbol, name: typeof p.name === 'string' && p.name.trim() ? p.name : symbol, market: m, assetClass: 'stock', currency: ftCurrency(p.currency), qty, avgCost: costValid ? cost(p.costPrice, 'Futu position cost') : null, manualPrice: p.price == null ? null : numeric(p.price, 'Futu position price') })
     }
-    let complete = true
-    if (Array.isArray(funds.cashInfoList) && funds.cashInfoList.length) {
-      for (const info of funds.cashInfoList) holdings.push(cash(ftCurrency(info.currency), info.cash))
-    } else { complete = false; warnings.push('CASH_UNAVAILABLE: native-currency cash details unavailable; converted funds.cash is not a native balance; existing cash must not be pruned') }
-    const out = snapshot(holdings, warnings, complete, deps)
-    out.sourceTotals = { totalAsset: numeric(funds.totalAssets, 'Futu totalAssets') }
+    if (fundsResponse) {
+      if (Array.isArray(funds.cashInfoList) && funds.cashInfoList.length) {
+        for (const info of funds.cashInfoList) holdings.push(cash(ftCurrency(info.currency), info.cash))
+      } else {
+        coverage.cash = 'partial'
+        warnings.push('CASH_UNAVAILABLE: native-currency cash details unavailable; converted funds.cash is not a native balance; existing cash must not be pruned')
+      }
+    }
+    const out = snapshot(holdings, warnings, undefined, deps, coverage)
+    if (fundsResponse) out.sourceTotals = { totalAsset: numeric(funds.totalAssets, 'Futu totalAssets') }
     return out
   })
 }
@@ -159,7 +187,7 @@ export async function withLongbridge(secrets, signal, deps, fn) {
     })
     const call = async (name, ...args) => {
       try { return await d.run(() => context[name](...args)) }
-      catch (error) { if (/timed out|abort/i.test(error?.message ?? '')) throw error; let detail = String(error?.message ?? error); for (const s of [appKey, appSecret, token]) detail = detail.split(s).join('[hidden]'); const code = /code=\d+[^)]*/.exec(detail)?.[0]; fail(`Longbridge ${name} failed; verify API access and account region${code ? ` (${code.slice(0, 160)})` : ''}`) }
+      catch (error) { if (/timed out|abort/i.test(error?.message ?? '')) throw error; let detail = String(error?.message ?? error); const authLike = AUTH_LIKE.test(detail); for (const s of [appKey, appSecret, token]) detail = detail.split(s).join('[hidden]'); const code = /code=\d+[^)]*/.exec(detail)?.[0]; fail(`Longbridge ${name} failed; verify API access and account region${code ? ` (${code.slice(0, 160)})` : ''}${authLike ? '；认证或授权可能已失效，请重新授权' : ''}`) }
     }
     return await fn(call)
   } finally {
@@ -184,11 +212,24 @@ export async function listLongbridgeAccounts(config, secrets, signal, deps = {})
 export async function fetchLongbridgeSnapshot(source, secrets, signal, deps = {}) {
   const id = text(source?.brokerAccountId, 'source.brokerAccountId (accountChannel)')
   return withLongbridge(secrets, signal, deps, async (call) => {
-    const stocks = lbChannels(await call('stockPositions'), 'stocks'), funds = lbChannels(await call('fundPositions'), 'funds')
+    // v2.2: one endpoint per segment; a failed call degrades its segment, cancellation propagates.
+    const attempt = async (name) => {
+      try { return await call(name) } catch (error) {
+        if (shouldPropagate(error)) throw error
+        return null
+      }
+    }
+    const stocksResponse = await attempt('stockPositions'), fundsResponse = await attempt('fundPositions'), balances = await attempt('accountBalance')
+    // Without any positions response the selected accountChannel cannot be verified; stay fail-closed.
+    if (!stocksResponse && !fundsResponse) fail('Longbridge position APIs failed; cannot verify the selected accountChannel or native cash scope')
+    const stocks = stocksResponse ? lbChannels(stocksResponse, 'stocks') : [], funds = fundsResponse ? lbChannels(fundsResponse, 'funds') : []
     const ids = new Set([...stocks, ...funds].map((c) => c.accountChannel))
     if (!ids.has(id)) fail('Selected Longbridge accountChannel was not returned by positions APIs')
     if (ids.size !== 1) fail('Ambiguous Longbridge channels: native cash balances cannot be attributed to the selected accountChannel')
-    const holdings = [], warnings = ['QUOTE_DATE_UNAVAILABLE: provider snapshot contains no common quote date']
+    const coverage = { stock: stocksResponse ? 'full' : 'failed', fund: fundsResponse ? 'full' : 'failed', cash: balances ? 'full' : 'failed' }
+    const holdings = [], warnings = [{ code: 'QUOTE_DATE_UNAVAILABLE', severity: 'info', message: 'Longbridge snapshot contains no common quote date' }]
+    if (!stocksResponse) warnings.push('STOCK_POSITIONS_UNAVAILABLE: Longbridge stockPositions failed; existing stock holdings must not be pruned')
+    if (!fundsResponse) warnings.push('FUND_POSITIONS_UNAVAILABLE: Longbridge fundPositions failed; existing fund holdings must not be pruned')
     for (const p of stocks.find((c) => c.accountChannel === id)?.positions ?? []) {
       const qty = numeric(p.quantity, 'Longbridge stock quantity (shorts unsupported)')
       if (qty === 0) continue
@@ -196,36 +237,43 @@ export async function fetchLongbridgeSnapshot(source, secrets, signal, deps = {}
       if (!market) fail('Longbridge stock market is unknown or unsupported')
       const symbol = text(p.symbol, 'Longbridge symbol')
       if (/\d{6}[CP]\d/i.test(symbol)) fail('Longbridge option positions are unsupported')
-      holdings.push({ symbol, name: typeof p.symbolName === 'string' && p.symbolName.trim() ? p.symbolName : symbol, market, assetClass: 'stock', currency: currency(p.currency), qty, avgCost: numeric(p.costPrice, 'Longbridge stock cost'), manualPrice: null })
+      holdings.push({ symbol, name: typeof p.symbolName === 'string' && p.symbolName.trim() ? p.symbolName : symbol, market, assetClass: 'stock', currency: currency(p.currency), qty, avgCost: cost(p.costPrice, 'Longbridge stock cost'), manualPrice: null })
     }
     if (holdings.length) warnings.push('PRICE_UNAVAILABLE: stockPositions provides no quote; valuation may use a cost estimate until a quote is supplied')
     for (const p of funds.find((c) => c.accountChannel === id)?.positions ?? []) {
       const qty = numeric(p.holdingUnits, 'Longbridge fund holdingUnits')
       if (qty === 0) continue
       const symbol = text(p.symbol, 'Longbridge fund symbol')
-      // Missing NAV is a quality issue only: warn and keep manualPrice null, never affect complete.
+      // Missing NAV is a quality issue only: warn and keep manualPrice null, never affect coverage.
       if (p.currentNetAssetValue == null) warnings.push(`PRICE_UNAVAILABLE:${symbol}`)
-      holdings.push({ symbol, name: typeof p.symbolName === 'string' && p.symbolName.trim() ? p.symbolName : symbol, market: 'FUND', assetClass: 'fund', currency: currency(p.currency), qty, avgCost: numeric(p.costNetAssetValue, 'Longbridge fund cost'), manualPrice: p.currentNetAssetValue == null ? null : numeric(p.currentNetAssetValue, 'Longbridge fund NAV') })
+      holdings.push({ symbol, name: typeof p.symbolName === 'string' && p.symbolName.trim() ? p.symbolName : symbol, market: 'FUND', assetClass: 'fund', currency: currency(p.currency), qty, avgCost: cost(p.costNetAssetValue, 'Longbridge fund cost'), manualPrice: p.currentNetAssetValue == null ? null : numeric(p.currentNetAssetValue, 'Longbridge fund NAV') })
     }
-    const balances = array(await call('accountBalance'), 'Longbridge accountBalance'), nativeCash = new Map()
-    let complete = balances.length > 0
-    for (const b of balances) {
-      currency(b.currency, 'balance currency')
-      if (b.marginCall != null && numeric(b.marginCall, 'marginCall', true) !== 0) fail('Longbridge margin liabilities are unsupported')
-      numeric(b.totalCash, 'totalCash (negative cash/margin unsupported)')
-      const infos = array(b.cashInfos, 'balance.cashInfos')
-      if (!infos.length) complete = false
-      for (const info of infos) {
-        const c = currency(info.currency), available = numeric(info.availableCash, 'availableCash (margin liabilities unsupported)'), frozen = numeric(info.frozenCash, 'frozenCash'), settling = numeric(info.settlingCash, 'settlingCash', true)
-        // withdrawCash is an availability subset, not an additional cash asset.
-        const qty = numeric(available + frozen + settling, 'native cash (margin liabilities unsupported)')
-        if (nativeCash.has(c) && nativeCash.get(c) !== qty) fail(`Conflicting native cash balances for ${c}`)
-        nativeCash.set(c, qty)
+    if (balances) {
+      const balanceRows = array(balances, 'Longbridge accountBalance'), nativeCash = new Map()
+      let complete = balanceRows.length > 0
+      for (const b of balanceRows) {
+        currency(b.currency, 'balance currency')
+        if (b.marginCall != null && numeric(b.marginCall, 'marginCall', true) !== 0) fail('Longbridge margin liabilities are unsupported')
+        numeric(b.totalCash, 'totalCash (negative cash/margin unsupported)')
+        const infos = array(b.cashInfos, 'balance.cashInfos')
+        if (!infos.length) complete = false
+        for (const info of infos) {
+          const c = currency(info.currency), available = numeric(info.availableCash, 'availableCash (margin liabilities unsupported)'), frozen = numeric(info.frozenCash, 'frozenCash'), settling = numeric(info.settlingCash, 'settlingCash', true)
+          // withdrawCash is an availability subset, not an additional cash asset.
+          const qty = numeric(available + frozen + settling, 'native cash (margin liabilities unsupported)')
+          if (nativeCash.has(c) && nativeCash.get(c) !== qty) fail(`Conflicting native cash balances for ${c}`)
+          nativeCash.set(c, qty)
+        }
       }
+      for (const [c, qty] of nativeCash) holdings.push(cash(c, qty))
+      if (!complete) {
+        coverage.cash = 'partial'
+        warnings.push('CASH_UNAVAILABLE: native cash details missing; existing holdings must not be pruned')
+      }
+    } else {
+      warnings.push('CASH_UNAVAILABLE: Longbridge accountBalance failed; existing cash must not be pruned')
     }
-    for (const [c, qty] of nativeCash) holdings.push(cash(c, qty))
-    if (!complete) warnings.push('CASH_UNAVAILABLE: native cash details missing; existing holdings must not be pruned')
     // totalCash/netAssets are converted reporting totals; never add to components.
-    return snapshot(holdings, warnings, complete, deps)
+    return snapshot(holdings, warnings, undefined, deps, coverage)
   })
 }

@@ -46,7 +46,8 @@ test('Futu snapshot uses selected headers and native cash, never totalAssets as 
   assert.deepEqual(out.holdings[0], { symbol: '00700', name: 'Tencent', market: 'HK', assetClass: 'stock', currency: 'HKD', qty: 10, avgCost: 200, manualPrice: 300 })
   assert.deepEqual(out.holdings.slice(1).map((h) => [h.currency, h.qty]), [['HKD', 400], ['USD', 100]])
   assert.equal(out.sourceTotals.totalAsset, 3500)
-  assert.equal(out.complete, true)
+  assert.deepEqual(out.coverage, { stock: 'full', cash: 'full' })
+  assert.equal('complete' in out, false)
   assert.equal(out.queriedAt, '1970-01-01T00:00:00.000Z')
   assert.equal(out.quoteDate, null)
   assert.equal(out.uploadedAt, null)
@@ -67,13 +68,15 @@ test('Futu validates account selection and response header', async () => {
   const g = futuFixture(); g.data.GetAccList.accList[0].trdEnv = 0
   await assert.rejects(fetchFutuSnapshot(futuSource, {}, undefined, g.deps), /not authorized/)
 })
-test('Futu missing or explicitly invalid cost never turns into zero', async () => {
+test('Futu missing or explicitly invalid cost imports the row with null avgCost', async () => {
   for (const mode of ['missing', 'invalid', 'null']) {
     const f = futuFixture(), p = f.data.GetPositionList.positionList[0]
     if (mode === 'missing') delete p.costPrice
     if (mode === 'invalid') p.costPriceValid = false
     if (mode === 'null') p.costPrice = null
-    await assert.rejects(fetchFutuSnapshot(futuSource, {}, undefined, f.deps), /cost/)
+    const normalized = assertSnapshotContract(await fetchFutuSnapshot(futuSource, {}, undefined, f.deps), { complete: true })
+    assert.equal(normalized.holdings[0].avgCost, null)
+    assert.equal(normalized.holdings[0].qty, 10)
     assert.equal(f.calls.at(-1)[0], 'close')
   }
 })
@@ -86,12 +89,15 @@ test('Futu rejects shorts, liabilities, unknown currencies and duplicate cash', 
 test('Futu missing cash details on multi-market account prevents pruning', async () => {
   const f = futuFixture(); f.data.GetAccList.accList[0].trdMarketAuthList = [1, 2]; delete f.data.GetFunds.funds.cashInfoList
   const out = await fetchFutuSnapshot(futuSource, {}, undefined, f.deps)
-  assert.equal(out.complete, false)
+  assert.equal(out.coverage.cash, 'partial')
+  assertSnapshotContract(out, { complete: false })
   assert.match(out.warnings.join(), /CASH_UNAVAILABLE/)
 })
-test('Futu API failures and handshake failures redact response messages and close', async () => {
+test('Futu API failures degrade without leaking response messages; handshake failures redact and close', async () => {
   const f = futuFixture({ GetPositionList: new Error('credential-secret') })
-  await assert.rejects(fetchFutuSnapshot(futuSource, {}, undefined, f.deps), e => !e.message.includes('credential-secret'))
+  const out = await fetchFutuSnapshot(futuSource, {}, undefined, f.deps)
+  assert.equal(out.coverage.stock, 'failed')
+  assert.ok(!JSON.stringify(out.warnings).includes('credential-secret'))
   assert.equal(f.calls.at(-1)[0], 'close')
   const g = futuFixture(); g.client.start = function () { queueMicrotask(() => this.onlogin(false, 'credential-secret')) }
   await assert.rejects(listFutuAccounts(futuSource, {}, undefined, g.deps), /handshake failed/)
@@ -110,7 +116,8 @@ test('Longbridge normalizes Decimal positions, NAV and native cash without conve
   assert.deepEqual(out.holdings.map(h => [h.symbol, h.qty, h.avgCost, h.manualPrice]), [['AAPL.US', 2.5, 110.25, null], ['HK00001234', 3, 1.2, 1.5], ['CASH:HKD', 110, 1, 1], ['CASH:USD', 43, 1, 1]])
   assert.equal(out.holdings[0].market, 'US')
   assert.equal(out.holdings[1].market, 'FUND')
-  assert.equal(out.complete, true)
+  assert.deepEqual(out.coverage, { stock: 'full', fund: 'full', cash: 'full' })
+  assert.equal('complete' in out, false)
   assert.equal(out.quoteDate, null)
   assert.match(out.warnings.join(), /cost estimate/)
   assert.deepEqual(f.calls, ['stockPositions', 'fundPositions', 'accountBalance', 'close'])
@@ -129,7 +136,7 @@ test('Longbridge duplicate reporting currency balances do not duplicate native c
   assert.equal(out.holdings.filter(h => h.assetClass === 'cash').length, 2)
 })
 test('Longbridge malformed and unsupported fields reject entire snapshot', async () => {
-  for (const mutate of [f => { f.data.stockPositions.channels[0].positions[0].quantity = D('-1') }, f => { f.data.stockPositions.channels[0].positions[0].costPrice = null }, f => { f.data.stockPositions.channels[0].positions[0].market = 0 }, f => { f.data.stockPositions.channels[0].positions[0].currency = '' }, f => { f.data.fundPositions.channels[0].positions[0].holdingUnits = D('NaN') }, f => { f.data.accountBalance[0].marginCall = D('1') }, f => { f.data.accountBalance[0].cashInfos[0].availableCash = D('-1') }]) {
+  for (const mutate of [f => { f.data.stockPositions.channels[0].positions[0].quantity = D('-1') }, f => { f.data.stockPositions.channels[0].positions[0].market = 0 }, f => { f.data.stockPositions.channels[0].positions[0].currency = '' }, f => { f.data.fundPositions.channels[0].positions[0].holdingUnits = D('NaN') }, f => { f.data.accountBalance[0].marginCall = D('1') }, f => { f.data.accountBalance[0].cashInfos[0].availableCash = D('-1') }]) {
     const f = longbridgeFixture(); mutate(f)
     await assert.rejects(fetchLongbridgeSnapshot({ brokerAccountId: 'cash' }, lbSecrets, undefined, f.deps))
     assert.equal(f.calls.at(-1), 'close')
@@ -138,7 +145,8 @@ test('Longbridge malformed and unsupported fields reject entire snapshot', async
 test('Longbridge missing cash is partial and does not fabricate cash', async () => {
   const f = longbridgeFixture(); f.data.accountBalance[0].cashInfos = []
   const out = await fetchLongbridgeSnapshot({ brokerAccountId: 'cash' }, lbSecrets, undefined, f.deps)
-  assert.equal(out.complete, false)
+  assert.equal(out.coverage.cash, 'partial')
+  assertSnapshotContract(out, { complete: false })
   assert.equal(out.holdings.length, 2)
 })
 test('Longbridge timeout and sanitized API errors release context', async () => {
@@ -146,8 +154,20 @@ test('Longbridge timeout and sanitized API errors release context', async () => 
   await assert.rejects(fetchLongbridgeSnapshot({ brokerAccountId: 'cash' }, lbSecrets, undefined, { ...f.deps, timeoutMs: 10 }), /timed out/)
   assert.equal(f.calls.at(-1), 'close')
   const g = longbridgeFixture(); g.data.accountBalance = new Error('fixture-token')
-  await assert.rejects(fetchLongbridgeSnapshot({ brokerAccountId: 'cash' }, lbSecrets, undefined, g.deps), e => e.message.includes('accountBalance failed') && !e.message.includes('fixture-token'))
+  const out = await fetchLongbridgeSnapshot({ brokerAccountId: 'cash' }, lbSecrets, undefined, g.deps)
+  assert.equal(out.coverage.cash, 'failed')
+  assert.ok(!JSON.stringify(out.warnings).includes('fixture-token'))
   assert.equal(g.calls.at(-1), 'close')
+})
+test('auth failures propagate instead of degrading to a misleading partial snapshot', async () => {
+  const f = longbridgeFixture(); f.data.stockPositions = new Error('401 unauthorized')
+  await assert.rejects(fetchLongbridgeSnapshot({ brokerAccountId: 'cash' }, lbSecrets, undefined, f.deps), /认证或授权可能已失效/)
+  const g = futuFixture({ GetPositionList: new Error('token expired') })
+  await assert.rejects(fetchFutuSnapshot(futuSource, {}, undefined, g.deps), /授权可能已失效/)
+  // 普通失败仍然降级对应分段，不会因为提示文案变化而整体报错
+  const h = futuFixture({ GetPositionList: new Error('credential-secret') })
+  const out = await fetchFutuSnapshot(futuSource, {}, undefined, h.deps)
+  assert.equal(out.coverage.stock, 'failed')
 })
 test('dynamic SDK loader reports pinned installation guidance, no secrets in errors', async () => {
   await assert.rejects(listFutuAccounts(futuSource, {}, undefined, { loadSdk() { throw new Error('secret') } }), /install futu-api@10.12.7208/)
@@ -201,7 +221,7 @@ test('official Longport loader uses fromApikey and never environment auth or quo
 // ---- 快照契约（P0-C）----
 test('contract: Futu snapshot passes the shared contract and never sums cash across currencies', async () => {
   const f = futuFixture(), raw = await fetchFutuSnapshot(futuSource, {}, undefined, f.deps)
-  const normalized = assertSnapshotContract(raw, { complete: true })
+  const normalized = assertSnapshotContract(raw, { complete: true, severity: { QUOTE_TIME_UNAVAILABLE: 'info' } })
   assert.equal(normalized.sourceTotals.totalAsset, 3500)
   assert.deepEqual(normalized.holdings.filter(h => h.assetClass === 'cash').map(h => [h.currency, h.qty]).sort(), [['HKD', 400], ['USD', 100]])
   assertNoCrossCurrencySum(raw, ['cash'])
@@ -216,17 +236,30 @@ test('contract: Futu missing cash details marks coverage incomplete', async () =
   const f = futuFixture(); delete f.data.GetFunds.funds.cashInfoList
   const raw = await fetchFutuSnapshot(futuSource, {}, undefined, f.deps)
   assertSnapshotContract(raw, { complete: false, warning: /CASH_UNAVAILABLE/ })
+  assert.equal(raw.coverage.cash, 'partial')
   assert.equal(raw.holdings.filter(h => h.assetClass === 'cash').length, 0)
 })
-test('contract: Futu missing cost and failed funds call return no snapshot instead of pruning', async () => {
+test('contract: Futu missing cost imports null and a failed funds call degrades cash only', async () => {
   const missingCost = futuFixture(); delete missingCost.data.GetPositionList.positionList[0].costPrice
-  await assert.rejects(fetchFutuSnapshot(futuSource, {}, undefined, missingCost.deps), /cost/)
+  const normalized = assertSnapshotContract(await fetchFutuSnapshot(futuSource, {}, undefined, missingCost.deps), { complete: true })
+  assert.equal(normalized.holdings[0].avgCost, null)
   const fundsDown = futuFixture({ GetFunds: new Error('down') })
-  await assert.rejects(fetchFutuSnapshot(futuSource, {}, undefined, fundsDown.deps), /GetFunds/)
+  const raw = await fetchFutuSnapshot(futuSource, {}, undefined, fundsDown.deps)
+  assertSnapshotContract(raw, { complete: false, warning: /CASH_UNAVAILABLE/ })
+  assert.deepEqual(raw.coverage, { stock: 'full', cash: 'failed' })
+  assert.deepEqual(raw.holdings.map(h => [h.symbol, h.qty]), [['00700', 10]])
+})
+test('contract: Futu positions call failure degrades stock only and keeps cash', async () => {
+  const f = futuFixture({ GetPositionList: new Error('down') })
+  const raw = await fetchFutuSnapshot(futuSource, {}, undefined, f.deps)
+  assertSnapshotContract(raw, { complete: false })
+  assert.deepEqual(raw.coverage, { stock: 'failed', cash: 'full' })
+  assert.deepEqual(raw.holdings.map(h => [h.currency, h.qty]), [['HKD', 400], ['USD', 100]])
 })
 test('contract: Longbridge snapshot passes the shared contract with multi-currency cash', async () => {
   const f = longbridgeFixture(), raw = await fetchLongbridgeSnapshot({ brokerAccountId: 'cash' }, lbSecrets, undefined, f.deps)
-  const normalized = assertSnapshotContract(raw, { complete: true, warning: /QUOTE_DATE_UNAVAILABLE/ })
+  assert.deepEqual(raw.coverage, { stock: 'full', fund: 'full', cash: 'full' })
+  const normalized = assertSnapshotContract(raw, { complete: true, severity: { QUOTE_DATE_UNAVAILABLE: 'info' } })
   assert.deepEqual(normalized.holdings.filter(h => h.assetClass === 'cash').map(h => [h.currency, h.qty]).sort(), [['HKD', 110], ['USD', 43]])
   assertNoCrossCurrencySum(raw, ['cash'])
 })
@@ -240,11 +273,29 @@ test('contract: Longbridge missing cash details marks coverage incomplete', asyn
   const f = longbridgeFixture(); f.data.accountBalance[0].cashInfos = []
   const raw = await fetchLongbridgeSnapshot({ brokerAccountId: 'cash' }, lbSecrets, undefined, f.deps)
   assertSnapshotContract(raw, { complete: false, warning: /CASH_UNAVAILABLE/ })
+  assert.equal(raw.coverage.cash, 'partial')
   assert.equal(raw.holdings.filter(h => h.assetClass === 'cash').length, 0)
 })
-test('contract: Longbridge missing cost and failed balance call return no snapshot', async () => {
+test('contract: Longbridge missing cost imports null and a failed balance call degrades cash only', async () => {
   const missingCost = longbridgeFixture(); missingCost.data.stockPositions.channels[0].positions[0].costPrice = null
-  await assert.rejects(fetchLongbridgeSnapshot({ brokerAccountId: 'cash' }, lbSecrets, undefined, missingCost.deps), /cost/)
+  const normalized = assertSnapshotContract(await fetchLongbridgeSnapshot({ brokerAccountId: 'cash' }, lbSecrets, undefined, missingCost.deps), { complete: true })
+  assert.equal(normalized.holdings[0].avgCost, null)
   const balanceDown = longbridgeFixture(); balanceDown.data.accountBalance = new Error('down')
-  await assert.rejects(fetchLongbridgeSnapshot({ brokerAccountId: 'cash' }, lbSecrets, undefined, balanceDown.deps), /accountBalance/)
+  const raw = await fetchLongbridgeSnapshot({ brokerAccountId: 'cash' }, lbSecrets, undefined, balanceDown.deps)
+  assertSnapshotContract(raw, { complete: false, warning: /CASH_UNAVAILABLE/ })
+  assert.deepEqual(raw.coverage, { stock: 'full', fund: 'full', cash: 'failed' })
+  assert.equal(raw.holdings.filter(h => h.assetClass === 'cash').length, 0)
+  assert.equal(raw.holdings.length, 2)
+})
+test('contract: Longbridge stock call failure degrades stock only and keeps fund/cash', async () => {
+  const f = longbridgeFixture(); f.data.stockPositions = new Error('down')
+  const raw = await fetchLongbridgeSnapshot({ brokerAccountId: 'cash' }, lbSecrets, undefined, f.deps)
+  assertSnapshotContract(raw, { complete: false })
+  assert.deepEqual(raw.coverage, { stock: 'failed', fund: 'full', cash: 'full' })
+  assert.deepEqual(raw.holdings.map(h => h.symbol), ['HK00001234', 'CASH:HKD', 'CASH:USD'])
+})
+test('contract: Longbridge missing fund cost imports null without dropping coverage', async () => {
+  const f = longbridgeFixture(); f.data.fundPositions.channels[0].positions[0].costNetAssetValue = null
+  const normalized = assertSnapshotContract(await fetchLongbridgeSnapshot({ brokerAccountId: 'cash' }, lbSecrets, undefined, f.deps), { complete: true })
+  assert.equal(normalized.holdings.find(h => h.symbol === 'HK00001234').avgCost, null)
 })

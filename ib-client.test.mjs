@@ -34,7 +34,8 @@ test('lists only allowlisted account fields and validates explicit selection bef
 test('full page followed by empty page completes; only native cashbalance becomes cash', async () => {
   const f = fixture({ pages: [Array.from({ length: 100 }, (_, i) => stock(i + 1)), []], cash: { ...ledger, EUR: { cashbalance: '7.5', currency: 'EUR' } } })
   const result = await fetchIbSnapshot(source, {}, undefined, f.deps)
-  assert.equal(result.complete, true)
+  assert.deepEqual(result.coverage, { stock: 'full', fund: 'full', cash: 'full' })
+  assert.equal('complete' in result, false)
   assert.equal(result.holdings.length, 102)
   assert.deepEqual(result.holdings.filter(h => h.assetClass === 'cash').map(h => [h.currency, h.qty]), [['USD', 123], ['EUR', 7.5]])
   assert.equal(result.uploadedAt, null)
@@ -70,7 +71,7 @@ for (const [label, value] of [['null', null], ['object', {}], ['error response',
   })
 }
 
-for (const [field, values] of Object.entries({ position: [null, undefined, '', -1, NaN, Infinity, true], avgCost: [null, undefined, '', -1, NaN], conid: [null, 0, -1, 1.5], currency: [null, 'BASE', ''], assetClass: [null, 'OPT', 'FUT', 'BOND', 'CFD'] })) {
+for (const [field, values] of Object.entries({ position: [null, undefined, '', -1, NaN, Infinity, true], avgCost: ['', -1, NaN, true], conid: [null, 0, -1, 1.5], currency: [null, 'BASE', ''], assetClass: [null, 'OPT', 'FUT', 'BOND', 'CFD'] })) {
   test(`rejects invalid or unsupported ${field} without inventing values`, async () => {
     for (const value of values) await assert.rejects(fetchIbSnapshot(source, {}, undefined, fixture({ pages: [[stock(1, { [field]: value })]] }).deps))
   })
@@ -84,6 +85,15 @@ test('rejects short, margin-enabled accounts and non-unit multiplier', async () 
 test('ETF and mutual fund classes are supported; zero positions are ignored', async () => {
   const result = await fetchIbSnapshot(source, {}, undefined, fixture({ pages: [[stock(1, { assetClass: 'ETF' }), stock(2, { assetClass: 'FUND' }), stock(3, { position: 0 })]] }).deps)
   assert.deepEqual(result.holdings.map(h => h.assetClass), ['etf', 'fund', 'cash'])
+})
+
+test('missing average cost imports the row with null avgCost instead of failing', async () => {
+  for (const avgCost of [null, undefined]) {
+    const f = fixture({ pages: [[stock(1, { avgCost })]] })
+    const normalized = assertSnapshotContract(await fetchIbSnapshot(source, {}, undefined, f.deps), { complete: true })
+    assert.equal(normalized.holdings.find(h => h.externalId === 'IBKR:1').avgCost, null)
+    assert.equal(normalized.holdings.find(h => h.externalId === 'IBKR:1').qty, 2)
+  }
 })
 
 test('duplicate contracts, ticker collisions and wrong account data fail closed', async () => {
@@ -178,6 +188,7 @@ test('default transport parses JSON, rejects redirects and explains manual login
 test('contract: IB snapshot passes the shared contract with multi-currency native cash', async () => {
   const f = fixture({ cash: { ...ledger, EUR: { cashbalance: '7.5', currency: 'EUR' } } })
   const raw = await fetchIbSnapshot(source, {}, undefined, f.deps)
+  assert.deepEqual(raw.coverage, { stock: 'full', fund: 'full', cash: 'full' })
   const normalized = assertSnapshotContract(raw, { complete: true })
   assert.deepEqual(normalized.holdings.filter(h => h.assetClass === 'cash').map(h => [h.currency, h.qty]), [['USD', 123], ['EUR', 7.5]])
   assertNoCrossCurrencySum(raw, ['cash'])
@@ -199,8 +210,10 @@ test('contract: IB missing price only warns and keeps coverage complete', async 
   const normalized = assertSnapshotContract(raw, { complete: true, warning: /^PRICE_UNAVAILABLE: IBKR:1/ })
   assert.equal(normalized.holdings[0].manualPrice, null)
 })
-test('contract: IB missing cost or a failed ledger call returns no snapshot', async () => {
-  await assert.rejects(fetchIbSnapshot(source, {}, undefined, fixture({ pages: [[stock(1, { avgCost: null })]] }).deps), /average cost/)
+test('contract: IB missing cost imports null; a failed ledger call still fails closed', async () => {
+  const raw = await fetchIbSnapshot(source, {}, undefined, fixture({ pages: [[stock(1, { avgCost: null })]] }).deps)
+  const normalized = assertSnapshotContract(raw, { complete: true })
+  assert.equal(normalized.holdings[0].avgCost, null)
   const failing = { ...fixture().deps, request: async (url) => {
     const path = new URL(url).pathname
     if (path.endsWith('/accounts')) return [account]

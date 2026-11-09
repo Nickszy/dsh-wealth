@@ -120,6 +120,7 @@ test('snapshot maps stocks, funds and cash with quote prices and channel filter'
   assert.equal(snapshot.sourceTotals.netAssets, 7000.25)
   assert.equal(snapshot.sourceTotals.cash, 5000.25)
   assert.equal(snapshot.warnings.length, 0)
+  assert.deepEqual(snapshot.coverage, { stock: 'full', fund: 'full', cash: 'full' })
 })
 
 test('snapshot tolerates missing quotes with a warning but keeps complete coverage', async () => {
@@ -129,22 +130,50 @@ test('snapshot tolerates missing quotes with a warning but keeps complete covera
   assertSnapshotContract(raw, { complete: true, warning: /PRICE_UNAVAILABLE/ })
 })
 
-test('position without cost price is skipped, warns and drops coverage', async () => {
+test('position without cost price is imported with avgCost null and keeps complete coverage', async () => {
   const deps = snapshotDeps({ stock_positions: () => [{ account_channel: 'main', stock_info: [
     { symbol: '700.HK', quantity: '100', currency: 'HKD', cost_price: '350.5' },
     { symbol: 'AAPL.US', quantity: '10', currency: 'USD' },
   ] }] })
   const raw = await fetchLongbridgeMcpSnapshot({ transport: 'mcp', brokerAccountId: 'main' }, SECRET, undefined, deps)
-  assert.ok(!raw.holdings.some(h => h.symbol === 'AAPL.US'))
-  assert.ok(raw.holdings.every(h => h.avgCost !== undefined))
-  assertSnapshotContract(raw, { complete: false, warning: /LB_MCP_COST_UNAVAILABLE:AAPL\.US/ })
+  assert.equal(raw.holdings.find(h => h.symbol === 'AAPL.US').avgCost, null)
+  assert.ok(!raw.warnings.some(w => /LB_MCP_COST_UNAVAILABLE/.test(w)))
+  assertSnapshotContract(raw, { complete: true })
 })
 
-test('positions call failure degrades coverage instead of failing the sync', async () => {
+test('missing fund cost is imported with avgCost null too', async () => {
+  const deps = snapshotDeps({ fund_positions: () => [{ account_channel: 'main', fund_info: [
+    { counter_id: 'UT/FD/HK0000384492', currency: 'HKD', holding_units: '1000', current_net_asset_value: '1.23' },
+  ] }] })
+  const raw = await fetchLongbridgeMcpSnapshot({ transport: 'mcp', brokerAccountId: 'main' }, SECRET, undefined, deps)
+  assert.equal(raw.holdings.find(h => h.assetClass === 'fund').avgCost, null)
+  assertSnapshotContract(raw, { complete: true })
+})
+
+test('positions call failure marks only the stock segment failed', async () => {
   const deps = snapshotDeps({ stock_positions: () => { throw new Error('positions down') } })
   const raw = await fetchLongbridgeMcpSnapshot({ transport: 'mcp', brokerAccountId: 'main' }, SECRET, undefined, deps)
   assert.ok(!raw.holdings.some(h => h.assetClass === 'stock'))
-  assertSnapshotContract(raw, { complete: false, warning: /LB_MCP_POSITIONS_UNAVAILABLE/ })
+  const snapshot = assertSnapshotContract(raw, { complete: false, warning: /LB_MCP_POSITIONS_UNAVAILABLE/ })
+  assert.deepEqual(snapshot.coverage, { stock: 'failed', fund: 'full', cash: 'full' })
+})
+
+test('fund/balance call failures mark their own segments failed', async () => {
+  const deps = snapshotDeps({
+    fund_positions: () => { throw new Error('funds down') },
+    account_balance: () => { throw new Error('balance down') },
+  })
+  const raw = await fetchLongbridgeMcpSnapshot({ transport: 'mcp', brokerAccountId: 'main' }, SECRET, undefined, deps)
+  const snapshot = assertSnapshotContract(raw, { complete: false, warning: /LB_MCP_FUND_POSITIONS_UNAVAILABLE/ })
+  assert.deepEqual(snapshot.coverage, { stock: 'full', fund: 'failed', cash: 'failed' })
+  assert.ok(snapshot.warnings.some(w => /LB_MCP_BALANCE_UNAVAILABLE/.test(w)))
+})
+
+test('row skipped within a successful call marks that segment partial', async () => {
+  const deps = snapshotDeps({ stock_positions: () => [{ account_channel: 'main', stock_info: 'not-an-array' }] })
+  const raw = await fetchLongbridgeMcpSnapshot({ transport: 'mcp', brokerAccountId: 'main' }, SECRET, undefined, deps)
+  const snapshot = assertSnapshotContract(raw, { complete: false, warning: /THS_LB_MCP_STOCK_ROW/ })
+  assert.deepEqual(snapshot.coverage, { stock: 'partial', fund: 'full', cash: 'full' })
 })
 
 test('multi-currency balance omits adapter-summed totals', async () => {

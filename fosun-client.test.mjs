@@ -118,7 +118,8 @@ test('复星 snapshot maps holdings, cash and totals', async () => {
   assert.deepEqual([tencent.market, tencent.currency, tencent.avgCost, tencent.manualPrice], ['HK', 'HKD', 350, 365])
   assert.equal(snapshot.sourceTotals.totalAsset, 20000)
   assert.equal(snapshot.sourceTotals.cash, 8888.88)
-  assert.equal(snapshot.complete, true)
+  const normalized = assertSnapshotContract(snapshot, { complete: true })
+  assert.deepEqual(normalized.coverage, { stock: 'full', fund: 'full', cash: 'full' })
 })
 
 test('复星 history classifies cash flows and keeps original labels', async () => {
@@ -217,7 +218,7 @@ test('复星 snapshot contract: missing price only warns and stays complete', as
   assert.equal(snapshot.holdings.find((h) => h.symbol === 'AAPL').manualPrice, null)
 })
 
-test('复星 snapshot contract: a row skipped for unknown cost makes it incomplete', async () => {
+test('复星 snapshot contract: unknown cost imports the row with null avgCost and stays complete', async () => {
   const deps = gatewayDeps((path) => {
     if (path === '/api/v1/portfolio/CashSummary') return CASH_SUMMARY
     if (path === '/api/v1/portfolio/Holdings') return { code: 0, data: { holdings: [
@@ -227,8 +228,10 @@ test('复星 snapshot contract: a row skipped for unknown cost makes it incomple
     throw new Error('unexpected ' + path)
   })
   const snapshot = await fetchFosunSnapshot({ gatewayUrl: GATEWAY, brokerAccountId: 'S1' }, SECRETS, undefined, deps)
-  assertSnapshotContract(snapshot, { complete: false, warning: /FOSUN_COST_UNAVAILABLE:MSFT/ })
-  assert.ok(!snapshot.holdings.some((h) => h.symbol === 'MSFT'))
+  const normalized = assertSnapshotContract(snapshot, { complete: true })
+  assert.equal(normalized.holdings.find((h) => h.symbol === 'MSFT').avgCost, null)
+  assert.ok(!snapshot.warnings.some((w) => /FOSUN_COST_/.test(w)), '缺成本不再伪造或跳过')
+  assert.deepEqual(normalized.coverage, { stock: 'full', fund: 'full', cash: 'full' })
 })
 
 test('复星 snapshot contract: CashSummary failure marks incomplete', async () => {
@@ -238,7 +241,9 @@ test('复星 snapshot contract: CashSummary failure marks incomplete', async () 
     throw new Error('unexpected ' + path)
   })
   const snapshot = await fetchFosunSnapshot({ gatewayUrl: GATEWAY, brokerAccountId: 'S1' }, SECRETS, undefined, deps)
-  assertSnapshotContract(snapshot, { complete: false, warning: /FOSUN_CASH_SUMMARY_UNAVAILABLE/ })
+  const normalized = assertSnapshotContract(snapshot, { complete: false, warning: /FOSUN_CASH_SUMMARY_UNAVAILABLE/ })
+  assert.equal(normalized.coverage.cash, 'failed')
+  assert.equal(normalized.coverage.stock, 'full')
   assert.ok(!snapshot.holdings.some((h) => h.assetClass === 'cash'))
 })
 
@@ -249,7 +254,10 @@ test('复星 snapshot contract: Holdings failure keeps cash but marks incomplete
     throw new Error('unexpected ' + path)
   })
   const snapshot = await fetchFosunSnapshot({ gatewayUrl: GATEWAY, brokerAccountId: 'S1' }, SECRETS, undefined, deps)
-  assertSnapshotContract(snapshot, { complete: false, warning: /FOSUN_HOLDINGS_UNAVAILABLE/ })
+  const normalized = assertSnapshotContract(snapshot, { complete: false, warning: /FOSUN_HOLDINGS_UNAVAILABLE/ })
+  assert.equal(normalized.coverage.stock, 'failed')
+  assert.equal(normalized.coverage.fund, 'failed')
+  assert.equal(normalized.coverage.cash, 'full')
   assert.deepEqual(snapshot.holdings.map((h) => h.symbol), ['CASH:HKD'])
 })
 
@@ -260,7 +268,8 @@ test('复星 snapshot contract: a missing cash balance marks incomplete', async 
     throw new Error('unexpected ' + path)
   })
   const snapshot = await fetchFosunSnapshot({ gatewayUrl: GATEWAY, brokerAccountId: 'S1' }, SECRETS, undefined, deps)
-  assertSnapshotContract(snapshot, { complete: false, warning: /FOSUN_CASH_UNAVAILABLE/ })
+  const normalized = assertSnapshotContract(snapshot, { complete: false, warning: /FOSUN_CASH_UNAVAILABLE/ })
+  assert.equal(normalized.coverage.cash, 'failed')
 })
 
 test('复星 snapshot contract: hitting the 20-page limit marks incomplete', async () => {
@@ -274,5 +283,7 @@ test('复星 snapshot contract: hitting the 20-page limit marks incomplete', asy
     throw new Error('unexpected ' + path)
   })
   const snapshot = await fetchFosunSnapshot({ gatewayUrl: GATEWAY, brokerAccountId: 'S1' }, SECRETS, undefined, deps)
-  assertSnapshotContract(snapshot, { complete: false, warning: /FOSUN_POSITIONS_PAGE_LIMIT/ })
+  const normalized = assertSnapshotContract(snapshot, { complete: false, warning: /FOSUN_POSITIONS_PAGE_LIMIT/ })
+  assert.equal(normalized.coverage.stock, 'partial')
+  assert.equal(normalized.coverage.fund, 'partial')
 })

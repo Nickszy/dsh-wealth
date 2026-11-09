@@ -57,7 +57,8 @@ test('且慢 tool names resolve case-insensitively and holdings map with derived
   assert.equal(accounts.accounts[0].currency, 'CNY')
 
   const snapshot = await fetchQiemanSnapshot({ mcpEndpoint: 'https://mcp.test', brokerAccountId: 'main' }, SECRETS, undefined, deps)
-  assertSnapshotContract(snapshot, { complete: true })
+  const normalized = assertSnapshotContract(snapshot, { complete: true })
+  assert.deepEqual(normalized.coverage, { fund: 'full' })
   assert.equal(snapshot.holdings.length, 2) // zero-share row skipped
   const first = snapshot.holdings.find(h => h.symbol === '000001')
   assert.equal(first.market, 'FUND')
@@ -165,7 +166,7 @@ test('且慢 fingerprint hashes the credential without storing it', () => {
   assert.equal(qiemanMcpFingerprintPart({}), '')
 })
 
-test('且慢 snapshot contract: an unknown-cost row makes it incomplete, zero shares do not', async () => {
+test('且慢 snapshot contract: unknown cost imports the row with null avgCost; zero shares still skip', async () => {
   const deps = jsonDeps(
     ['GetUserM4FundDetail', 'GetUserAssetTree'],
     {
@@ -178,9 +179,11 @@ test('且慢 snapshot contract: an unknown-cost row makes it incomplete, zero sh
     },
   )
   const snapshot = await fetchQiemanSnapshot({}, SECRETS, undefined, deps)
-  assertSnapshotContract(snapshot, { complete: false, warning: /QIEMAN_COST_UNAVAILABLE:000002/ })
-  assert.ok(!snapshot.holdings.some(h => h.symbol === '000002'))
+  const normalized = assertSnapshotContract(snapshot, { complete: true })
+  assert.equal(normalized.holdings.find(h => h.symbol === '000002').avgCost, null)
+  assert.ok(!snapshot.warnings.some(w => /QIEMAN_COST_/.test(w)), '缺成本不再伪造或跳过')
   assert.ok(snapshot.warnings.some(w => /QIEMAN_ZERO_SHARES/.test(w)))
+  assert.deepEqual(normalized.coverage, { fund: 'full' })
 })
 
 test('且慢 snapshot contract: an invalid NAV only warns and stays complete', async () => {
@@ -190,7 +193,8 @@ test('且慢 snapshot contract: an invalid NAV only warns and stays complete', a
     ] }),
   })
   const snapshot = await fetchQiemanSnapshot({}, SECRETS, undefined, deps)
-  assertSnapshotContract(snapshot, { complete: true })
+  const normalized = assertSnapshotContract(snapshot, { complete: true })
+  assert.deepEqual(normalized.coverage, { fund: 'full' })
   assert.equal(snapshot.holdings[0].manualPrice, null)
   assert.equal(snapshot.holdings[0].avgCost, 1.8)
 })
@@ -201,7 +205,8 @@ test('且慢 snapshot contract: fund detail failure falls back to the tree and m
     GetUserAssetTree: () => ({ fundAssetGroupList: [{ fundCode: '000001', staticShare: 100, staticShareAsset: 200, holdingProfit: 20 }] }),
   })
   const snapshot = await fetchQiemanSnapshot({}, SECRETS, undefined, deps)
-  assertSnapshotContract(snapshot, { complete: false, warning: /QIEMAN_FUND_DETAIL_UNAVAILABLE/ })
+  const normalized = assertSnapshotContract(snapshot, { complete: false, warning: /QIEMAN_FUND_DETAIL_UNAVAILABLE/ })
+  assert.equal(normalized.coverage.fund, 'failed')
   assert.equal(snapshot.holdings.length, 1)
 })
 
@@ -210,11 +215,12 @@ test('且慢 snapshot contract: a missing fund-detail tool still reads the tree 
     GetUserAssetTree: () => ({ fundAssetGroupList: [{ fundCode: '000001', staticShare: 100, staticShareAsset: 200, holdingProfit: 20 }] }),
   })
   const snapshot = await fetchQiemanSnapshot({}, SECRETS, undefined, deps)
-  assertSnapshotContract(snapshot, { complete: false })
+  const normalized = assertSnapshotContract(snapshot, { complete: false })
+  assert.equal(normalized.coverage.fund, 'failed')
   assert.equal(snapshot.holdings.length, 1)
 })
 
-test('且慢 sub-account contract: a skipped unknown-cost row makes it incomplete', async () => {
+test('且慢 sub-account contract: unknown-cost rows import with null avgCost and stay complete', async () => {
   const catalog = { data: {
     rootAccount: { serviceAccountId: 'SA0ROOT', assetName: '总账户' },
     subAccounts: [{ serviceAccountId: 'SA0AAA', accountName: '长钱', accountType: 'SUB_ACCOUNT' }],
@@ -228,5 +234,9 @@ test('且慢 sub-account contract: a skipped unknown-cost row makes it incomplet
     GetUserAssetTree: () => tree,
   })
   const snapshot = await fetchQiemanSnapshot({ brokerAccountId: 'SA0AAA' }, SECRETS, undefined, deps)
-  assertSnapshotContract(snapshot, { complete: false, warning: /QIEMAN_COST_UNAVAILABLE:000099/ })
+  const normalized = assertSnapshotContract(snapshot, { complete: true })
+  assert.deepEqual(normalized.holdings.map(h => h.symbol).sort(), ['000051', '000099'])
+  assert.ok(normalized.holdings.every(h => h.avgCost === null))
+  assert.ok(!snapshot.warnings.some(w => /QIEMAN_COST_/.test(w)), '缺成本不再伪造或跳过')
+  assert.deepEqual(normalized.coverage, { fund: 'full' })
 })

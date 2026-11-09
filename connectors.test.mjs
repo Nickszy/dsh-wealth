@@ -44,3 +44,74 @@ test('normalizer keeps broker-reported net assets (futu/longbridge MCP report ne
   raw.sourceTotals = { netAssets: '12345.6', cash: 10 }
   assert.deepEqual(normalizeSnapshot(raw).sourceTotals, { cash: 10, netAssets: 12345.6 })
 })
+test('unknown holding cost survives as null, distinct from a real zero cost', () => {
+  const raw = canonical(); raw.holdings[0].avgCost = null
+  const result = normalizeSnapshot(raw)
+  assert.equal(result.holdings[0].avgCost, null)
+  assert.notEqual(result.holdings[0].avgCost, 0)
+  raw.holdings[0].avgCost = 0
+  assert.equal(normalizeSnapshot(raw).holdings[0].avgCost, 0)
+  // 缺字段仍然拒绝（沿用 v1 必填规则）
+  delete raw.holdings[0].avgCost
+  assert.throws(() => normalizeSnapshot(raw), /avgCost/)
+})
+test('trades still require a numeric price because a trade defines its own cost', () => {
+  const raw = canonical(); raw.trades = [{ ...raw.holdings[0], side: 'buy', price: 11, date: '2026-11-06' }]
+  const result = normalizeSnapshot(raw)
+  assert.equal(result.trades[0].price, 11)
+  assert.equal('avgCost' in result.trades[0], false)
+  for (const price of [null, undefined]) {
+    const copy = structuredClone(raw); copy.trades[0].price = price
+    assert.throws(() => normalizeSnapshot(copy), /price/)
+  }
+})
+test('coverage segments derive complete and replace an explicit complete flag', () => {
+  const allFull = canonical(); delete allFull.complete; allFull.coverage = { stock: 'full', cash: 'full' }
+  const derived = normalizeSnapshot(allFull)
+  assert.equal(derived.complete, true)
+  assert.deepEqual(derived.coverage, { stock: 'full', cash: 'full' })
+  for (const state of ['partial', 'failed']) {
+    const raw = canonical(); raw.complete = true; raw.coverage = { stock: 'full', cash: state }
+    assert.equal(normalizeSnapshot(raw).complete, false, state)
+  }
+  // 无 coverage 时保持 v1 行为：complete 必填且原样保留
+  const v1 = canonical()
+  assert.equal(normalizeSnapshot(v1).complete, true)
+  assert.ok(!('coverage' in normalizeSnapshot(v1)))
+})
+test('coverage rejects unknown segments, invalid states and non-object values', () => {
+  for (const coverage of [{ etf: 'full' }, { stock: 'unknown' }, { stock: 1 }, { stock: null }, [], 'full']) {
+    const raw = canonical(); raw.coverage = coverage
+    assert.throws(() => normalizeSnapshot(raw), undefined, JSON.stringify(coverage))
+  }
+  const badComplete = canonical(); badComplete.coverage = { stock: 'full' }; badComplete.complete = 'yes'
+  assert.throws(() => normalizeSnapshot(badComplete), /complete must be boolean/)
+})
+test('v2 warning objects normalize to display strings plus severity details', () => {
+  const raw = canonical()
+  raw.warnings = ['FUTU_MCP_MISSING_COST:US.AAPL', { code: 'QUOTE_DATE_UNAVAILABLE', severity: 'info', message: '行情日期缺失' }, { code: 'COST_UNAVAILABLE' }]
+  const result = normalizeSnapshot(raw)
+  assert.deepEqual(result.warnings, ['FUTU_MCP_MISSING_COST:US.AAPL', '行情日期缺失', 'COST_UNAVAILABLE'])
+  assert.deepEqual(result.warningDetails, [
+    { code: 'FUTU_MCP_MISSING_COST', severity: 'degraded', message: 'FUTU_MCP_MISSING_COST:US.AAPL' },
+    { code: 'QUOTE_DATE_UNAVAILABLE', severity: 'info', message: '行情日期缺失' },
+    { code: 'COST_UNAVAILABLE', severity: 'degraded', message: 'COST_UNAVAILABLE' },
+  ])
+  // 字符串缺冒号时取前 40 字符并大写；对象缺 severity 默认 degraded。
+  const long = normalizeSnapshot({ ...canonical(), warnings: ['x'.repeat(60)] })
+  assert.equal(long.warningDetails[0].code, 'X'.repeat(40))
+  assert.equal(long.warningDetails[0].severity, 'degraded')
+  result.warningDetails.push({ code: 'MUTATED' })
+  assert.equal(raw.warnings.length, 3)
+})
+test('v2 warning validation rejects bad codes, messages and severities', () => {
+  for (const warning of [{ severity: 'info' }, { code: '' }, { code: 1 }, { code: 'X', severity: 'warn' }, { code: 'X', severity: 'INFO' }, { code: 'X', message: 5 }, { code: 'X', message: '' }]) {
+    const raw = canonical(); raw.warnings = [warning]
+    assert.throws(() => normalizeSnapshot(raw), undefined, JSON.stringify(warning))
+  }
+})
+test('v1 string warnings output stays byte-identical to before', () => {
+  const raw = canonical(); raw.warnings = ['PARTIAL', 'FUTU_MCP_COST_UNAVAILABLE:US.AAPL']
+  const result = normalizeSnapshot(raw)
+  assert.deepEqual(result.warnings, ['PARTIAL', 'FUTU_MCP_COST_UNAVAILABLE:US.AAPL'])
+})

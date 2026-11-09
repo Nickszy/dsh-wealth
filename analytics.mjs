@@ -214,14 +214,19 @@ export function analyze(db, options = {}) {
   const changePct = first && first.totalValueBase > 0 && change != null ? (change / first.totalValueBase) * 100 : null
 
   // 数据质量：缺价、缺汇率、流水覆盖不完整都进入 quality，而不是静默通过。
-  const unpriced = (db.holdings || []).filter((h) => h.manualPrice == null && h.qty > 0).length
+  // unpriced 只统计「没有任何现价（手填/行情/券商），但成本已知」的持仓——它们按成本估值。
+  // 完全无法定价的行由 summarize 排除（reason='no-price'），单独提示，不混进成本估值。
+  const unpriced = (db.holdings || []).filter((h) => h.qty > 0 && h.manualPrice == null && h.quotePrice == null && h.sourcePrice == null && h.avgCost != null).length
+  const noPriceExcluded = (summary.excludedHoldings || []).filter((h) => h.reason === 'no-price').length
+  const otherExcluded = (summary.excludedCount || 0) - noPriceExcluded
   const batches = db.historyBatches || []
   const incompleteBatches = batches.filter((b) => b?.coverage && b.coverage.complete === false)
   const warnings = []
   if (!series.length) warnings.push('还没有保存过快照，趋势与收益需要至少一天的历史')
   else if (series.length < 2) warnings.push('只有一天快照，趋势与收益暂不可计算')
   if (unpriced) warnings.push(`${unpriced} 条持仓没有现价，按成本估值`)
-  if (summary.excludedCount) warnings.push(`${summary.excludedCount} 条持仓因缺少汇率或数值无效未计入总额`)
+  if (otherExcluded) warnings.push(`${otherExcluded} 条持仓因缺少汇率或数值无效未计入总额`)
+  if (noPriceExcluded) warnings.push(`${noPriceExcluded} 条持仓没有任何价格且成本未知，未计入总额`)
   if (flows.unknownCashRows) warnings.push(`${flows.unknownCashRows} 条流水没有金额，收益与现金流汇总为下限估算`)
   if (incompleteBatches.length) warnings.push(`${incompleteBatches.length} 个历史批次的覆盖不完整（如缺少银证转账）`)
 

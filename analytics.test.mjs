@@ -145,6 +145,36 @@ test('analyze on a ledger with history archive produces a complete read-only rep
   assert.equal(JSON.stringify(db), before)
 })
 
+test('analyze counts only true cost-estimates as unpriced and warns separately about no-price rows', () => {
+  const db = ledger()
+  db.accounts = [{ id: 'A', name: 'A', currency: 'CNY' }]
+  db.instruments = [
+    { id: 'I1', symbol: '600001', market: 'CN', assetClass: 'stock', currency: 'CNY' },
+    { id: 'I2', symbol: '600002', market: 'CN', assetClass: 'stock', currency: 'CNY' },
+    { id: 'I3', symbol: '600003', market: 'CN', assetClass: 'stock', currency: 'CNY' },
+    { id: 'I4', symbol: '600004', market: 'CN', assetClass: 'stock', currency: 'CNY' },
+    { id: 'I5', symbol: 'AAPL', market: 'US', assetClass: 'stock', currency: 'USD' },
+  ]
+  db.holdings = [
+    // 只有成本：按成本估值，算作 unpriced（成本已知，包含真实的 0 成本）。
+    { id: 'H_COST', accountId: 'A', instrumentId: 'I1', qty: 10, avgCost: 5, currency: 'CNY' },
+    { id: 'H_ZERO', accountId: 'A', instrumentId: 'I2', qty: 10, avgCost: 0, currency: 'CNY' },
+    // 有行情 / 券商价：不算 unpriced。
+    { id: 'H_QUOTE', accountId: 'A', instrumentId: 'I3', qty: 10, avgCost: 5, quotePrice: 6, currency: 'CNY' },
+    { id: 'H_SOURCE', accountId: 'A', instrumentId: 'I4', qty: 10, avgCost: 5, sourcePrice: 7, currency: 'CNY' },
+    // 完全没有价格且成本未知：由 summarize 排除，单独提示。
+    { id: 'H_NOPRICE', accountId: 'A', instrumentId: 'I4', qty: 10, avgCost: null, currency: 'CNY' },
+    // 缺汇率：仍走原有「缺少汇率或数值无效」提示。
+    { id: 'H_FX', accountId: 'A', instrumentId: 'I5', qty: 1, avgCost: 2, manualPrice: 3, currency: 'USD' },
+  ]
+  const report = analyze(db)
+  assert.equal(report.quality.unpricedHoldings, 2)
+  assert.equal(report.quality.excludedHoldings, 2)
+  assert.ok(report.quality.warnings.includes('2 条持仓没有现价，按成本估值'))
+  assert.ok(report.quality.warnings.includes('1 条持仓因缺少汇率或数值无效未计入总额'))
+  assert.ok(report.quality.warnings.includes('1 条持仓没有任何价格且成本未知，未计入总额'))
+})
+
 test('scopeLedger keeps only selected accounts and re-sums snapshots from per-account values', () => {
   const db = ledger()
   db.accounts = [{ id: 'A', name: 'A' }, { id: 'B', name: 'B' }]

@@ -107,7 +107,8 @@ test('snapshot maps positions and per-currency cash; mixed currencies omit summe
   assert.deepEqual([cashHkd.market, cashHkd.assetClass, cashHkd.currency, cashHkd.qty], ['CASH', 'cash', 'HKD', 4500.25])
   assert.equal(raw.sourceTotals, undefined) // mixed currencies → totals omitted entirely
   assertNoCrossCurrencySum(raw, ['cash', 'netAssets'])
-  assertSnapshotContract(raw, { complete: true, warning: /FUTU_MCP_MIXED_CURRENCY_TOTALS/ })
+  const snapshot = assertSnapshotContract(raw, { complete: true, warning: /FUTU_MCP_MIXED_CURRENCY_TOTALS/ })
+  assert.deepEqual(snapshot.coverage, { stock: 'full', fund: 'full', cash: 'full' })
 })
 
 test('single-currency account emits netAssets and cash totals', async () => {
@@ -119,22 +120,34 @@ test('single-currency account emits netAssets and cash totals', async () => {
   assert.equal(snapshot.warnings.length, 0)
 })
 
-test('position without cost price is skipped, warns and drops coverage', async () => {
+test('position without cost price is imported with avgCost null and keeps complete coverage', async () => {
   const deps = snapshotDeps({ account_positions: () => ({ positions: [
     { position_side: 'LONG', code: 'HK.00700', qty: '100', currency: 'HKD', nominal_price: '380.2', cost_price: '350.5', security_type: 'STOCK' },
     { position_side: 'LONG', code: 'US.AAPL', qty: '10', currency: 'USD', nominal_price: '185.4', security_type: 'STOCK' },
   ] }) })
   const raw = await fetchFutuMcpSnapshot({ transport: 'mcp', brokerAccountId: '123456' }, SECRET, undefined, deps)
-  assert.ok(!raw.holdings.some(h => h.symbol === 'US.AAPL'))
-  assert.ok(raw.holdings.every(h => h.avgCost !== undefined))
-  assertSnapshotContract(raw, { complete: false, warning: /FUTU_MCP_COST_UNAVAILABLE:US\.AAPL/ })
+  const aapl = raw.holdings.find(h => h.symbol === 'US.AAPL')
+  assert.equal(aapl.avgCost, null)
+  assert.ok(!raw.warnings.some(w => /FUTU_MCP_COST_UNAVAILABLE/.test(w)))
+  assertSnapshotContract(raw, { complete: true })
 })
 
-test('funds call failure keeps holdings but drops coverage', async () => {
+test('position with missing qty degrades only the affected segment', async () => {
+  const deps = snapshotDeps({ account_positions: () => ({ positions: [
+    ...POSITIONS.positions,
+    { position_side: 'LONG', code: 'US.TSLA', qty: null, currency: 'USD', cost_price: '200', security_type: 'STOCK' },
+  ] }) })
+  const raw = await fetchFutuMcpSnapshot({ transport: 'mcp', brokerAccountId: '123456' }, SECRET, undefined, deps)
+  const snapshot = assertSnapshotContract(raw, { complete: false, warning: /FUTU_MCP_MISSING_QTY:US\.TSLA/ })
+  assert.deepEqual(snapshot.coverage, { stock: 'partial', fund: 'full', cash: 'full' })
+})
+
+test('funds call failure marks the cash segment failed', async () => {
   const deps = snapshotDeps({ account_funds: () => { throw new Error('funds down') } })
   const raw = await fetchFutuMcpSnapshot({ transport: 'mcp', brokerAccountId: '123456' }, SECRET, undefined, deps)
   assert.equal(raw.holdings.filter(h => h.assetClass === 'stock').length, 2)
-  assertSnapshotContract(raw, { complete: false, warning: /FUTU_MCP_FUNDS_UNAVAILABLE:HKD/ })
+  const snapshot = assertSnapshotContract(raw, { complete: false, warning: /FUTU_MCP_FUNDS_UNAVAILABLE:HKD/ })
+  assert.deepEqual(snapshot.coverage, { stock: 'full', fund: 'full', cash: 'failed' })
 })
 
 test('missing market prices warn but coverage stays complete', async () => {

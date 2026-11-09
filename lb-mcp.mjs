@@ -7,6 +7,11 @@
 //   https://open.longbridge.com/connect and expire in 10 minutes.
 import { createHash, randomUUID } from 'node:crypto'
 import { cashSignOf, isFlowKind, canonicalMarket, marketCurrency } from './model.mjs'
+import { withLongbridge } from './brokers-sdk.mjs'
+// Execution-row validation shared with the native Futu history lives in futu-mcp.mjs.
+// Importing the adapter (never the dispatcher) keeps the graph one-way:
+// history-provider -> registry -> adapters.
+import { ZONES, fallback, localDateTime, instrument, unsupportedFlags, canonicalExecution, addUnique, result, inRange } from './futu-mcp.mjs'
 
 const DEFAULT_ENDPOINT = 'https://mcp.longbridge.com'
 const PROTOCOL_VERSION = '2025-11-25'
@@ -286,9 +291,8 @@ function stockHoldings(positions, warnings, seen) {
       if (qty === 0) continue // 已清仓（当日卖光）：不是缺数据，旧持仓应随完整快照删除
       if (qty == null || qty < 0) { warnings.push('LB_MCP_MISSING_QTY:' + symbol); skipped = true; continue }
       const currencyValue = currency(row.currency || MARKET_CASH_CURRENCY[market] || 'USD', 'stock_positions.currency')
-      // v1 契约要求 avgCost 必填：缺成本价时跳过该行并降级覆盖，绝不伪造成本。
+      // v2.1：成本可空。缺成本价时行照常入库（avgCost=null），既不伪造也不丢覆盖。
       const cost = money(row.cost_price, 'stock_positions.cost_price')
-      if (cost == null) { warnings.push('LB_MCP_COST_UNAVAILABLE:' + symbol); skipped = true; continue }
       list.push({
         symbol, name: typeof row.symbol_name === 'string' && row.symbol_name.trim() ? row.symbol_name.trim() : symbol,
         market, assetClass: market === 'CASH' ? 'cash' : 'stock',
@@ -318,8 +322,8 @@ function fundHoldings(positions, warnings, seen) {
       if (qty === 0) continue // 已清仓（当日卖光）：不是缺数据，旧持仓应随完整快照删除
       if (qty == null || qty < 0) { warnings.push('LB_MCP_MISSING_FUND_QTY:' + symbol); skipped = true; continue }
       const currencyValue = currency(row.currency || 'HKD', 'fund_positions.currency')
+      // v2.1：缺成本照常入库，avgCost=null。
       const cost = money(row.cost_net_asset_value, 'fund_positions.cost_net_asset_value')
-      if (cost == null) { warnings.push('LB_MCP_COST_UNAVAILABLE:' + symbol); skipped = true; continue }
       list.push({
         symbol, name: typeof row.symbol_name === 'string' && row.symbol_name.trim() ? row.symbol_name.trim() : symbol,
         market: 'FUND', assetClass: 'fund',
@@ -383,23 +387,28 @@ export async function fetchLongbridgeMcpSnapshot(source, secrets, signal, deps =
   const mcp = createLongbridgeMcp({ secrets, endpoint: source?.mcpEndpoint, signal, deps })
   try {
     const warnings = []
-    let coverageLost = false
+    // v2.2 分段覆盖：每个接口映射到 stock/fund/cash 段。调用失败 → failed；
+    // 该调用内有行被跳过 → partial（不能覆盖 failed）；全部干净 → full。
+    const coverage = { stock: 'full', fund: 'full', cash: 'full' }
+    const degrade = (segment, state) => { if (coverage[segment] !== 'failed') coverage[segment] = state }
     // 单个接口失败时降级为 partial（complete=false），保留账本里的旧持仓；
     // 只有全部来源都为空时才整体报错。
-    const callOrWarn = async (tool, code) => {
+    const callOrWarn = async (tool, code, segment) => {
       try { return await mcp.call(tool, {}) } catch (error) {
         // 认证失败必须抛出，交给上层续期/提示重新授权，不能降级成 partial。
         if (LB_AUTH_ERROR.test(String(error?.message || error))) throw error
-        warnings.push(code + ':' + (error?.message || 'failed')); coverageLost = true; return [] }
+        warnings.push(code + ':' + (error?.message || 'failed')); coverage[segment] = 'failed'; return [] }
     }
-    const stocks = await callOrWarn('stock_positions', 'LB_MCP_POSITIONS_UNAVAILABLE')
-    const funds = await callOrWarn('fund_positions', 'LB_MCP_FUND_POSITIONS_UNAVAILABLE')
-    const balance = await callOrWarn('account_balance', 'LB_MCP_BALANCE_UNAVAILABLE')
+    const stocks = await callOrWarn('stock_positions', 'LB_MCP_POSITIONS_UNAVAILABLE', 'stock')
+    const funds = await callOrWarn('fund_positions', 'LB_MCP_FUND_POSITIONS_UNAVAILABLE', 'fund')
+    const balance = await callOrWarn('account_balance', 'LB_MCP_BALANCE_UNAVAILABLE', 'cash')
     const seen = new Set()
     const stockResult = stockHoldings(stocks, warnings, seen)
     const fundResult = fundHoldings(funds, warnings, seen)
     const cashResult = cashHoldings(balance, warnings)
-    if (stockResult.skipped || fundResult.skipped || cashResult.skipped) coverageLost = true
+    if (stockResult.skipped) degrade('stock', 'partial')
+    if (fundResult.skipped) degrade('fund', 'partial')
+    if (cashResult.skipped) degrade('cash', 'partial')
     const holdings = [...stockResult.list, ...fundResult.list, ...cashResult.list]
     if (!holdings.length) fail('长桥 MCP 没有返回任何持仓或现金；请确认账户内有资产或已授权对应权限')
     const { filtered } = pickChannel(holdings, source)
@@ -433,8 +442,8 @@ export async function fetchLongbridgeMcpSnapshot(source, secrets, signal, deps =
     }
     const snapshot = {
       holdings: filtered.map(({ channel, ...rest }) => rest),
-      // complete 只看覆盖：接口失败或有行因缺 qty/成本被跳过都不能删旧持仓；缺价不影响。
-      complete: !coverageLost,
+      // complete 由 normalizeSnapshot 按 coverage 派生；缺成本的行已入库，不降覆盖。
+      coverage,
       warnings,
       queriedAt: new Date(deps.now?.() ?? Date.now()).toISOString(),
       uploadedAt: null, quoteDate: null,
@@ -540,4 +549,116 @@ export async function verifyLongbridgeMcpToken(token, { endpoint, signal, deps =
 export function longbridgeMcpFingerprintPart(secrets = {}) {
   const token = String(secrets?.mcpToken || '')
   return token ? createHash('sha256').update(token).digest('hex').slice(0, 16) : ''
+}
+
+// ---------- native SDK history ----------
+// Shares execution-row validation with futu-mcp.mjs (see the import above) so the
+// helpers are not duplicated; history-provider.mjs is never imported from an adapter.
+// Named `executionCurrency` because this module has a different MCP currency() helper.
+function executionCurrency(value) {
+  const c = text(value, 'Execution order currency').toUpperCase()
+  if (!/^[A-Z]{3}$/.test(c)) fail('Execution order currency is unknown')
+  return c
+}
+function channels(value, field) {
+  const list = array(value?.channels, `${field}.channels`), ids = new Set()
+  for (const c of list) { const id = text(c.accountChannel, 'Longbridge accountChannel'); if (ids.has(id)) fail('Duplicate Longbridge accountChannel'); ids.add(id); array(c.positions, `${field}.positions`) }
+  return [...ids]
+}
+function lbInstrument(value) {
+  const symbol = text(value, 'Longbridge execution symbol'), match = /^(.+)\.(HK|US|SH|SZ)$/.exec(symbol)
+  if (!match) fail('Longbridge derivative or unknown execution symbol is unsupported')
+  const market = { HK: 'HK', US: 'US', SH: 'CN', SZ: 'CN' }[match[2]]
+  instrument(match[1], market)
+  return { symbol, market }
+}
+export async function longbridgeHistory(source, secrets, range, signal, deps, now) {
+  const id = text(source.brokerAccountId, 'source.brokerAccountId (accountChannel)')
+  return withLongbridge(secrets, signal, { ...deps, timeoutMs: deps.timeoutMs ?? 170000 }, async call => {
+    const ids = new Set([...channels(await call('stockPositions'), 'stocks'), ...channels(await call('fundPositions'), 'funds')])
+    if (!ids.has(id)) fail('Selected Longbridge accountChannel was not returned by positions APIs')
+    if (ids.size !== 1) fail('Ambiguous Longbridge account channels: execution history cannot attribute fills to the selected channel')
+    let historyCalls = 0
+    const raw = new Map(), skipped = new Map()
+    const remember = executions => {
+      for (const execution of executions) {
+        let symbol, market
+        try {
+          unsupportedFlags(execution)
+          ;({ symbol, market } = lbInstrument(execution.symbol))
+        } catch {
+          // Options, warrants and other derivatives are outside the spot ledger:
+          // skip them visibly instead of aborting the whole account history.
+          const key = String(execution?.symbol || '未知标的')
+          skipped.set(key, (skipped.get(key) || 0) + 1)
+          continue
+        }
+        const orderId = text(execution.orderId, 'Longbridge execution orderId'), externalId = text(execution.tradeId, 'Longbridge execution tradeId')
+        // Read SDK getters explicitly: native objects have non-enumerable fields.
+        addUnique(raw, canonicalExecution({ ...localDateTime(execution.tradeDoneAt, market), symbol, market, orderId, externalId }, execution.quantity, execution.price))
+      }
+    }
+    const fetchSlice = async (start, end) => {
+      if (++historyCalls > 64) fallback('Longbridge history request budget of 64 reached; complete retrieval cannot be proven')
+      const executions = array(await call('historyExecutions', { startAt: new Date(start), endAt: new Date(end) }), 'Longbridge historyExecutions')
+      if (executions.length > 1000) fallback('Longbridge history response exceeds documented 1000 record cap')
+      if (executions.length < 1000) { remember(executions); return }
+      // 4.3.7 discards has_more. A full page must be subdivided, never trusted.
+      if (end - start <= 1000) fallback('Longbridge one-second execution cap reached; complete retrieval cannot be proven')
+      const middle = start + Math.floor((end - start) / 2000) * 1000
+      await fetchSlice(start, middle)
+      // Shared boundary seconds prevent gaps when the SDK rounds Date bounds.
+      // Never use zero-width intervals; IDs deduplicate overlap and today's API.
+      await fetchSlice(middle, end)
+    }
+    // UTC-padded bounds cover all supported market dates, independent of host TZ.
+    await fetchSlice(Date.parse(`${range.from}T00:00:00Z`) - 86400000, Date.parse(`${range.to}T00:00:00Z`) + 2 * 86400000 - 1000)
+    if (Object.keys(ZONES).some(m => inRange(localDateTime(now, m).date, range))) remember(array(await call('todayExecutions', {}), 'Longbridge todayExecutions'))
+    const selected = [...raw.values()].filter(row => inRange(row.date, range)), orderIds = [...new Set(selected.map(row => row.orderId))]
+    const orders = new Map()
+    // Bulk order lookup: one historyOrders call per window instead of one
+    // rate-limited orderDetail call per order (429002 after ~30 calls/30s).
+    const bulk = new Map()
+    if (selected.length) {
+      const dates = selected.map(r => r.date).sort()
+      let orderCalls = 0
+      const fetchOrders = async (start, end) => {
+        if (++orderCalls > 64) return
+        let list
+        try { list = await call('historyOrders', { startAt: new Date(start), endAt: new Date(end) }) } catch { return }
+        if (!Array.isArray(list)) return
+        if (list.length >= 1000 && end - start > 86400000) {
+          const middle = start + Math.floor((end - start) / 2000) * 1000
+          await fetchOrders(start, middle); await fetchOrders(middle, end); return
+        }
+        for (const o of list) if (o?.orderId) bulk.set(String(o.orderId), o)
+      }
+      await fetchOrders(Date.parse(`${dates[0]}T00:00:00Z`) - 86400000, Math.min(Date.parse(`${dates.at(-1)}T00:00:00Z`) + 2 * 86400000, now.getTime()))
+      try { for (const o of array(await call('todayOrders', {}), 'Longbridge todayOrders')) if (o?.orderId) bulk.set(String(o.orderId), o) } catch {}
+    }
+    const missing = orderIds.filter(id => !bulk.has(id))
+    if (missing.length > 300) fallback('Longbridge order lookup missing too many orders')
+    let detailCalls = 0
+    for (const orderId of orderIds) {
+      let detail = bulk.get(orderId)
+      if (!detail) {
+        // Stay under the 30-calls-per-30-seconds order API limit.
+        if (detailCalls++ && detailCalls % 25 === 0) await new Promise(r => setTimeout(r, deps.orderDetailPauseMs ?? 31000))
+        detail = await call('orderDetail', orderId)
+      }
+      unsupportedFlags(detail)
+      if (!detail || detail.orderId !== orderId) fail('Longbridge order detail ID does not match execution')
+      if (![1, 2, 'Buy', 'Sell'].includes(detail.side)) fail('Longbridge short or unknown order side is unsupported')
+      const kind = detail.side === 1 || detail.side === 'Buy' ? 'buy' : 'sell'
+      orders.set(orderId, { symbol: text(detail.symbol, 'Longbridge order symbol'), currency: executionCurrency(detail.currency), kind, name: typeof detail.stockName === 'string' && detail.stockName.trim() ? detail.stockName : detail.symbol })
+    }
+    const rows = selected.map(row => {
+      const detail = orders.get(row.orderId)
+      if (detail.symbol !== row.symbol) fail('Longbridge execution and order symbols do not match')
+      const { orderId, ...canonicalRow } = row
+      return { ...canonicalRow, name: detail.name, currency: detail.currency, kind: detail.kind, originalType: detail.kind === 'buy' ? 'Buy' : 'Sell', note: `Longbridge execution time (${ZONES[row.market]}); orderId=${orderId}` }
+    })
+    const extra = skipped.size ? [`已跳过期权、窝轮等衍生品或无法识别的成交 ${[...skipped.values()].reduce((a, b) => a + b, 0)} 笔：${[...skipped].map(([s, n]) => `${s}×${n}`).slice(0, 10).join('、')}${skipped.size > 10 ? ' 等' : ''}`] : []
+    return result(rows, range.from, range.to, extra)
+  })
 }

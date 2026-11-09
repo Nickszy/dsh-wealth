@@ -199,17 +199,9 @@ function fundRowToHolding(row, warnings) {
   if (nav === null && amount !== null) nav = amount / shares
   if (nav !== null && !(nav > 0)) nav = null
 
+  // 未知成本保留为 null，不伪造、也不跳过该行。
   let avgCost = null
   if (amount !== null && profit !== null) avgCost = (amount - profit) / shares
-  if (avgCost === null && nav !== null) {
-    avgCost = nav
-    warnings.push(`QIEMAN_COST_ASSUMED:${code} 来源未提供成本，按当前净值暂估`)
-  }
-  // 该行可能存在于账本中，跳过后不能让快照删除它。
-  if (avgCost === null) {
-    warnings.push(`QIEMAN_COST_UNAVAILABLE:${code} 成本未知，已跳过`)
-    return { holding: null, coverageLost: true }
-  }
 
   return {
     holding: {
@@ -294,30 +286,34 @@ export async function fetchQiemanSnapshot(source, secrets, signal, deps = {}) {
     if (!fundTool && !treeTool) fail('且慢 MCP 没有提供持仓读取工具，请确认授权包含「账户与资产」权限')
 
     let payload = null, rows = [], accountTotal = null
-    // complete 只表示覆盖完整；缺净值只警告，不影响 complete。
-    let complete = true
+    // v2 分段覆盖：且慢只有基金资产，没有现金段。缺净值/缺成本只影响展示，不影响覆盖。
+    const coverage = { fund: 'full' }
     if (isSubAccount) {
       // A single 且慢 sub-account only exists in the asset tree (accounts -> strategies -> funds).
       if (!accountTool || !treeTool) fail('读取且慢子账户需要「账户与产品清单」与「资产树」工具，请重新授权')
       const catalog = accountCatalog(await callWithArgs(mcp, accountTool, [{}]))
       const subName = catalog.byName.get(target)
       if (!subName) fail('所选且慢子账户不在当前授权账号中，请重新读取来源账户')
-      const tree = await callWithArgs(mcp, treeTool, [{}])
-      const flat = accountFundRows(tree, subName)
-      rows = flat.rows
-      accountTotal = flat.total
-      payload = tree
-      if (!rows.length) warnings.push(`QIEMAN_SUB_ACCOUNT_EMPTY:${subName}`)
-      if (rows.length) warnings.push('且慢子账户视图不含成本与收益，成本按当前市值暂估；总账户视图才有完整成本')
+      const read = await readTool(mcp, treeTool, [{}], 'QIEMAN_ASSET_TREE_UNAVAILABLE', warnings)
+      if (read.ok) {
+        const flat = accountFundRows(read.payload, subName)
+        rows = flat.rows
+        accountTotal = flat.total
+        payload = read.payload
+        if (!rows.length) warnings.push(`QIEMAN_SUB_ACCOUNT_EMPTY:${subName}`)
+        if (rows.length) warnings.push('且慢子账户视图不含成本与收益，成本未知，收益显示为空；总账户视图才有完整成本')
+      } else {
+        coverage.fund = 'failed'
+      }
     } else {
       if (fundTool) {
         const read = await readTool(mcp, fundTool, [{}, { accountId: 'main' }], 'QIEMAN_FUND_DETAIL_UNAVAILABLE', warnings)
         payload = read.payload
         rows = payload ? collectFundRows(payload) : []
-        if (!read.ok) complete = false
+        if (!read.ok) coverage.fund = 'failed'
       } else {
         // 主持仓工具缺失，只能用降级的资产树视图。
-        complete = false
+        coverage.fund = 'failed'
       }
       if (treeTool) {
         const read = await readTool(mcp, treeTool, [{}], 'QIEMAN_ASSET_TREE_UNAVAILABLE', warnings)
@@ -325,7 +321,7 @@ export async function fetchQiemanSnapshot(source, secrets, signal, deps = {}) {
           payload = payload ? [payload, read.payload] : read.payload
           if (!rows.length) rows = collectFundRows(read.payload)
         } else {
-          complete = false
+          coverage.fund = 'failed'
         }
       }
       if (!rows.length && analysisTool) {
@@ -335,7 +331,7 @@ export async function fetchQiemanSnapshot(source, secrets, signal, deps = {}) {
           if (analyzed.length) rows = analyzed
           else warnings.push('且慢资产分析接口没有返回可识别的基金持仓')
         } else {
-          complete = false
+          coverage.fund = 'failed'
         }
       }
     }
@@ -343,8 +339,7 @@ export async function fetchQiemanSnapshot(source, secrets, signal, deps = {}) {
     const seen = new Set()
     const holdings = []
     for (const row of rows) {
-      const { holding, coverageLost } = fundRowToHolding(row, warnings)
-      if (coverageLost) complete = false
+      const { holding } = fundRowToHolding(row, warnings)
       if (!holding) continue
       const key = holding.symbol + ':' + holding.currency
       if (seen.has(key)) continue
@@ -354,10 +349,19 @@ export async function fetchQiemanSnapshot(source, secrets, signal, deps = {}) {
     if (!holdings.length) fail('且慢 MCP 没有返回任何基金持仓；请确认账户内有资产且授权包含「账户与资产」权限')
 
     const reportedTotal = isSubAccount ? accountTotal : findTotalAsset(payload)
-    const holdingsTotal = holdings.reduce((sum, h) => sum + (h.manualPrice != null ? h.manualPrice : h.avgCost) * h.qty, 0)
+    // 未知成本（avgCost null）不参与成本/盈亏计算，避免把市值整段算成收益。
+    const priceOf = (h) => h.manualPrice != null ? h.manualPrice : h.avgCost
+    const holdingsTotal = holdings.reduce((sum, h) => {
+      const price = priceOf(h)
+      return price == null ? sum : sum + price * h.qty
+    }, 0)
     const totalAsset = reportedTotal ?? (holdingsTotal || null)
     const dayProfit = findDayProfit(payload)
-    const holdingProfit = holdings.reduce((sum, h) => sum + ((h.manualPrice != null ? h.manualPrice : h.avgCost) - h.avgCost) * h.qty, 0)
+    const holdingProfit = holdings.reduce((sum, h) => {
+      if (h.avgCost == null) return sum
+      const price = priceOf(h)
+      return sum + (price - h.avgCost) * h.qty
+    }, 0)
     const sourceTotals = {}
     if (totalAsset !== null) sourceTotals.totalAsset = totalAsset
     if (holdingProfit) sourceTotals.holdingProfit = holdingProfit
@@ -368,7 +372,7 @@ export async function fetchQiemanSnapshot(source, secrets, signal, deps = {}) {
 
     return {
       holdings,
-      complete,
+      coverage,
       warnings,
       queriedAt: new Date(deps.now?.() ?? Date.now()).toISOString(),
       uploadedAt: null,

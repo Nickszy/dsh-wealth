@@ -110,6 +110,32 @@ export function sourceStore(dir = DATA_DIR) {
   }
 }
 
+// v2 分段覆盖：快照 segment 使用资产类别键，etf 归入 stock 段查询。
+const coverageSegment = assetClass => assetClass === 'etf' ? 'stock' : assetClass
+// v2.4 信息性对账：来源汇总与快照持仓合计不一致时追加 degraded 警告（不阻断同步、不影响删除）。
+const RECONCILE_TOLERANCE = 0.011
+function reconcileTotals(snapshot) {
+  const totals = snapshot.sourceTotals
+  if (!totals) return
+  const warn = key => {
+    const message = `来源汇总与持仓合计不一致(${key})`
+    snapshot.warnings.push(`TOTAL_MISMATCH:${key}:${message}`)
+    snapshot.warningDetails.push({ code:`TOTAL_MISMATCH:${key}`, severity:'degraded', message })
+  }
+  // 现金只有一个持仓行时才可对：现金行的 qty 就是金额。
+  const cashRows = snapshot.holdings.filter(h=>h.assetClass === 'cash')
+  if (typeof totals.cash === 'number' && cashRows.length === 1 && Math.abs(totals.cash - cashRows[0].qty) > RECONCILE_TOLERANCE) warn('cash')
+  // 总资产只在快照为单币种时可对：非现金行 qty×(manualPrice??avgCost)，现金行按 qty 累加。
+  if (new Set(snapshot.holdings.map(h=>h.currency)).size !== 1) return
+  const sum = snapshot.holdings.reduce((total, h) => {
+    if (h.assetClass === 'cash') return total + h.qty
+    const price = h.manualPrice ?? h.avgCost
+    return price == null ? NaN : total + h.qty * price
+  }, 0)
+  if (!Number.isFinite(sum)) return
+  for (const key of ['totalAsset','netAssets']) if (typeof totals[key] === 'number' && Math.abs(totals[key] - sum) > RECONCILE_TOLERANCE) warn(key)
+}
+
 /** Apply authoritative positions only to positions owned by this connection. */
 export function mergeSnapshot(db, source, input) {
   const snapshot = normalizeSnapshot(input)
@@ -126,15 +152,54 @@ export function mergeSnapshot(db, source, input) {
     seen.add(holding.id)
     Object.assign(holding, { syncSourceId: source.id, externalHoldingKey: holdingKey, sourcePrice: row.manualPrice, sourceQueriedAt: snapshot.queriedAt, sourceUploadedAt: snapshot.uploadedAt, sourceQuoteDate: snapshot.quoteDate })
   }
-  if (snapshot.complete) staged.holdings = staged.holdings.filter(h=>h.syncSourceId !== source.id || seen.has(h.id))
+  // v1 无 coverage：complete 才全量删除。v2 有 coverage：只有段落为 full 的消失持仓可删，
+  // 标的缺失时无法判段，永不删除。
+  const prunable = h => {
+    if (!snapshot.coverage) return snapshot.complete
+    const instrument = staged.instruments.find(i=>i.id === h.instrumentId)
+    return instrument ? snapshot.coverage[coverageSegment(instrument.assetClass)] === 'full' : false
+  }
+  staged.holdings = staged.holdings.filter(h=>h.syncSourceId !== source.id || seen.has(h.id) || !prunable(h))
   if (snapshot.trades?.length) applyOp(staged, 'import.trades', { rows: snapshot.trades.map(t=>({...t, accountId: account.id, source: source.id})), source: source.id, applyHoldings: false })
   account.syncSourceId = source.id
   account.sourceTotals = snapshot.sourceTotals || null
   account.sourceQueriedAt = snapshot.queriedAt
   account.sourceUploadedAt = snapshot.uploadedAt
   account.sourceQuoteDate = snapshot.quoteDate
+  reconcileTotals(snapshot)
   return { ledger: staged, snapshot, imported: seen.size }
 }
+
+/**
+ * 快照内容哈希：只取持仓经济字段（按市场/代码/币种排序），不含时间戳、警告或汇总。
+ * 内容相同的旧快照不是陈旧数据——重新并入不会丢失任何持仓，可用于修复被时间水位卡住的来源。
+ */
+export function snapshotContentHash(snapshot) {
+  const rows = snapshot.holdings
+    .map(h => [h.market, h.symbol, h.currency, h.assetClass, h.qty, h.avgCost, h.manualPrice])
+    .sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]) || a[2].localeCompare(b[2]))
+    .map(([, symbol, , assetClass, qty, avgCost, manualPrice]) => [assetClass, symbol, qty, avgCost, manualPrice])
+  return createHash('sha256').update(JSON.stringify(rows)).digest('hex')
+}
+
+/**
+ * 账本侧内容哈希：与 snapshotContentHash 相同的行语义（assetClass, symbol, qty, avgCost, manualPrice），
+ * 符号/市场/币种/资产类别取自标的，价格取上次并入的快照价 sourcePrice。
+ * 用于识别「时间戳倒退、但内容正是已保存数据」的重放快照，修复被水位卡死的来源。
+ */
+export function ledgerContentHash(db, sourceId) {
+  const rows = db.holdings
+    .filter(h => h.syncSourceId === sourceId)
+    .map(h => {
+      const instrument = db.instruments.find(i => i.id === h.instrumentId) || {}
+      return [instrument.market, instrument.symbol, h.currency ?? instrument.currency, instrument.assetClass, h.qty, h.avgCost, h.sourcePrice]
+    })
+    .sort((a, b) => String(a[0]).localeCompare(String(b[0])) || String(a[1]).localeCompare(String(b[1])) || String(a[2]).localeCompare(String(b[2])))
+    .map(([, symbol, , assetClass, qty, avgCost, manualPrice]) => [assetClass, symbol, qty, avgCost, manualPrice])
+  return createHash('sha256').update(JSON.stringify(rows)).digest('hex')
+}
+// 两个日期取较晚者（空值视为未知）；水位只能前进。
+const latestDate = (stored, incoming) => !stored ? incoming ?? null : !incoming ? stored : Date.parse(incoming) >= Date.parse(stored) ? incoming : stored
 
 function unwrapToolResult(result) {
   if (result?.isError) throw bad('MCP 读取工具返回错误，账本未更新')
@@ -567,13 +632,15 @@ export function createSyncService(ctx, options = {}) {
     const identity = s => JSON.stringify([s.connector,s.transport,s.thsBookType || 'common',s.portfolioId,s.url,s.toolName,s.args,s.credentialRef,s.brokerAccountId,s.host,s.port,s.tls,s.tradeEnvironment,s.tradeMarket,s.currency,s.gatewayUrl,s.trustLocalGateway,s.mcpEndpoint])
     if (previous && identity(previous) !== identity(source) && db.holdings.some(h=>h.syncSourceId === source.id)) throw bad('已有持仓的连接不可更换来源标识或端点；请创建独立连接')
     if (previous && (identity(previous) !== identity(source) || Object.keys(incomingSecrets).length)) {
-      Object.assign(source, {lastStatus:'never',lastSuccessAt:null,lastAttemptAt:null,lastError:null,warnings:[],queriedAt:null,uploadedAt:null,quoteDate:null,...(identity(previous) !== identity(source) ? {uploadedAtWatermark:null,quoteDateWatermark:null} : {uploadedAtWatermark:previous.uploadedAtWatermark || previous.uploadedAt || null,quoteDateWatermark:previous.quoteDateWatermark || previous.quoteDate || null})})
+      Object.assign(source, {lastStatus:'never',lastSuccessAt:null,lastAttemptAt:null,lastError:null,warnings:[],warningDetails:[],coverage:null,queriedAt:null,uploadedAt:null,quoteDate:null,...(identity(previous) !== identity(source) ? {uploadedAtWatermark:null,quoteDateWatermark:null} : {uploadedAtWatermark:previous.uploadedAtWatermark || previous.uploadedAt || null,quoteDateWatermark:previous.quoteDateWatermark || previous.quoteDate || null})})
     }
     if (!previous) { source.lastStatus = 'never'; all.push(source) }
     else all[all.indexOf(previous)] = source
     if (transaction.snapshot) {
       const s = transaction.snapshot
-      Object.assign(source,{remoteFingerprint:transaction.fingerprint,lastAttemptAt:iso(),lastSuccessAt:iso(),lastStatus:s.warnings.length || !s.complete ? 'partial' : 'ok',lastError:null,warnings:s.warnings,queriedAt:s.queriedAt,uploadedAt:s.uploadedAt,quoteDate:s.quoteDate,uploadedAtWatermark:s.uploadedAt,quoteDateWatermark:s.quoteDate,complete:s.complete,imported:s.holdings.length})
+      // v2.3：只有 degraded 警告或覆盖不完整才标 partial，纯 info 警告保持 ok。
+      const degraded = (s.warningDetails || []).some(d => d.severity === 'degraded')
+      Object.assign(source,{remoteFingerprint:transaction.fingerprint,lastAttemptAt:iso(),lastSuccessAt:iso(),lastStatus:degraded || !s.complete ? 'partial' : 'ok',lastError:null,warnings:s.warnings,warningDetails:s.warningDetails,coverage:s.coverage ?? null,queriedAt:s.queriedAt,uploadedAt:s.uploadedAt,quoteDate:s.quoteDate,uploadedAtWatermark:s.uploadedAt,quoteDateWatermark:s.quoteDate,complete:s.complete,imported:s.holdings.length})
     }
     const credentialOwner = source.authId || source.id
     const storedSecrets = { ...vault.get(credentialOwner), ...incomingSecrets }
@@ -728,11 +795,24 @@ export function createSyncService(ctx, options = {}) {
       if (disposed || abort.signal.aborted) throw bad('同步已中止')
       const current = config.read().find(s=>s.id === id)
       if (!current || current.configRevision !== revision) throw bad('连接配置已变化，请重新同步')
-      const { ledger, snapshot, imported } = mergeSnapshot(readLedger(), current, input)
+      const db = readLedger()
+      const { ledger, snapshot, imported } = mergeSnapshot(db, current, input)
+      const contentHash = snapshotContentHash(snapshot)
       const uploadWatermark = current.uploadedAtWatermark || current.uploadedAt, quoteWatermark = current.quoteDateWatermark || current.quoteDate
-      if ((uploadWatermark && snapshot.uploadedAt && Date.parse(snapshot.uploadedAt) < Date.parse(uploadWatermark)) || (quoteWatermark && snapshot.quoteDate && Date.parse(snapshot.quoteDate) < Date.parse(quoteWatermark))) throw bad('来源数据时间早于已保存快照，已保留原数据')
+      const stale = (uploadWatermark && snapshot.uploadedAt && Date.parse(snapshot.uploadedAt) < Date.parse(uploadWatermark)) || (quoteWatermark && snapshot.quoteDate && Date.parse(snapshot.quoteDate) < Date.parse(quoteWatermark))
+      // 内容完全相同的旧快照可以安全重放（水位被 trans_date 等时间字段污染时用它自愈）；
+      // 与账本已保存内容一致的重放同样接受（时间倒退但数据没变）；
+      // 内容有变化时时间倒退仍然拒绝。
+      if (stale && current.snapshotHash !== contentHash && ledgerContentHash(db, id) !== contentHash) {
+        // 先持久化本次观测到的哈希——连续两次相同内容即视为当前真相，
+        // 否则水位高于所有可达日期的来源永远无法自愈。
+        updateRecord(id, { snapshotHash: contentHash, lastStatus:'error', lastError:'来源数据时间早于已保存快照，已保留原数据' })
+        throw bad('来源数据时间早于已保存快照，已保留原数据')
+      }
       writeLedger(ledger)
-      const updated = updateRecord(id, { lastSuccessAt:iso(),lastStatus:snapshot.warnings.length || !snapshot.complete ? 'partial' : 'ok',lastError:null,warnings:snapshot.warnings,uploadedAt:snapshot.uploadedAt,quoteDate:snapshot.quoteDate,uploadedAtWatermark:snapshot.uploadedAt || uploadWatermark || null,quoteDateWatermark:snapshot.quoteDate || quoteWatermark || null,queriedAt:snapshot.queriedAt,imported,complete:snapshot.complete })
+      // v2.3：仅 degraded 警告或覆盖不完整才标 partial，纯 info 警告保持 ok。
+      const degraded = snapshot.warningDetails.some(d => d.severity === 'degraded')
+      const updated = updateRecord(id, { lastSuccessAt:iso(),lastStatus:degraded || !snapshot.complete ? 'partial' : 'ok',lastError:null,warnings:snapshot.warnings,warningDetails:snapshot.warningDetails,coverage:snapshot.coverage ?? null,uploadedAt:snapshot.uploadedAt,quoteDate:snapshot.quoteDate,uploadedAtWatermark:latestDate(uploadWatermark,snapshot.uploadedAt),quoteDateWatermark:latestDate(quoteWatermark,snapshot.quoteDate),queriedAt:snapshot.queriedAt,imported,complete:snapshot.complete,snapshotHash:contentHash })
       // 深扫过的账户随同步增量收尾新转账；失败或未开通游标都不影响本次持仓结果。
       let transferScan = null
       try { transferScan = await syncThsTransfers(current, abort.signal) } catch (error) { transferScan = { error: String(error?.message || error).slice(0, 200) } }

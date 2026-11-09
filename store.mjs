@@ -259,8 +259,8 @@ export function applyOp(db, op, payload = {}) {
       if (!p.accountId) throw new OpError('bad-request', '缺少 accountId')
       if (!findAccount(db, p.accountId)) throw new OpError('not-found', '账户不存在: ' + p.accountId)
       const qty = numeric(p.qty, 'qty', { optional: true })
-      // 摊薄成本可以为负（分红超过投入）；数量与估值不允许负值。
-      const avgCost = numeric(p.avgCost, 'avgCost', { optional: true, signed: true })
+      // 摊薄成本可以为负（分红超过投入）；null 表示成本未知（v2），与真实的 0 成本区分。
+      const avgCost = numeric(p.avgCost, 'avgCost', { optional: true, nullable: true, signed: true })
       const manualPrice = numeric(p.manualPrice, 'manualPrice', { optional: true, nullable: true })
       // 行情价由「更新行情」写入；模型与手工路径不应伪造，允许显式清除。
       const quotePrice = numeric(p.quotePrice, 'quotePrice', { optional: true, nullable: true })
@@ -284,7 +284,7 @@ export function applyOp(db, op, payload = {}) {
       } else {
         holding = {
           id: uid('POS'), accountId: p.accountId, instrumentId: instrument.id,
-          qty: qty ?? 0, avgCost: avgCost ?? 0,
+          qty: qty ?? 0, avgCost: avgCost === undefined ? 0 : avgCost,
           currency: normCurrency(p.currency, instrument.currency),
           manualPrice: manualPrice ?? null, quotePrice: quotePrice ?? null, quoteAt: quoteAt ?? null, quoteSource: quoteSource ?? null,
           note: String(p.note || ''), updatedAt: nowISO(),
@@ -646,14 +646,14 @@ export function applyOp(db, op, payload = {}) {
 export function summarize(db) {
   const base = db.baseCurrency || 'CNY'
   const fx = { ...db.fx, [base]: 1 }
-  const aggregate = (metadata) => ({ ...metadata, valueBase: 0, costBase: 0, holdings: 0, excludedHoldings: 0 })
+  const aggregate = (metadata) => ({ ...metadata, valueBase: 0, costBase: 0, pnlBase: 0, holdings: 0, excludedHoldings: 0 })
   const byAccount = new Map(db.accounts.map((a) => [a.id, aggregate({ ...a, accountId: a.id })]))
   const byClass = new Map()
   const byCurrency = new Map()
   const bySector = new Map()
   const byStyle = new Map()
   const warnings = [], excludedHoldings = []
-  let totalBase = 0, totalCost = 0
+  let totalBase = 0, totalCost = 0, totalPnl = 0, holdingsWithoutCost = 0
   // 同一只证券可能存在多条历史记录（每个来源一条）：统计按统一身份取首条元数据，
   // 记录本身保持分开，汇总与分类归并到同一身份下。
   const canonical = new Map()
@@ -676,22 +676,32 @@ export function summarize(db) {
     const cur = h.currency || ins?.currency || base
     if (!ins) { exclude(h, cur, 'missing-instrument', '持仓标的不存在'); continue }
     if (!byAccount.has(h.accountId)) { exclude(h, cur, 'missing-account', '持仓账户不存在'); continue }
-    // 估值优先级：手填价 > 行情价 > 平均成本；前两者都缺时才按成本估值并提示。
-    const price = h.manualPrice ?? h.quotePrice ?? h.avgCost ?? 0
+    // 估值优先级：手填价 > 行情价 > 券商快照价 > 平均成本；全部缺失时不估值（绝不按 0 计）。
+    const price = h.manualPrice ?? h.quotePrice ?? h.sourcePrice ?? h.avgCost
+    if (price == null) { exclude(h, cur, 'no-price', '没有价格且成本未知，无法估值'); continue }
     const rate = fx[cur]
     if (typeof rate !== 'number' || !Number.isFinite(rate) || rate <= 0) {
       exclude(h, cur, 'missing-fx', '缺少有效汇率: ' + cur); continue
     }
     const valueBase = h.qty * price * rate
-    const costBase = h.qty * (h.avgCost ?? 0) * rate
+    // 成本未知（null）时只计入市值，不进入成本与盈亏；0 是真实的零成本。
+    const hasCost = h.avgCost != null
+    const costBase = hasCost ? h.qty * h.avgCost * rate : null
+    const pnlBase = hasCost ? valueBase - costBase : null
     // 负平均成本是合法状态（累计分红超过投入），仅要求有限数值；数量与价格仍须非负。
     const finiteNonNegative = (n) => typeof n === 'number' && Number.isFinite(n) && n >= 0
-    if (!finiteNonNegative(h.qty) || !finiteNonNegative(price) || (h.avgCost != null && !Number.isFinite(h.avgCost)) || !Number.isFinite(valueBase) || !Number.isFinite(costBase) || !Number.isFinite(totalBase + valueBase) || !Number.isFinite(totalCost + costBase)) {
+    if (!finiteNonNegative(h.qty) || !finiteNonNegative(price) || (hasCost && !Number.isFinite(h.avgCost)) || !Number.isFinite(valueBase) || (hasCost && (!Number.isFinite(costBase) || !Number.isFinite(totalPnl + pnlBase))) || !Number.isFinite(totalBase + valueBase) || (hasCost && !Number.isFinite(totalCost + costBase))) {
       exclude(h, cur, 'invalid-valuation', '持仓数值无效或超出可计算范围'); continue
     }
-    if (h.manualPrice == null && h.quotePrice == null && h.qty > 0) warnings.push({ code: 'cost-estimate-price', message: '未设置现价，使用平均成本估值', holdingId: h.id, currency: cur })
+    if (h.manualPrice == null && h.quotePrice == null && h.sourcePrice == null && h.qty > 0) warnings.push({ code: 'cost-estimate-price', message: '未设置现价，使用平均成本估值', holdingId: h.id, currency: cur })
     totalBase += valueBase
-    totalCost += costBase
+    if (hasCost) {
+      totalCost += costBase
+      totalPnl += pnlBase
+    } else {
+      holdingsWithoutCost++
+      warnings.push({ code: 'unknown-cost', message: '成本未知，未计入成本与盈亏', holdingId: h.id, currency: cur })
+    }
     const cls = ins.assetClass || 'other'
     if (!byClass.has(cls)) byClass.set(cls, aggregate({ assetClass: cls }))
     if (!byCurrency.has(cur)) byCurrency.set(cur, aggregate({ currency: cur }))
@@ -701,13 +711,14 @@ export function summarize(db) {
     if (!bySector.has(sectorKey)) bySector.set(sectorKey, aggregate({ sector: sectorKey }))
     if (!byStyle.has(styleKey)) byStyle.set(styleKey, aggregate({ style: styleKey }))
     for (const agg of [byAccount.get(h.accountId), byClass.get(cls), byCurrency.get(cur), bySector.get(sectorKey), byStyle.get(styleKey)]) {
-      agg.valueBase += valueBase; agg.costBase += costBase; agg.holdings++
+      agg.valueBase += valueBase; agg.holdings++
+      if (hasCost) { agg.costBase += costBase; agg.pnlBase += pnlBase }
     }
   }
   const round = (n) => Number(n.toFixed(2))
-  const finish = (agg) => ({ ...agg, valueBase: round(agg.valueBase), costBase: round(agg.costBase), pnlBase: round(agg.valueBase - agg.costBase), weight: totalBase ? agg.valueBase / totalBase : 0 })
+  const finish = (agg) => ({ ...agg, valueBase: round(agg.valueBase), costBase: round(agg.costBase), pnlBase: round(agg.pnlBase), weight: totalBase ? agg.valueBase / totalBase : 0 })
   return {
-    baseCurrency: base, fx, totalValueBase: round(totalBase), totalCostBase: round(totalCost), totalPnlBase: round(totalBase - totalCost),
+    baseCurrency: base, fx, totalValueBase: round(totalBase), totalCostBase: round(totalCost), totalPnlBase: round(totalPnl), holdingsWithoutCost,
     accounts: [...byAccount.values()].map(finish), assetClasses: [...byClass.values()].map(finish), currencies: [...byCurrency.values()].map(finish),
     sectors: [...bySector.values()].map(finish), styles: [...byStyle.values()].map(finish),
     history: [...(db.snapshots || [])].sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.baseCurrency).localeCompare(String(b.baseCurrency))),

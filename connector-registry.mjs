@@ -1,16 +1,15 @@
 // 连接器注册表：把各适配器的导出函数组装成每个来源的描述对象。
-// sync.mjs / history-provider.mjs 按这里查表分发；适配器保持纯函数，不反向依赖本文件。
+// sync.mjs 与历史分发层按这里查表分发；适配器保持纯函数，不反向依赖本文件。
 // 新增一家券商 = 新增一个适配器模块 + 在 CONNECTORS 里加一个条目。
 import { OpError } from './store.mjs'
 import { listThsAccounts, fetchStandaloneThsSnapshot, fetchThsHistory } from './ths-client.mjs'
 import { listFutuAccounts, fetchFutuSnapshot, listLongbridgeAccounts, fetchLongbridgeSnapshot } from './brokers-sdk.mjs'
-import { listLongbridgeMcpAccounts, fetchLongbridgeMcpSnapshot, fetchLongbridgeMcpHistory } from './lb-mcp.mjs'
-import { listFutuMcpAccounts, fetchFutuMcpSnapshot, refreshFutuToken, fetchFutuMcpHistory } from './futu-mcp.mjs'
+import { listLongbridgeMcpAccounts, fetchLongbridgeMcpSnapshot, fetchLongbridgeMcpHistory, longbridgeHistory } from './lb-mcp.mjs'
+import { listFutuMcpAccounts, fetchFutuMcpSnapshot, refreshFutuToken, fetchFutuMcpHistory, futuHistory } from './futu-mcp.mjs'
 import { listQiemanAccounts, fetchQiemanSnapshot, refreshQiemanToken } from './qieman-mcp.mjs'
 import { listTigerAccounts, fetchTigerSnapshot, refreshTigerToken, fetchTigerHistory } from './tiger-mcp.mjs'
 import { listFosunAccounts, fetchFosunSnapshot, fetchFosunHistory } from './fosun-client.mjs'
 import { listIbAccounts, fetchIbSnapshot } from './ib-client.mjs'
-import { futuHistory, longbridgeHistory } from './history-provider.mjs'
 
 export const bad = message => new OpError('bad-request', message)
 const secretKey = /^(?:password|secret|token|api[_-]?key|cookie|authorization|access[_-]?token|refresh[_-]?token)$/i

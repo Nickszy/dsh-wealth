@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import {mkdtempSync,rmSync,readFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
-import {createSyncService,mergeSnapshot,sourceStore} from './sync.mjs'
+import {createSyncService,mergeSnapshot,snapshotContentHash,sourceStore} from './sync.mjs'
 import {applyOp} from './store.mjs'
 const row=(symbol='00700',extra={})=>({symbol,name:'测试标的',market:'HK',assetClass:'stock',currency:'HKD',qty:100,avgCost:300,manualPrice:400,...extra})
 const snapshot=(holdings=[row()],extra={})=>({holdings,complete:true,warnings:[],queriedAt:'2026-11-07T00:00:00Z',uploadedAt:null,quoteDate:null,...extra})
@@ -41,6 +41,32 @@ test('successful repeated refresh updates managed holdings, not duplicates, and 
  r=await f.service.sync(src.id);assert.equal(r.ledger.holdings.length,1);assert.equal(f.writes(),2)
  assert.equal(f.service.list().sources[0].lastError,null)
 })
+test('sync status is partial only for degraded warnings or incomplete coverage',async()=>{
+ let warnings=[{code:'QUOTE_DATE_UNAVAILABLE',severity:'info',message:'缺少行情日期'}]
+ const f=setup({fetchSnapshot:async()=>snapshot([row()],{warnings})}),src=f.add()
+ let r=await f.service.sync(src.id)
+ assert.equal(r.source.lastStatus,'ok')
+ assert.deepEqual(r.source.warnings,['缺少行情日期'])
+ assert.deepEqual(r.source.warningDetails,[{code:'QUOTE_DATE_UNAVAILABLE',severity:'info',message:'缺少行情日期'}])
+ warnings=[{code:'STOCK_FETCH_FAILED',severity:'degraded',message:'股票段读取失败'}]
+ r=await f.service.sync(src.id)
+ assert.equal(r.source.lastStatus,'partial')
+ assert.equal(r.source.warningDetails[0].severity,'degraded')
+ // 覆盖不完整即使只有 info 警告也标 partial。
+ warnings=[]
+ const g=setup({fetchSnapshot:async()=>snapshot([row()],{coverage:{stock:'partial'}})}),src2=g.add()
+ assert.equal((await g.service.sync(src2.id)).source.lastStatus,'partial')
+})
+test('connectSource computes initial status by warning severity and persists v2 fields',async()=>{
+ const f=setup({
+  listAccounts:async()=>({accounts:[{id:'book',name:'股票账户',thsType:'common'}],warnings:[]}),
+  fetchSnapshot:async()=>snapshot([row()],{warnings:[{code:'QUOTE_DATE_UNAVAILABLE',severity:'info',message:'缺少行情日期'}]}),
+ })
+ const r=await f.service.connectSource({connector:'ths',transport:'native',accountId:'b',portfolioId:'book'},{cookie:'test-cookie'})
+ assert.equal(r.source.lastStatus,'ok')
+ assert.equal(r.source.warningDetails[0].severity,'info')
+ assert.equal(r.source.coverage,null)
+})
 test('full snapshots prune disappeared managed holdings; partial snapshots retain them',()=>{
  let db=setup().db(),src={id:'s',accountId:'a'}
  db=mergeSnapshot(db,src,snapshot([row(),row('09988')])).ledger
@@ -48,6 +74,49 @@ test('full snapshots prune disappeared managed holdings; partial snapshots retai
  assert.equal(db.holdings.length,2)
  db=mergeSnapshot(db,src,snapshot([])).ledger
  assert.equal(db.holdings.length,0)
+})
+test('coverage pruning deletes only vanished holdings whose segment is full',()=>{
+ let db=setup().db(),src={id:'s',accountId:'a'}
+ const bond=row('B1',{name:'债券',market:'CN',assetClass:'bond',currency:'CNY'})
+ const etf=row('510300',{name:'ETF',market:'CN',assetClass:'etf',currency:'CNY'})
+ db=mergeSnapshot(db,src,snapshot([row('00700'),row('09988'),bond,etf])).ledger
+ // stock full 段里的 09988、ETF（etf 归入 stock）消失后删除；bond failed 段的持仓保留。
+ db=mergeSnapshot(db,src,{holdings:[row('00700')],coverage:{stock:'full',bond:'failed'},warnings:[],queriedAt:'2026-11-07T00:00:00Z',uploadedAt:null,quoteDate:null}).ledger
+ const symbols=ledger=>ledger.holdings.map(h=>ledger.instruments.find(i=>i.id===h.instrumentId).symbol).sort()
+ assert.deepEqual(symbols(db),['00700','B1'])
+ // 全部 full：消失的持仓全部删除。
+ db=mergeSnapshot(db,src,{holdings:[row('00700')],coverage:{stock:'full',bond:'full'},warnings:[],queriedAt:'2026-11-07T00:00:00Z',uploadedAt:null,quoteDate:null}).ledger
+ assert.deepEqual(symbols(db),['00700'])
+})
+test('without coverage, complete snapshots still prune every vanished holding',()=>{
+ // v1 行为保持不变（pin）：无 coverage 时仅看 complete。
+ let db=setup().db(),src={id:'s',accountId:'a'}
+ db=mergeSnapshot(db,src,snapshot([row('00700'),row('09988')])).ledger
+ db=mergeSnapshot(db,src,snapshot([row('00700')],{complete:false})).ledger
+ assert.equal(db.holdings.length,2)
+ db=mergeSnapshot(db,src,snapshot([row('00700')])).ledger
+ assert.equal(db.holdings.length,1)
+})
+test('core reconciliation warns on mismatching totals and cash, skips matching and multi-currency',()=>{
+ const db=setup().db(),src={id:'s',accountId:'a'}
+ const warningsOf=r=>r.snapshot.warnings.filter(w=>w.startsWith('TOTAL_MISMATCH'))
+ // qty 100 × manualPrice 400 = 40000，完全一致不告警。
+ let r=mergeSnapshot(db,src,snapshot([row()],{sourceTotals:{totalAsset:40000}}))
+ assert.deepEqual(warningsOf(r),[])
+ // 超出 0.011 容差则告警，并同时写入结构化明细。
+ r=mergeSnapshot(db,src,snapshot([row()],{sourceTotals:{totalAsset:40001}}))
+ assert.equal(warningsOf(r).length,1)
+ assert.ok(r.snapshot.warningDetails.some(d=>d.code==='TOTAL_MISMATCH:totalAsset'&&d.severity==='degraded'))
+ // 多币种无法对总资产：跳过且不告警。
+ const mixed=[row(),row('AAPL',{market:'US',currency:'USD',qty:1,avgCost:100,manualPrice:100})]
+ r=mergeSnapshot(db,src,snapshot(mixed,{sourceTotals:{totalAsset:1}}))
+ assert.deepEqual(warningsOf(r),[])
+ // 单一现金行与 sourceTotals.cash 对账。
+ const cash={symbol:'CASH:HKD',name:'现金',market:'CASH',assetClass:'cash',currency:'HKD',qty:500,avgCost:1,manualPrice:1}
+ r=mergeSnapshot(db,src,snapshot([row(),cash],{sourceTotals:{cash:600}}))
+ assert.ok(warningsOf(r).some(w=>w.startsWith('TOTAL_MISMATCH:cash')))
+ r=mergeSnapshot(db,src,snapshot([row(),cash],{sourceTotals:{cash:500}}))
+ assert.deepEqual(warningsOf(r),[])
 })
 test('invalid snapshot and unmanaged conflicts leave original ledger intact',()=>{
  const src={id:'s',accountId:'a'},db=setup().db()
@@ -98,9 +167,9 @@ test('scheduler respects enabled, zero interval, due time and failed backoff',as
  f.service.saveSource({...f.service.list().sources[0],enabled:false});f.advance(6*60000);await f.service.tick();assert.equal(calls,2)
 })
 test('older upstream timestamps and margin liabilities cannot overwrite stored values',async()=>{
- let uploadedAt='2026-11-06T20:00:00Z'
- const f=setup({fetchSnapshot:async()=>snapshot([row()],{uploadedAt})}),src=f.add();await f.service.sync(src.id)
- const before=f.db();uploadedAt='2026-11-05T20:00:00Z'
+ let uploadedAt='2026-11-06T20:00:00Z',qty=100
+ const f=setup({fetchSnapshot:async()=>snapshot([row('00700',{qty})],{uploadedAt})}),src=f.add();await f.service.sync(src.id)
+ const before=f.db();uploadedAt='2026-11-05T20:00:00Z';qty=1
  await assert.rejects(f.service.sync(src.id),/早于/);assert.deepEqual(f.db(),before)
  assert.throws(()=>mergeSnapshot(before,src,snapshot([row()],{sourceTotals:{totalLiability:1}})),/负债/)
 })
@@ -120,6 +189,87 @@ test('timestamp-less partial snapshot never clears stale-data watermarks',async(
  await f.service.sync(src.id);uploadedAt=null;qty=150;await f.service.sync(src.id)
  assert.equal(f.service.list().sources[0].uploadedAt,null);assert.equal(f.service.list().sources[0].uploadedAtWatermark,'2026-11-07T00:00:00Z')
  uploadedAt='2026-11-06T00:00:00Z';qty=1;await assert.rejects(f.service.sync(src.id),/早于/);assert.equal(f.db().holdings[0].qty,150)
+})
+test('older quote date with identical content is accepted and stores the content hash',async()=>{
+ let quoteDate='2026-11-06'
+ const f=setup({fetchSnapshot:async()=>snapshot([row()],{quoteDate})}),src=f.add()
+ const first=await f.service.sync(src.id)
+ assert.equal(first.source.quoteDateWatermark,'2026-11-06')
+ assert.match(first.source.snapshotHash,/^[0-9a-f]{64}$/)
+ quoteDate='2026-11-05';const second=await f.service.sync(src.id)
+ assert.equal(second.source.lastStatus,'ok');assert.equal(second.source.snapshotHash,first.source.snapshotHash)
+ // 内容相同也不能让水位回退。
+ assert.equal(second.source.quoteDateWatermark,'2026-11-06');assert.equal(f.db().holdings[0].qty,100)
+})
+test('older quote date with changed holdings is still rejected',async()=>{
+ let quoteDate='2026-11-06',qty=100
+ const f=setup({fetchSnapshot:async()=>snapshot([row('00700',{qty})],{quoteDate})}),src=f.add()
+ await f.service.sync(src.id);const before=f.db()
+ quoteDate='2026-11-05';qty=50
+ await assert.rejects(f.service.sync(src.id),/来源数据时间早于已保存快照，已保留原数据/)
+ assert.deepEqual(f.db(),before)
+})
+test('stale replay matching stored ledger content is accepted without a stored hash',async()=>{
+ let quoteDate='2026-11-06'
+ const f=setup({fetchSnapshot:async()=>snapshot([row()],{quoteDate})}),src=f.add()
+ await f.service.sync(src.id)
+ const before=f.db()
+ // 模拟迁移前的旧记录：数据已入库，但来源没有保存内容哈希。
+ f.config.write(f.config.read().map(s=>({...s,snapshotHash:undefined})))
+ quoteDate='2026-11-05'
+ const r=await f.service.sync(src.id)
+ assert.equal(r.source.lastStatus,'ok')
+ // 经济字段不变（时间戳元数据会正常更新）。
+ assert.deepEqual(f.db().holdings.map(h=>[h.qty,h.avgCost,h.manualPrice]),before.holdings.map(h=>[h.qty,h.avgCost,h.manualPrice]))
+ assert.match(f.config.read()[0].snapshotHash,/^[0-9a-f]{64}$/)
+})
+test('stale changed content is rejected but records the observed hash for self-healing',async()=>{
+ let quoteDate='2026-11-06',qty=100
+ const f=setup({fetchSnapshot:async()=>snapshot([row('00700',{qty})],{quoteDate})}),src=f.add()
+ await f.service.sync(src.id)
+ f.config.write(f.config.read().map(s=>({...s,snapshotHash:undefined})))
+ quoteDate='2026-11-05';qty=50
+ await assert.rejects(f.service.sync(src.id),/早于/)
+ const record=f.config.read()[0]
+ assert.equal(record.snapshotHash,snapshotContentHash(snapshot([row('00700',{qty:50})],{quoteDate:'2026-11-05'})))
+ assert.equal(record.lastStatus,'error')
+ assert.equal(f.db().holdings[0].qty,100)
+})
+test('immediate retry of the same stale content is accepted',async()=>{
+ let quoteDate='2026-11-06',qty=100
+ const f=setup({fetchSnapshot:async()=>snapshot([row('00700',{qty})],{quoteDate})}),src=f.add()
+ await f.service.sync(src.id)
+ quoteDate='2026-11-05';qty=50
+ await assert.rejects(f.service.sync(src.id),/早于/)
+ // 第二次观测到同样的旧内容：视为当前真相，接受并入。
+ const r=await f.service.sync(src.id)
+ assert.equal(r.source.lastStatus,'ok');assert.equal(f.db().holdings[0].qty,50)
+})
+test('stale changed content still rejected when stored hash belongs to another content',async()=>{
+ let quoteDate='2026-11-06',qty=100
+ const f=setup({fetchSnapshot:async()=>snapshot([row('00700',{qty})],{quoteDate})}),src=f.add()
+ await f.service.sync(src.id)
+ const before=f.db()
+ quoteDate='2026-11-05';qty=50
+ await assert.rejects(f.service.sync(src.id),/早于/)
+ assert.notEqual(f.config.read()[0].snapshotHash,snapshotContentHash(snapshot([row('00700',{qty:100})],{quoteDate:'2026-11-06'})))
+ assert.deepEqual(f.db().holdings,before.holdings)
+})
+test('newer quote date advances the watermark and replaces the content hash',async()=>{
+ let quoteDate='2026-11-06',qty=100
+ const f=setup({fetchSnapshot:async()=>snapshot([row('00700',{qty})],{quoteDate})}),src=f.add()
+ const first=await f.service.sync(src.id)
+ quoteDate='2026-11-08';qty=200
+ const second=await f.service.sync(src.id)
+ assert.equal(second.source.quoteDateWatermark,'2026-11-08');assert.notEqual(second.source.snapshotHash,first.source.snapshotHash)
+ assert.equal(f.db().holdings[0].qty,200)
+})
+test('content hash is stable across runs and ignores query time, warnings and totals',async()=>{
+ let run=0
+ const f=setup({fetchSnapshot:async()=>snapshot([row()],{queriedAt:new Date(Date.parse('2026-11-07T00:00:00Z')+run*60000).toISOString(),warnings:['WARN'+(run++)],sourceTotals:{totalAsset:run}})}),src=f.add()
+ const first=await f.service.sync(src.id),second=await f.service.sync(src.id)
+ assert.match(first.source.snapshotHash,/^[0-9a-f]{64}$/)
+ assert.equal(second.source.snapshotHash,first.source.snapshotHash)
 })
 test('discovery rejects remote Futu hosts before loading or forwarding saved credentials',async()=>{
  let calls=0

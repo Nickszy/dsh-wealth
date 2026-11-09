@@ -6,6 +6,7 @@
 //   Scopes needed here: `trade:read` (持仓/资产/历史订单) and `quote:read` (行情).
 import { createHash, randomBytes } from 'node:crypto'
 import { cashSignOf, isFlowKind, marketCurrency } from './model.mjs'
+import { withFutu } from './brokers-sdk.mjs'
 
 const DEFAULT_ENDPOINT = 'https://mcp.futunn.com'
 const PROTOCOL_VERSION = '2025-11-25'
@@ -298,7 +299,8 @@ const UNSUPPORTED_SECURITY = /OPTION|FUTURES|MULTILEG/i
 
 function mapPositions(positions, warnings, seen) {
   const list = []
-  let skipped = false
+  // 覆盖按资产段统计：缺 qty 的行是真缺失（partial）；缺成本的行照常入库，不算覆盖损失。
+  let skippedStock = false, skippedFund = false
   for (const row of array(positions, 'positions')) {
     const type = String(row?.security_type || '').toUpperCase()
     if (UNSUPPORTED_SECURITY.test(type)) throw new Error('富途 MCP 返回了期权或衍生品持仓，本插件暂不支持：' + (row?.code || '?'))
@@ -307,22 +309,26 @@ function mapPositions(positions, warnings, seen) {
     const key = market + ':' + symbol
     if (seen.has(key)) fail('富途 MCP 返回了重复持仓 ' + symbol)
     seen.add(key)
+    const assetClass = type === 'FUND' ? 'fund' : 'stock'
     const qty = money(row?.qty, 'positions.qty')
     if (qty === 0) continue // 已清仓（当日卖光）：不是缺数据，旧持仓应随完整快照删除
-    if (qty == null || qty < 0) { warnings.push('FUTU_MCP_MISSING_QTY:' + symbol); skipped = true; continue }
+    if (qty == null || qty < 0) {
+      warnings.push('FUTU_MCP_MISSING_QTY:' + symbol)
+      if (assetClass === 'fund') skippedFund = true; else skippedStock = true
+      continue
+    }
     const currencyValue = currency(row?.currency || marketDefaultCurrency(market) || 'USD', 'positions.currency')
-    // v1 契约要求 avgCost 必填：缺成本价时跳过该行并降级覆盖，绝不伪造成本。
+    // v2.1：成本可空。缺成本价时行照常入库（avgCost=null），既不伪造也不丢覆盖。
     const cost = money(row?.cost_price, 'positions.cost_price')
-    if (cost == null) { warnings.push('FUTU_MCP_COST_UNAVAILABLE:' + symbol); skipped = true; continue }
     list.push({
       symbol,
       name: typeof row?.stock_name === 'string' && row.stock_name.trim() ? row.stock_name.trim() : symbol,
-      market, assetClass: type === 'FUND' ? 'fund' : 'stock', currency: currencyValue,
+      market, assetClass, currency: currencyValue,
       qty, avgCost: cost,
       manualPrice: money(row?.nominal_price, 'positions.nominal_price'), externalId: symbol,
     })
   }
-  return { list, skipped }
+  return { list, skippedStock, skippedFund }
 }
 
 async function fetchCash(mcp, accId, currencies, warnings) {
@@ -357,7 +363,7 @@ export async function fetchFutuMcpSnapshot(source, secrets, signal, deps = {}) {
     const rawPositions = await mcp.call('account_positions', { acc_id: accId })
     const positionRows = Array.isArray(rawPositions) ? rawPositions : Array.isArray(rawPositions?.positions) ? rawPositions.positions : []
     const seen = new Set()
-    const { list: holdings, skipped } = mapPositions(positionRows, warnings, seen)
+    const { list: holdings, skippedStock, skippedFund } = mapPositions(positionRows, warnings, seen)
     const currencies = [...new Set(holdings.map(h => h.currency))]
     if (!currencies.length) currencies.push('HKD')
     const { list: cashList, totals, failed } = await fetchCash(mcp, accId, currencies, warnings)
@@ -374,8 +380,9 @@ export async function fetchFutuMcpSnapshot(source, secrets, signal, deps = {}) {
     if (securityCount && !priced) warnings.push('PRICE_UNAVAILABLE:富途持仓未返回市价，证券按成本价暂估')
     return {
       holdings: all,
-      // complete 只看覆盖：接口失败或有行因缺 qty/成本被跳过都不能删旧持仓；缺价不影响。
-      complete: !skipped && !failed,
+      // v2.2 分段覆盖：持仓调用成功且没有缺 qty 的行即为完整；资金接口失败 → cash failed。
+      // complete 由 normalizeSnapshot 按 coverage 派生（全部 full 才为 true），这里不再重复。
+      coverage: { stock: skippedStock ? 'partial' : 'full', fund: skippedFund ? 'partial' : 'full', cash: failed ? 'failed' : 'full' },
       warnings,
       queriedAt: new Date(deps.now?.() ?? Date.now()).toISOString(),
       uploadedAt: null, quoteDate: null,
@@ -560,4 +567,163 @@ export async function fetchFutuMcpHistory(source, secrets, range, signal, deps =
       },
     }
   } finally { await mcp.dispose() }
+}
+
+// ---------- native OpenD history ----------
+// The native-SDK history adapters live beside their transport adapter instead of in
+// the dispatcher, so the dependency graph stays one-way:
+// history-provider -> registry -> adapters. The exported helpers are shared
+// with the native Longbridge history in lb-mcp.mjs (which imports them from here);
+// adapters must never import history-provider.mjs, or the registry/dispatcher pair
+// would become circular again.
+const MAX_ROWS = 25000
+export const ZONES = { HK: 'Asia/Hong_Kong', US: 'America/New_York', CN: 'Asia/Shanghai' }
+const FT_CURRENCIES = { 1: 'HKD', 2: 'USD', 3: 'CNH', 4: 'JPY', 5: 'SGD', 6: 'AUD', 7: 'CAD', 8: 'MYR', 9: 'NZD' }
+const futuBudgets = new Map()
+export const fallback = message => fail(`${message}; narrow the date range or import an official broker statement file`)
+function uint64(value, field) {
+  // All uint64 identifiers stay strings, including protobuf Long objects.
+  if (typeof value === 'number' && !Number.isSafeInteger(value)) fail(`${field} is an unsafe number; require a uint64 string`)
+  const s = value != null && typeof value === 'object' ? value.toString() : String(value)
+  if (!/^\d+$/.test(s) || BigInt(s) <= 0n || BigInt(s) > 18446744073709551615n) fail(`${field} must be a positive uint64 string`)
+  return BigInt(s).toString()
+}
+// Named `executionNumeric` (not `numeric`) because this module's MCP helpers use a
+// different, options-object numeric() with different error semantics.
+function executionNumeric(value, field, positive = false) {
+  if (value != null && typeof value === 'object') value = value.toString()
+  if (!['number', 'string'].includes(typeof value) || !/^[+]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(String(value))) fail(`${field} is unknown, negative or invalid`)
+  const n = Number(value)
+  if (!Number.isFinite(n) || (positive && n <= 0) || (n === 0 && /[1-9]/.test(String(value).split(/[eE]/)[0]))) fail(`${field} is invalid or underflows`)
+  return n
+}
+function executionDay(value, field = 'Date') {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(Date.parse(`${value}T00:00:00Z`)) || new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) !== value) fail(`${field} must be YYYY-MM-DD`)
+  return value
+}
+export function localDateTime(date, market) {
+  if (!(date instanceof Date) || !Number.isFinite(date.getTime())) fail('Execution tradeDoneAt must be a valid SDK Date')
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: ZONES[market], year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).formatToParts(date).map(p => [p.type, p.value]))
+  const ms = date.getUTCMilliseconds()
+  return { date: `${parts.year}-${parts.month}-${parts.day}`, time: `${parts.hour}:${parts.minute}:${parts.second}${ms ? '.' + String(ms).padStart(3, '0') : ''}` }
+}
+function futuDateTime(value) {
+  const match = /^(\d{4}-\d{2}-\d{2})[ T]((?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,9})?)$/.exec(value)
+  if (!match) fail('Futu execution createTime is invalid; require market-local date and time')
+  return { date: executionDay(match[1], 'Futu execution date'), time: match[2] }
+}
+export function instrument(symbol, market) {
+  // Only unambiguous cash-equity/ETF code shapes are supported. HK warrants,
+  // CBBCs, US OCC option codes, mainland options and futures fail explicitly.
+  const valid = market === 'US' ? /^[A-Z][A-Z0-9]*(?:[.\-][A-Z0-9]+)?$/.test(symbol) && !/\d{6}[CP]\d/i.test(symbol)
+    : market === 'HK' ? /^\d{1,5}$/.test(symbol) && +symbol > 0 && (+symbol < 10000 || (+symbol >= 80000 && +symbol < 90000))
+      : market === 'CN' ? /^\d{6}$/.test(symbol) : false
+  if (!valid) fail('Derivative or unknown execution instrument is unsupported')
+}
+export function unsupportedFlags(value) {
+  if (value?.isShort === true || value?.shortSale === true || value?.isCorrection === true || value?.isCancelled === true || (value?.comboLegs?.length ?? 0) > 0) fail('Short, derivative, cancelled or corrected executions are unsupported')
+}
+// Named `canonicalExecution` because this module already has an unrelated canonical()
+// for MCP snapshot rows.
+export function canonicalExecution(base, qtyValue, priceValue) {
+  const qty = executionNumeric(qtyValue, 'Execution quantity', true), price = executionNumeric(priceValue, 'Execution price')
+  const grossAmount = executionNumeric(qty * price, 'Execution gross amount')
+  if (qty > 0 && price > 0 && grossAmount === 0) fail('Execution gross amount underflows')
+  return { ...base, qty, price, grossAmount, cashAmount: null, fee: null }
+}
+export function addUnique(map, row) {
+  const previous = map.get(row.externalId)
+  if (previous && JSON.stringify(previous) !== JSON.stringify(row)) fail('Conflicting records for the same execution ID; corrections are unsupported')
+  map.set(row.externalId, row)
+  if (map.size > MAX_ROWS) fallback('Execution archive exceeds 25000 records')
+}
+export function result(rows, from, to, extra = []) {
+  return { rows: [...rows].sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`) || a.externalId.localeCompare(b.externalId)), errors: [], warnings: [{ message: '仅含成交记录：费用与净现金未知；出入金、分红等非成交记录需用账单文件补录。' }, ...extra.map(message => ({ message }))], coverage: { complete: false, note: `Requested executions for ${from} through ${to}; API date bounds do not prove broker retention or full ledger coverage. Cash, dividends, fees and other non-trade events are not covered.` } }
+}
+export function inRange(date, range) { return date >= range.from && date <= range.to }
+function futuBudget(id) {
+  // Futu limits follow the remote account, even across sources/endpoints.
+  const key = id
+  return () => {
+    const now = Date.now()
+    for (const [k, timestamps] of futuBudgets) { const active = timestamps.filter(t => now - t < 30000); if (active.length) futuBudgets.set(k, active); else futuBudgets.delete(k) }
+    const used = futuBudgets.get(key) ?? []
+    if (used.length >= 10) fallback('Futu per-account budget of 10 requests per 30 seconds reached; wait 30 seconds before retrying')
+    used.push(now); futuBudgets.set(key, used)
+  }
+}
+export async function futuHistory(source, secrets, range, signal, deps, now) {
+  const id = uint64(source.brokerAccountId, 'source.brokerAccountId'), marketNum = { HK: 1, US: 2, CN: 3 }[source.tradeMarket]
+  if (source.tradeEnvironment !== 'REAL') fail('Futu history supports only REAL accounts; paper history is unsupported')
+  if (!['HK', 'US', 'CN'].includes(source.tradeMarket)) fail('Futu history requires tradeMarket HK/US/CN')
+  const header = { trdEnv: 1, accID: id, trdMarket: marketNum }, reserve = futuBudget(id)
+  const today = localDateTime(now, source.tradeMarket).date
+  return withFutu(source, secrets, signal, deps, async rawCall => {
+    let calls = 0
+    const call = async (name, args, checkHeader = true) => {
+      if (++calls > 10) fallback('Futu preview request budget reached')
+      reserve()
+      const response = await rawCall(name, args)
+      if (checkHeader) {
+        const h = response.header
+        if (!h || uint64(h.accID, 'Futu response account ID') !== id || h.trdEnv !== 1 || h.trdMarket !== marketNum) fail('Futu response account/environment/market does not match selected source')
+      }
+      if (response.hasMore === true || response.has_more === true) fallback('Futu response signals incomplete results')
+      return response
+    }
+    const accounts = array((await call('GetAccList', { userID: 0 }, false)).accList, 'Futu accList')
+    const matching = accounts.filter(a => uint64(a.accID, 'Futu account ID') === id && a.trdEnv === 1)
+    if (matching.length !== 1 || !array(matching[0].trdMarketAuthList, 'Futu tradeMarketAuthList').includes(marketNum)) fail('Selected Futu account/environment/market was not authorized by GetAccList')
+    const history = await call('GetHistoryOrderFillList', { header, filterConditions: { beginTime: `${range.from} 00:00:00`, endTime: `${range.to} 23:59:59.999` } })
+    const fills = [...array(history.orderFillList, 'Futu history orderFillList')]
+    if (inRange(today, range)) fills.push(...array((await call('GetOrderFillList', { header })).orderFillList, 'Futu today orderFillList'))
+    if (fills.length > MAX_ROWS * 2) fallback('Futu execution response is too large')
+    const unique = new Map()
+    for (const fill of fills) {
+      unsupportedFlags(fill)
+      if (fill.status != null && fill.status !== 0) fail('Futu cancelled, changed or payout fills are unsupported; entire preview rejected')
+      if (![1, 2].includes(fill.trdSide)) fail('Futu short, buyback or unknown execution side is unsupported')
+      const market = { 1: 'HK', 2: 'US', 31: 'CN', 32: 'CN' }[fill.secMarket]
+      if (market !== source.tradeMarket) fail('Futu fill security market does not match selected trade market')
+      const symbol = text(fill.code, 'Futu execution code'); instrument(symbol, market)
+      const stamp = futuDateTime(fill.createTime), executionId = uint64(fill.fillID, 'Futu fillID')
+      const row = canonicalExecution({ ...stamp, kind: fill.trdSide === 1 ? 'buy' : 'sell', originalType: fill.trdSide === 1 ? 'Buy' : 'Sell', symbol, name: text(fill.name, 'Futu execution name'), market, currency: null, externalId: executionId,
+        note: `Futu market-local time (${ZONES[market]}); orderIDEx=${fill.orderIDEx ?? ''}; orderID=${fill.orderID == null ? '' : uint64(fill.orderID, 'Futu orderID')}; fillIDEx diagnostic=${fill.fillIDEx ?? ''}` }, fill.qty, fill.price)
+      if (!inRange(row.date, range)) continue
+      const orderId = text(fill.orderIDEx, 'Futu fill orderIDEx needed for currency lookup; import an official broker statement file if unavailable')
+      addUnique(unique, { ...row, orderId })
+    }
+    const ids = [...new Set([...unique.values()].map(row => row.orderId))]
+    if (ids.length > 150) fallback('Futu currency lookup exceeds 150 distinct orders per preview')
+    const orders = new Map()
+    for (let i = 0; i < ids.length; i += 50) {
+      const batch = ids.slice(i, i + 50)
+      const remember = response => {
+        for (const order of array(response.orderList, 'Futu metadata orderList')) {
+          const key = text(order.orderIDEx, 'Futu metadata orderIDEx')
+          if (!batch.includes(key)) fail('Futu order lookup returned an unrequested order')
+          unsupportedFlags(order)
+          const c = Number.isInteger(order.currency) ? FT_CURRENCIES[order.currency] : null
+          if (!c) fallback('Futu order currency is unknown; source reporting currency cannot be substituted')
+          const value = { currency: c, code: order.code, trdSide: order.trdSide, secMarket: order.secMarket }
+          if (orders.has(key) && JSON.stringify(orders.get(key)) !== JSON.stringify(value)) fail('Futu order metadata is conflicting')
+          orders.set(key, value)
+        }
+      }
+      // An order may have been placed long before its fill date. A wide metadata
+      // window is intentional; missing older metadata causes a file fallback.
+      remember(await call('GetHistoryOrderList', { header, filterConditions: { beginTime: `${range.from < '2018-01-01' ? range.from : '2018-01-01'} 00:00:00`, endTime: `${range.to > today ? range.to : today} 23:59:59.999`, orderIDExList: batch } }))
+      const missing = batch.filter(key => !orders.has(key))
+      if (missing.length) remember(await call('GetOrderList', { header, filterConditions: { orderIDExList: missing } }))
+      if (batch.some(key => !orders.has(key))) fallback('Futu order currency lookup is incomplete (order may predate available history)')
+    }
+    const rows = []
+    for (const row of unique.values()) {
+      const order = orders.get(row.orderId)
+      if (order.code !== row.symbol || order.trdSide !== (row.kind === 'buy' ? 1 : 2) || (order.secMarket != null && ({ 1: 'HK', 2: 'US', 31: 'CN', 32: 'CN' })[order.secMarket] !== row.market)) fail('Futu execution/order metadata identity does not match')
+      const { orderId, ...canonicalRow } = row
+      rows.push({ ...canonicalRow, currency: order.currency })
+    }
+    return result(rows, range.from, range.to)
+  })
 }

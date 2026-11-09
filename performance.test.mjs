@@ -55,6 +55,20 @@ test('buildPerformance falls back to a flat price with an explicit warning', () 
   assert.equal(result.metrics.change, 200)
 })
 
+test('buildPerformance uses sourcePrice as the flat price when no quote exists', () => {
+  const db = ledger()
+  // 没有手填价和行情价，但有券商快照价：平推应使用 sourcePrice（15），而不是成本 10。
+  db.holdings = [
+    { id: 'H1', accountId: 'A', instrumentId: 'I1', qty: 60, avgCost: 10, manualPrice: null, quotePrice: null, sourcePrice: 15, currency: 'CNY' },
+    { id: 'H2', accountId: 'A', instrumentId: 'CASH', qty: 480, currency: 'CNY' },
+  ]
+  const timeline = reconstructTimeline(db, { accountId: 'A', today: new Date('2026-02-04T00:00:00Z') })
+  const result = buildPerformance(db, timeline, { prices: new Map(), fx: db.fx, days: 730, today: '2026-02-04' })
+  assert.ok(result.warnings.includes('PERF_FLAT_PRICE:510300'))
+  // 01-04 期初现金 1000；01-05 买入后 100×15=1500；02-02 卖出 40 股后 60×15+480=1380。
+  assert.deepEqual(result.series.map(s => s.totalValueBase), [1000, 1500, 1380])
+})
+
 test('buildPerformance repairs negative cash as inferred deposits and flags the estimate', () => {
   const db = ledger()
   // 出金超过当时可用现金，之后才补入金：中段现金为负，说明银行侧转账缺失。

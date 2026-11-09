@@ -69,9 +69,9 @@ test('老虎 snapshot maps prime_assets segments, positions and totals; skips de
   assert.deepEqual([apple.avgCost, apple.manualPrice], [28, 12.45])
   assert.equal(snapshot.sourceTotals.totalAsset, 1066)
   assert.equal(snapshot.sourceTotals.cash, undefined, '负现金合计不能写进 sourceTotals.cash')
-  assertSnapshotContract(snapshot)
+  const normalized = assertSnapshotContract(snapshot, { complete: true })
   assert.equal(snapshot.sourceTotals.holdingProfit, -1035.83)
-  assert.equal(snapshot.complete, true)
+  assert.deepEqual(normalized.coverage, { cash: 'full', stock: 'full', fund: 'full' })
 })
 
 test('老虎 history pages through orders and maps filled buy/sell flows', async () => {
@@ -188,7 +188,7 @@ test('老虎 snapshot contract: missing price only warns and stays complete', as
   assert.ok(snapshot.warnings.some((w) => /缺少现价/.test(w)))
 })
 
-test('老虎 snapshot contract: a row skipped for unknown cost makes it incomplete', async () => {
+test('老虎 snapshot contract: unknown cost imports the row with null avgCost and stays complete', async () => {
   const deps = mcpDeps({
     get_assets: () => US_CASH(100),
     get_positions: (args) => args.sec_type === 'STK'
@@ -196,8 +196,23 @@ test('老虎 snapshot contract: a row skipped for unknown cost makes it incomple
       : FUND(),
   })
   const snapshot = await fetchTigerSnapshot({ brokerAccountId: 'A1' }, SECRETS, undefined, deps)
-  assertSnapshotContract(snapshot, { complete: false, warning: /TIGER_COST_UNAVAILABLE:MSFT/ })
-  assert.ok(!snapshot.holdings.some((h) => h.symbol === 'MSFT'))
+  const normalized = assertSnapshotContract(snapshot, { complete: true })
+  assert.equal(normalized.holdings.find((h) => h.symbol === 'MSFT').avgCost, null)
+  assert.ok(!snapshot.warnings.some((w) => /TIGER_COST_/.test(w)), '缺成本不再伪造或跳过')
+  assert.deepEqual(normalized.coverage, { cash: 'full', stock: 'full', fund: 'full' })
+})
+
+test('老虎 snapshot contract: a malformed stock row degrades stock coverage to partial', async () => {
+  const deps = mcpDeps({
+    get_assets: () => US_CASH(100),
+    get_positions: (args) => args.sec_type === 'STK'
+      ? STK([AAPL, { symbol: 'MSFT', sec_type: 'STK', market: 'US', currency: 'USD' }])
+      : FUND(),
+  })
+  const snapshot = await fetchTigerSnapshot({ brokerAccountId: 'A1' }, SECRETS, undefined, deps)
+  const normalized = assertSnapshotContract(snapshot, { complete: false })
+  assert.equal(normalized.coverage.stock, 'partial')
+  assert.equal(normalized.coverage.fund, 'full')
 })
 
 test('老虎 snapshot contract: get_assets failure drops cash and marks incomplete', async () => {
@@ -206,7 +221,8 @@ test('老虎 snapshot contract: get_assets failure drops cash and marks incomple
     get_positions: (args) => args.sec_type === 'STK' ? STK([AAPL]) : FUND(),
   })
   const snapshot = await fetchTigerSnapshot({ brokerAccountId: 'A1' }, SECRETS, undefined, deps)
-  assertSnapshotContract(snapshot, { complete: false, warning: /TIGER_ASSET_SUMMARY_UNAVAILABLE/ })
+  const normalized = assertSnapshotContract(snapshot, { complete: false, warning: /TIGER_ASSET_SUMMARY_UNAVAILABLE/ })
+  assert.equal(normalized.coverage.cash, 'failed')
   assert.ok(!snapshot.holdings.some((h) => h.assetClass === 'cash'))
 })
 
@@ -219,7 +235,9 @@ test('老虎 snapshot contract: STK positions failure marks incomplete', async (
     },
   })
   const snapshot = await fetchTigerSnapshot({ brokerAccountId: 'A1' }, SECRETS, undefined, deps)
-  assertSnapshotContract(snapshot, { complete: false, warning: /TIGER_STK_POSITIONS_UNAVAILABLE/ })
+  const normalized = assertSnapshotContract(snapshot, { complete: false, warning: /TIGER_STK_POSITIONS_UNAVAILABLE/ })
+  assert.equal(normalized.coverage.stock, 'failed')
+  assert.equal(normalized.coverage.fund, 'full')
 })
 
 test('老虎 snapshot contract: FUND positions failure marks incomplete', async () => {
@@ -231,7 +249,9 @@ test('老虎 snapshot contract: FUND positions failure marks incomplete', async 
     },
   })
   const snapshot = await fetchTigerSnapshot({ brokerAccountId: 'A1' }, SECRETS, undefined, deps)
-  assertSnapshotContract(snapshot, { complete: false, warning: /TIGER_FUND_POSITIONS_UNAVAILABLE/ })
+  const normalized = assertSnapshotContract(snapshot, { complete: false, warning: /TIGER_FUND_POSITIONS_UNAVAILABLE/ })
+  assert.equal(normalized.coverage.fund, 'failed')
+  assert.equal(normalized.coverage.stock, 'full')
 })
 
 test('老虎 snapshot contract: hitting the 200-row page limit marks incomplete', async () => {
@@ -241,7 +261,9 @@ test('老虎 snapshot contract: hitting the 200-row page limit marks incomplete'
     get_positions: (args) => args.sec_type === 'STK' ? STK(rows) : FUND(),
   })
   const snapshot = await fetchTigerSnapshot({ brokerAccountId: 'A1' }, SECRETS, undefined, deps)
-  assertSnapshotContract(snapshot, { complete: false, warning: /TIGER_POSITIONS_PAGE_LIMIT:STK/ })
+  const normalized = assertSnapshotContract(snapshot, { complete: false, warning: /TIGER_POSITIONS_PAGE_LIMIT:STK/ })
+  assert.equal(normalized.coverage.stock, 'partial')
+  assert.equal(normalized.coverage.fund, 'full')
 })
 
 test('老虎 snapshot contract: cash across currencies is not summed', async () => {
@@ -254,7 +276,8 @@ test('老虎 snapshot contract: cash across currencies is not summed', async () 
   })
   const snapshot = await fetchTigerSnapshot({ brokerAccountId: 'A1' }, SECRETS, undefined, deps)
   assertNoCrossCurrencySum(snapshot)
-  assertSnapshotContract(snapshot, { complete: true, warning: /TIGER_MIXED_CURRENCY_TOTALS/ })
+  const normalized = assertSnapshotContract(snapshot, { complete: true, warning: /TIGER_MIXED_CURRENCY_TOTALS/ })
+  assert.deepEqual(normalized.coverage, { cash: 'full', stock: 'full', fund: 'full' })
   assert.equal(snapshot.sourceTotals.cash, undefined)
   assert.equal(snapshot.sourceTotals.totalAsset, 600, 'broker-reported total asset is kept')
 })
