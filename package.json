@@ -46,6 +46,7 @@
     "chat.mjs",
     "sync.mjs",
     "connectors.mjs",
+    "connector-registry.mjs",
     "credentials.mjs",
     "ths-client.mjs",
     "ths-login.mjs",
@@ -71,7 +72,7 @@
     "ws": "8.22.1"
   },
   "scripts": {
-    "test": "node --test analytics.test.mjs model.test.mjs lb-mcp.test.mjs futu-mcp.test.mjs mcp-http.test.mjs qieman-mcp.test.mjs tiger-mcp.test.mjs fosun-client.test.mjs history-file.test.mjs history.test.mjs history-sync.test.mjs history-provider.test.mjs store.test.mjs importer.test.mjs chat.test.mjs host.test.mjs connectors.test.mjs sync.test.mjs account-import.test.mjs authorization.test.mjs credentials.test.mjs ths-client.test.mjs ths-login.test.mjs brokers-sdk.test.mjs ib-client.test.mjs futu-transport.test.mjs quotes.test.mjs forecast.test.mjs klines.test.mjs ths-data.test.mjs westock-mcp.test.mjs timeline.test.mjs performance.test.mjs bills.test.mjs bills-import.test.mjs digest.test.mjs symbols.test.mjs"
+    "test": "node --test analytics.test.mjs model.test.mjs lb-mcp.test.mjs futu-mcp.test.mjs mcp-http.test.mjs qieman-mcp.test.mjs tiger-mcp.test.mjs fosun-client.test.mjs history-file.test.mjs history.test.mjs history-sync.test.mjs history-provider.test.mjs store.test.mjs importer.test.mjs chat.test.mjs host.test.mjs connectors.test.mjs connector-registry.test.mjs sync.test.mjs account-import.test.mjs authorization.test.mjs credentials.test.mjs ths-client.test.mjs ths-login.test.mjs brokers-sdk.test.mjs ib-client.test.mjs futu-transport.test.mjs quotes.test.mjs forecast.test.mjs klines.test.mjs ths-data.test.mjs westock-mcp.test.mjs timeline.test.mjs performance.test.mjs bills.test.mjs bills-import.test.mjs digest.test.mjs symbols.test.mjs"
   },
   "keywords": [
     "dsh",

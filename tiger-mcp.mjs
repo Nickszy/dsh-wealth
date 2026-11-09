@@ -427,29 +427,44 @@ function unrealizedTotal(payload) {
   return found ? total : null
 }
 
+/**
+ * Map one position row. `coverageLost` is true when the row belongs in the ledger
+ * but had to be skipped (unknown cost): the snapshot can then no longer delete
+ * holdings that are absent from it.
+ */
 function positionToHolding(row, warnings) {
   const symbol = text(pick(row, CODE_FIELDS))
   const qty = number(pick(row, QTY_FIELDS))
-  if (!symbol || qty === null) return null
-  if (!(qty > 0)) return null
+  if (!symbol || qty === null) return { holding: null }
+  if (!(qty > 0)) return { holding: null }
   const secType = String(text(pick(row, ['sec_type', 'secType', 'security_type'])) || 'STK').toUpperCase()
-  if (!['STK', 'FUND', 'ETF'].includes(secType)) { warnings.push(`TIGER_UNSUPPORTED_SEC_TYPE:${symbol}:${secType}`); return null }
+  // Unsupported instruments (options, futures...) never enter the ledger, so
+  // skipping them does not reduce coverage.
+  if (!['STK', 'FUND', 'ETF'].includes(secType)) {
+    warnings.push(`TIGER_UNSUPPORTED_SEC_TYPE:${symbol}:${secType}`)
+    return { holding: null }
+  }
   const market = marketOf(row)
   const currency = (text(pick(row, CURRENCY_FIELDS)) || CURRENCY_BY_MARKET[market] || 'HKD').toUpperCase()
   const price = number(pick(row, PRICE_FIELDS))
   let cost = number(pick(row, COST_FIELDS))
   if (cost === null && price !== null) { cost = price; warnings.push(`TIGER_COST_ASSUMED:${symbol} 来源未提供成本，按现价暂估`) }
-  if (cost === null) { warnings.push(`TIGER_COST_UNAVAILABLE:${symbol} 成本未知，已跳过`); return null }
+  if (cost === null) {
+    warnings.push(`TIGER_COST_UNAVAILABLE:${symbol} 成本未知，已跳过`)
+    return { holding: null, coverageLost: true }
+  }
   return {
-    symbol,
-    name: text(pick(row, NAME_FIELDS)) || symbol,
-    market: secType === 'FUND' ? 'FUND' : (market || 'US'),
-    assetClass: secType === 'FUND' ? 'fund' : 'stock',
-    currency,
-    qty,
-    avgCost: cost,
-    manualPrice: price,
-    externalId: symbol,
+    holding: {
+      symbol,
+      name: text(pick(row, NAME_FIELDS)) || symbol,
+      market: secType === 'FUND' ? 'FUND' : (market || 'US'),
+      assetClass: secType === 'FUND' ? 'fund' : 'stock',
+      currency,
+      qty,
+      avgCost: cost,
+      manualPrice: price,
+      externalId: symbol,
+    },
   }
 }
 
@@ -459,12 +474,16 @@ export async function fetchTigerSnapshot(source, secrets, signal, deps = {}) {
   const mcp = createClient(secrets, signal, deps)
   try {
     const warnings = []
+    // complete 只表示覆盖完整：任一持仓/现金接口失败、可能被截断、或有行被跳过时为 false。
+    // 缺价格只影响展示，不影响 complete。
+    let complete = true
     const authError = (error) => /认证|授权|401|403|expired|unauthor/i.test(String(error?.message || error))
     // 不要传 base_currency：服务端只接受具体币种（baseCurrency，camelCase），
     // 传 ALL/下划线会被整段拒绝；segments 本身按币种返回。
     const assets = await mcp.call('get_assets', { account }).catch((error) => {
       if (authError(error)) throw error
-      warnings.push('老虎资产汇总读取失败：' + String(error?.message || error))
+      complete = false
+      warnings.push('TIGER_ASSET_SUMMARY_UNAVAILABLE:老虎资产汇总读取失败：' + String(error?.message || error))
       return null
     })
     const positions = []
@@ -472,18 +491,24 @@ export async function fetchTigerSnapshot(source, secrets, signal, deps = {}) {
       try {
         const payload = await mcp.call('get_positions', { account, sec_type: secType, limit: 200 })
         const rows = positionRows(payload)
-        if (rows.length >= 200) warnings.push(`TIGER_POSITIONS_PAGE_LIMIT:${secType} 可能被截断，请拆分账户查看`)
+        if (rows.length >= 200) {
+          complete = false
+          warnings.push(`TIGER_POSITIONS_PAGE_LIMIT:${secType} 可能被截断，请拆分账户查看`)
+        }
         positions.push(...rows)
       } catch (error) {
         if (authError(error)) throw error
-        if (secType === 'STK') warnings.push('老虎股票持仓读取失败：' + String(error?.message || error))
+        complete = false
+        const label = secType === 'STK' ? '股票' : '基金'
+        warnings.push(`TIGER_${secType}_POSITIONS_UNAVAILABLE:老虎${label}持仓读取失败：` + String(error?.message || error))
       }
     }
 
     const seen = new Set()
     const holdings = []
     for (const row of positions) {
-      const holding = positionToHolding(row, warnings)
+      const { holding, coverageLost } = positionToHolding(row, warnings)
+      if (coverageLost) complete = false
       if (!holding) continue
       const key = holding.market + ':' + holding.symbol + ':' + holding.currency
       if (seen.has(key)) continue
@@ -507,7 +532,11 @@ export async function fetchTigerSnapshot(source, secrets, signal, deps = {}) {
 
     const sourceTotals = {}
     if (summary.total !== null) sourceTotals.totalAsset = summary.total
-    if (summary.cash.length) sourceTotals.cash = summary.cash.reduce((sum, row) => sum + row.cash, 0)
+    const cashCurrencies = new Set(summary.cash.map((row) => row.currency))
+    // 负现金是融资负债（已由 TIGER_MARGIN_CASH 告警说明），不能作为现金合计，否则整份快照被拒。
+    const cashSum = summary.cash.reduce((sum, row) => sum + row.cash, 0)
+    if (cashCurrencies.size === 1 && cashSum >= 0) sourceTotals.cash = cashSum
+    else if (cashCurrencies.size > 1) warnings.push(`TIGER_MIXED_CURRENCY_TOTALS:现金涉及 ${[...cashCurrencies].join('/')} 多个币种，未汇总 cash`)
     if (summary.unrealized !== null) sourceTotals.holdingProfit = summary.unrealized
 
     const priced = holdings.filter((h) => h.market !== 'CASH').every((h) => h.manualPrice != null)
@@ -516,7 +545,7 @@ export async function fetchTigerSnapshot(source, secrets, signal, deps = {}) {
 
     return {
       holdings,
-      complete: priced,
+      complete,
       warnings,
       queriedAt: new Date(deps.now?.() ?? Date.now()).toISOString(),
       uploadedAt: null,

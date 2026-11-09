@@ -164,15 +164,28 @@ async function callWithArgs(mcp, tool, argsCandidates) {
     try { return await mcp.call(tool, args) } catch (error) {
       lastError = error
       // Only parameter/argument errors are worth retrying with another shape.
-      if (!/参数|parameter|argument|missing|required|invalid/i.test(String(error?.message || ''))) throw error
+      if (!/参数|parameter|argument|missing|required|invalid/i.test(String(error?.message || error))) throw error
     }
   }
   throw lastError
 }
 
+const authError = (error) => /认证|授权|401|403|expired|unauthor/i.test(String(error?.message || error))
+
+/** Read one tool; a non-auth failure degrades coverage instead of dropping the snapshot. */
+async function readTool(mcp, tool, argsCandidates, code, warnings) {
+  try {
+    return { payload: await callWithArgs(mcp, tool, argsCandidates), ok: true }
+  } catch (error) {
+    if (authError(error)) throw error
+    warnings.push(`${code}:${String(error?.message || error)}`)
+    return { payload: null, ok: false }
+  }
+}
+
 function fundRowToHolding(row, warnings) {
   const code = text(pick(row, CODE_FIELDS))
-  if (!code) return null
+  if (!code) return { holding: null }
   const name = text(pick(row, NAME_FIELDS)) || code
   const currency = (text(pick(row, CURRENCY_FIELDS)) || 'CNY').toUpperCase()
   let shares = number(pick(row, SHARE_FIELDS))
@@ -181,7 +194,8 @@ function fundRowToHolding(row, warnings) {
   let nav = number(pick(row, NAV_FIELDS))
 
   if ((shares === null || shares <= 0) && amount !== null && nav !== null && nav > 0) shares = amount / nav
-  if (shares === null || !(shares > 0)) { warnings.push(`QIEMAN_ZERO_SHARES:${code} 份额为 0 或缺失，已跳过`); return null }
+  // 零份额是正常状态，不代表覆盖缺失。
+  if (shares === null || !(shares > 0)) { warnings.push(`QIEMAN_ZERO_SHARES:${code} 份额为 0 或缺失，已跳过`); return { holding: null } }
   if (nav === null && amount !== null) nav = amount / shares
   if (nav !== null && !(nav > 0)) nav = null
 
@@ -191,18 +205,24 @@ function fundRowToHolding(row, warnings) {
     avgCost = nav
     warnings.push(`QIEMAN_COST_ASSUMED:${code} 来源未提供成本，按当前净值暂估`)
   }
-  if (avgCost === null) { warnings.push(`QIEMAN_COST_UNAVAILABLE:${code} 成本未知，已跳过`); return null }
+  // 该行可能存在于账本中，跳过后不能让快照删除它。
+  if (avgCost === null) {
+    warnings.push(`QIEMAN_COST_UNAVAILABLE:${code} 成本未知，已跳过`)
+    return { holding: null, coverageLost: true }
+  }
 
   return {
-    symbol: code,
-    name,
-    market: 'FUND',
-    assetClass: 'fund',
-    currency,
-    qty: shares,
-    avgCost,
-    manualPrice: nav,
-    externalId: code,
+    holding: {
+      symbol: code,
+      name,
+      market: 'FUND',
+      assetClass: 'fund',
+      currency,
+      qty: shares,
+      avgCost,
+      manualPrice: nav,
+      externalId: code,
+    },
   }
 }
 
@@ -274,6 +294,8 @@ export async function fetchQiemanSnapshot(source, secrets, signal, deps = {}) {
     if (!fundTool && !treeTool) fail('且慢 MCP 没有提供持仓读取工具，请确认授权包含「账户与资产」权限')
 
     let payload = null, rows = [], accountTotal = null
+    // complete 只表示覆盖完整；缺净值只警告，不影响 complete。
+    let complete = true
     if (isSubAccount) {
       // A single 且慢 sub-account only exists in the asset tree (accounts -> strategies -> funds).
       if (!accountTool || !treeTool) fail('读取且慢子账户需要「账户与产品清单」与「资产树」工具，请重新授权')
@@ -288,25 +310,41 @@ export async function fetchQiemanSnapshot(source, secrets, signal, deps = {}) {
       if (!rows.length) warnings.push(`QIEMAN_SUB_ACCOUNT_EMPTY:${subName}`)
       if (rows.length) warnings.push('且慢子账户视图不含成本与收益，成本按当前市值暂估；总账户视图才有完整成本')
     } else {
-      payload = fundTool ? await callWithArgs(mcp, fundTool, [{}, { accountId: 'main' }]) : null
-      rows = payload ? collectFundRows(payload) : []
+      if (fundTool) {
+        const read = await readTool(mcp, fundTool, [{}, { accountId: 'main' }], 'QIEMAN_FUND_DETAIL_UNAVAILABLE', warnings)
+        payload = read.payload
+        rows = payload ? collectFundRows(payload) : []
+        if (!read.ok) complete = false
+      } else {
+        // 主持仓工具缺失，只能用降级的资产树视图。
+        complete = false
+      }
       if (treeTool) {
-        const tree = await callWithArgs(mcp, treeTool, [{}])
-        payload = payload ? [payload, tree] : tree
-        if (!rows.length) rows = collectFundRows(tree)
+        const read = await readTool(mcp, treeTool, [{}], 'QIEMAN_ASSET_TREE_UNAVAILABLE', warnings)
+        if (read.ok) {
+          payload = payload ? [payload, read.payload] : read.payload
+          if (!rows.length) rows = collectFundRows(read.payload)
+        } else {
+          complete = false
+        }
       }
       if (!rows.length && analysisTool) {
-        const analysis = await callWithArgs(mcp, analysisTool, [{}])
-        const analyzed = collectFundRows(analysis)
-        if (analyzed.length) rows = analyzed
-        else warnings.push('且慢资产分析接口没有返回可识别的基金持仓')
+        const read = await readTool(mcp, analysisTool, [{}], 'QIEMAN_ASSET_ANALYSIS_UNAVAILABLE', warnings)
+        if (read.ok) {
+          const analyzed = collectFundRows(read.payload)
+          if (analyzed.length) rows = analyzed
+          else warnings.push('且慢资产分析接口没有返回可识别的基金持仓')
+        } else {
+          complete = false
+        }
       }
     }
 
     const seen = new Set()
     const holdings = []
     for (const row of rows) {
-      const holding = fundRowToHolding(row, warnings)
+      const { holding, coverageLost } = fundRowToHolding(row, warnings)
+      if (coverageLost) complete = false
       if (!holding) continue
       const key = holding.symbol + ':' + holding.currency
       if (seen.has(key)) continue
@@ -326,8 +364,7 @@ export async function fetchQiemanSnapshot(source, secrets, signal, deps = {}) {
     if (dayProfit !== null) sourceTotals.dayProfit = dayProfit
 
     // 且慢 tracks fund shares, not a cash account; 盈米宝 is itself a fund product.
-    const complete = holdings.every((h) => h.manualPrice != null)
-    if (!complete) warnings.push('部分基金缺少最新净值，按要求成本暂估')
+    if (holdings.some((h) => h.manualPrice == null)) warnings.push('部分基金缺少最新净值，按要求成本暂估')
 
     return {
       holdings,

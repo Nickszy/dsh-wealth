@@ -131,6 +131,8 @@ export async function fetchFutuSnapshot(source, secrets, signal, deps = {}) {
       if (p.costPriceValid === false || p.costPriceValid === 0 || p.averageCostPriceValid === false || !Object.hasOwn(p, 'costPrice')) fail('Futu position cost is unknown/invalid; refusing to substitute zero')
       const symbol = text(p.code, 'Futu position code')
       if (!/^[A-Z0-9.\-]+$/i.test(symbol) || /\d{6}[CP]\d/i.test(symbol)) fail('Futu derivative position is unsupported')
+      // Missing quotes are a quality issue only: warn and keep manualPrice null, never affect complete.
+      if (p.price == null) warnings.push(`PRICE_UNAVAILABLE:${symbol}`)
       holdings.push({ symbol, name: typeof p.name === 'string' && p.name.trim() ? p.name : symbol, market: m, assetClass: 'stock', currency: ftCurrency(p.currency), qty, avgCost: numeric(p.costPrice, 'Futu position cost'), manualPrice: p.price == null ? null : numeric(p.price, 'Futu position price') })
     }
     let complete = true
@@ -201,6 +203,8 @@ export async function fetchLongbridgeSnapshot(source, secrets, signal, deps = {}
       const qty = numeric(p.holdingUnits, 'Longbridge fund holdingUnits')
       if (qty === 0) continue
       const symbol = text(p.symbol, 'Longbridge fund symbol')
+      // Missing NAV is a quality issue only: warn and keep manualPrice null, never affect complete.
+      if (p.currentNetAssetValue == null) warnings.push(`PRICE_UNAVAILABLE:${symbol}`)
       holdings.push({ symbol, name: typeof p.symbolName === 'string' && p.symbolName.trim() ? p.symbolName : symbol, market: 'FUND', assetClass: 'fund', currency: currency(p.currency), qty, avgCost: numeric(p.costNetAssetValue, 'Longbridge fund cost'), manualPrice: p.currentNetAssetValue == null ? null : numeric(p.currentNetAssetValue, 'Longbridge fund NAV') })
     }
     const balances = array(await call('accountBalance'), 'Longbridge accountBalance'), nativeCash = new Map()

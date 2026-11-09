@@ -7,6 +7,7 @@ import {
   diffieHellman, generateKeyPairSync, hkdfSync, randomBytes, sign,
 } from 'node:crypto'
 import { listFosunAccounts, fetchFosunSnapshot, fetchFosunHistory, generateFosunClientKey, fosunTicketCreate, checkFosunApiKey } from './fosun-client.mjs'
+import { assertSnapshotContract } from './snapshot-contract.mjs'
 
 const GATEWAY = 'https://gateway.example.com'
 
@@ -200,4 +201,78 @@ test('APIKeyCheck maps numeric status: 0 invalid, 1 valid, others unknown', asyn
   assert.equal((await check(1)).status, 'valid')
   assert.equal((await check(7)).status, 'unknown')
   assert.equal((await check(0)).rawStatus, 0)
+})
+
+const CASH_SUMMARY = { code: 0, data: { currency: 'HKD', cash: '1000', totalAsset: '5000' } }
+const GOOD_HOLDING = { symbol: 'AAPL', stockName: 'Apple', market: 'US', quantity: '10', averageCost: '180', marketPrice: '185', currency: 'USD' }
+
+test('复星 snapshot contract: missing price only warns and stays complete', async () => {
+  const deps = gatewayDeps((path) => {
+    if (path === '/api/v1/portfolio/CashSummary') return CASH_SUMMARY
+    if (path === '/api/v1/portfolio/Holdings') return { code: 0, data: { holdings: [{ ...GOOD_HOLDING, marketPrice: undefined }] } }
+    throw new Error('unexpected ' + path)
+  })
+  const snapshot = await fetchFosunSnapshot({ gatewayUrl: GATEWAY, brokerAccountId: 'S1' }, SECRETS, undefined, deps)
+  assertSnapshotContract(snapshot, { complete: true })
+  assert.equal(snapshot.holdings.find((h) => h.symbol === 'AAPL').manualPrice, null)
+})
+
+test('复星 snapshot contract: a row skipped for unknown cost makes it incomplete', async () => {
+  const deps = gatewayDeps((path) => {
+    if (path === '/api/v1/portfolio/CashSummary') return CASH_SUMMARY
+    if (path === '/api/v1/portfolio/Holdings') return { code: 0, data: { holdings: [
+      GOOD_HOLDING,
+      { symbol: 'MSFT', market: 'US', quantity: '5', currency: 'USD' },
+    ] } }
+    throw new Error('unexpected ' + path)
+  })
+  const snapshot = await fetchFosunSnapshot({ gatewayUrl: GATEWAY, brokerAccountId: 'S1' }, SECRETS, undefined, deps)
+  assertSnapshotContract(snapshot, { complete: false, warning: /FOSUN_COST_UNAVAILABLE:MSFT/ })
+  assert.ok(!snapshot.holdings.some((h) => h.symbol === 'MSFT'))
+})
+
+test('复星 snapshot contract: CashSummary failure marks incomplete', async () => {
+  const deps = gatewayDeps((path) => {
+    if (path === '/api/v1/portfolio/CashSummary') throw new Error('boom')
+    if (path === '/api/v1/portfolio/Holdings') return { code: 0, data: { holdings: [GOOD_HOLDING] } }
+    throw new Error('unexpected ' + path)
+  })
+  const snapshot = await fetchFosunSnapshot({ gatewayUrl: GATEWAY, brokerAccountId: 'S1' }, SECRETS, undefined, deps)
+  assertSnapshotContract(snapshot, { complete: false, warning: /FOSUN_CASH_SUMMARY_UNAVAILABLE/ })
+  assert.ok(!snapshot.holdings.some((h) => h.assetClass === 'cash'))
+})
+
+test('复星 snapshot contract: Holdings failure keeps cash but marks incomplete', async () => {
+  const deps = gatewayDeps((path) => {
+    if (path === '/api/v1/portfolio/CashSummary') return CASH_SUMMARY
+    if (path === '/api/v1/portfolio/Holdings') throw new Error('boom')
+    throw new Error('unexpected ' + path)
+  })
+  const snapshot = await fetchFosunSnapshot({ gatewayUrl: GATEWAY, brokerAccountId: 'S1' }, SECRETS, undefined, deps)
+  assertSnapshotContract(snapshot, { complete: false, warning: /FOSUN_HOLDINGS_UNAVAILABLE/ })
+  assert.deepEqual(snapshot.holdings.map((h) => h.symbol), ['CASH:HKD'])
+})
+
+test('复星 snapshot contract: a missing cash balance marks incomplete', async () => {
+  const deps = gatewayDeps((path) => {
+    if (path === '/api/v1/portfolio/CashSummary') return { code: 0, data: { currency: 'HKD', totalAsset: '5000' } }
+    if (path === '/api/v1/portfolio/Holdings') return { code: 0, data: { holdings: [GOOD_HOLDING] } }
+    throw new Error('unexpected ' + path)
+  })
+  const snapshot = await fetchFosunSnapshot({ gatewayUrl: GATEWAY, brokerAccountId: 'S1' }, SECRETS, undefined, deps)
+  assertSnapshotContract(snapshot, { complete: false, warning: /FOSUN_CASH_UNAVAILABLE/ })
+})
+
+test('复星 snapshot contract: hitting the 20-page limit marks incomplete', async () => {
+  let page = 0
+  const deps = gatewayDeps((path) => {
+    if (path === '/api/v1/portfolio/CashSummary') return CASH_SUMMARY
+    if (path === '/api/v1/portfolio/Holdings') {
+      page++
+      return { code: 0, data: { holdings: Array.from({ length: 100 }, (_, i) => ({ ...GOOD_HOLDING, symbol: `P${page}_${i}` })) } }
+    }
+    throw new Error('unexpected ' + path)
+  })
+  const snapshot = await fetchFosunSnapshot({ gatewayUrl: GATEWAY, brokerAccountId: 'S1' }, SECRETS, undefined, deps)
+  assertSnapshotContract(snapshot, { complete: false, warning: /FOSUN_POSITIONS_PAGE_LIMIT/ })
 })

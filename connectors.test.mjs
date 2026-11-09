@@ -39,3 +39,8 @@ test('optional trades validate identity, numbers, dates and external IDs, strip 
     const copy = structuredClone(raw); copy.trades[0][field] = value; assert.throws(() => normalizeSnapshot(copy))
   }
 })
+test('normalizer keeps broker-reported net assets (futu/longbridge MCP report netAssets, not totalAsset)', () => {
+  const raw = canonical()
+  raw.sourceTotals = { netAssets: '12345.6', cash: 10 }
+  assert.deepEqual(normalizeSnapshot(raw).sourceTotals, { cash: 10, netAssets: 12345.6 })
+})

@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import http from 'node:http'
 import { listIbAccounts, fetchIbSnapshot } from './ib-client.mjs'
+import { assertSnapshotContract, assertNoCrossCurrencySum } from './snapshot-contract.mjs'
 
 const source = { gatewayUrl: 'https://localhost:5000/v1/api', brokerAccountId: 'U123', trustLocalGateway: true }
 const account = { id: 'U123', accountId: 'U123', accountAlias: 'Cash portfolio', currency: 'USD', tradingType: 'CASH' }
@@ -171,4 +172,40 @@ test('default transport parses JSON, rejects redirects and explains manual login
   await assert.rejects(listIbAccounts(local), /HTTP 302/)
   mode = 'bad'
   await assert.rejects(listIbAccounts(local), error => /JSON/.test(error.message) && !/private/.test(error.message))
+})
+
+// ---- 快照契约（P0-C）----
+test('contract: IB snapshot passes the shared contract with multi-currency native cash', async () => {
+  const f = fixture({ cash: { ...ledger, EUR: { cashbalance: '7.5', currency: 'EUR' } } })
+  const raw = await fetchIbSnapshot(source, {}, undefined, f.deps)
+  const normalized = assertSnapshotContract(raw, { complete: true })
+  assert.deepEqual(normalized.holdings.filter(h => h.assetClass === 'cash').map(h => [h.currency, h.qty]), [['USD', 123], ['EUR', 7.5]])
+  assertNoCrossCurrencySum(raw, ['cash'])
+})
+test('contract: IB pagination reads every page and never returns a truncated complete snapshot', async () => {
+  const f = fixture({ pages: [Array.from({ length: 100 }, (_, i) => stock(i + 1)), Array.from({ length: 100 }, (_, i) => stock(i + 101)), [stock(201)]] })
+  const raw = await fetchIbSnapshot(source, {}, undefined, f.deps)
+  const normalized = assertSnapshotContract(raw, { complete: true })
+  assert.equal(normalized.holdings.filter(h => h.assetClass !== 'cash').length, 201)
+  assert.deepEqual(f.calls.map(c => new URL(c.url).pathname).filter(p => p.includes('/positions/')),
+    ['/v1/api/portfolio/U123/positions/0', '/v1/api/portfolio/U123/positions/1', '/v1/api/portfolio/U123/positions/2'])
+  // 触发页数上限时整体拒绝，不返回可以触发删除的 complete 快照。
+  const limited = fixture({ pages: [Array.from({ length: 100 }, (_, i) => stock(i + 1))], maxPages: 1 })
+  await assert.rejects(fetchIbSnapshot(source, {}, undefined, limited.deps), /page limit/i)
+})
+test('contract: IB missing price only warns and keeps coverage complete', async () => {
+  const f = fixture({ pages: [[stock(1, { mktPrice: null })]] })
+  const raw = await fetchIbSnapshot(source, {}, undefined, f.deps)
+  const normalized = assertSnapshotContract(raw, { complete: true, warning: /^PRICE_UNAVAILABLE: IBKR:1/ })
+  assert.equal(normalized.holdings[0].manualPrice, null)
+})
+test('contract: IB missing cost or a failed ledger call returns no snapshot', async () => {
+  await assert.rejects(fetchIbSnapshot(source, {}, undefined, fixture({ pages: [[stock(1, { avgCost: null })]] }).deps), /average cost/)
+  const failing = { ...fixture().deps, request: async (url) => {
+    const path = new URL(url).pathname
+    if (path.endsWith('/accounts')) return [account]
+    if (path.endsWith('/ledger')) throw new Error('ledger down')
+    return []
+  } }
+  await assert.rejects(fetchIbSnapshot(source, {}, undefined, failing), /request failed/)
 })

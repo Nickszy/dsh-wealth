@@ -5,17 +5,11 @@ import { randomUUID, createHash } from 'node:crypto'
 import { DATA_DIR, load, save, applyOp, summarize, OpError } from './store.mjs'
 import { getConnectorStatus, normalizeSnapshot } from './connectors.mjs'
 import { createCredentialStore, validateCredentials } from './credentials.mjs'
-import { listThsAccounts, fetchStandaloneThsSnapshot, scanThsTransfers } from './ths-client.mjs'
-import { listFutuAccounts, fetchFutuSnapshot, fetchLongbridgeSnapshot } from './brokers-sdk.mjs'
-import { listLongbridgeMcpAccounts, fetchLongbridgeMcpSnapshot } from './lb-mcp.mjs'
-import { listFutuMcpAccounts, fetchFutuMcpSnapshot, refreshFutuToken } from './futu-mcp.mjs'
-import { listQiemanAccounts, fetchQiemanSnapshot, refreshQiemanToken } from './qieman-mcp.mjs'
-import { listTigerAccounts, fetchTigerSnapshot, refreshTigerToken } from './tiger-mcp.mjs'
-import { listFosunAccounts, fetchFosunSnapshot } from './fosun-client.mjs'
-import { listIbAccounts, fetchIbSnapshot } from './ib-client.mjs'
+import { getConnector, timeoutMs, resolveAuthTransport, resolveSaveTransport, defaultFingerprintParts, endpoint, bad } from './connector-registry.mjs'
+// 同花顺的登录/转账流程仍是独立流程，直接使用其适配器；其余来源一律经注册表分发。
+import { listThsAccounts, scanThsTransfers } from './ths-client.mjs'
 import { fetchNativeHistory } from './history-provider.mjs'
 
-const bad = message => new OpError('bad-request', message)
 const plain = x => x !== null && typeof x === 'object' && !Array.isArray(x)
 const keyOf = row => JSON.stringify([row.market, row.symbol, row.currency])
 const secretKey = /^(?:password|secret|token|api[_-]?key|cookie|authorization|access[_-]?token|refresh[_-]?token)$/i
@@ -32,15 +26,6 @@ function checkArgs(value) {
   if (JSON.stringify(value).length > 20000) throw bad('连接参数过长')
   return structuredClone(value)
 }
-function endpoint(raw) {
-  let url
-  try { url = new URL(raw) } catch { throw bad('请输入有效的快照 API 地址') }
-  const local = ['localhost','127.0.0.1','[::1]'].includes(url.hostname)
-  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && local)) throw bad('API 仅支持 HTTPS 或本机 HTTP 桥接')
-  if (url.username || url.password || url.hash || [...url.searchParams.keys()].some(k=>secretKey.test(k))) throw bad('API 地址不能包含凭据或片段，请使用环境变量引用')
-  return url.href
-}
-
 const AUTH_CONFIG_FIELDS = ['host','port','tls','tradeEnvironment','tradeMarket','currency','gatewayUrl','trustLocalGateway','mcpEndpoint']
 // A login can see many sub-accounts; these identify one of them and must never
 // be treated as login-wide settings.
@@ -51,21 +36,15 @@ const AUTH_SHARED_FIELDS = ['host','port','tls','tradeEnvironment','tradeMarket'
 // override them for an authorization-bound source, or a local caller could
 // redirect the token. They may only change together with fresh credentials.
 const AUTH_TARGET_FIELDS = ['mcpEndpoint','gatewayUrl','host','port','tls']
-const CONNECTOR_NAME = { ths:'同花顺', futu:'富途', longbridge:'长桥', qieman:'且慢', tiger:'老虎证券', fosun:'复星证券', ib:'IB' }
-const NATIVE_CONNECTORS = ['ths','futu','longbridge','qieman','tiger','fosun','ib']
-const MCP_CONNECTORS = ['futu','longbridge','qieman','tiger']
 const stripTargets = value => Object.fromEntries(Object.entries(value || {}).filter(([key]) => !AUTH_TARGET_FIELDS.includes(key)))
 /** Login-wide settings only: never let a stored authorization carry one sub-account's identity. */
 const authWideConfig = auth => Object.fromEntries(Object.entries(auth?.config || {}).filter(([key]) => !AUTH_IDENTITY_FIELDS.includes(key)))
-/** Normalise an MCP endpoint without letting credentials or secret query keys into sources.json. */
-function mcpEndpointUrl(raw) {
-  const value = String(raw || '').trim()
-  if (!value) return ''
-  let url
-  try { url = new URL(value) } catch { throw bad('MCP 地址须为有效的 http(s):// URL') }
-  if (!['http:','https:'].includes(url.protocol)) throw bad('MCP 地址须以 http(s):// 开头')
-  if (url.username || url.password || url.hash || [...url.searchParams.keys()].some(key => secretKey.test(key))) throw bad('MCP 地址不能包含凭据或片段')
-  return url.href.replace(/\/+$/,'')
+
+// 来源指纹：sha256(parts)。导出仅为固定测试；改变拼接内容会让已有来源被识别为新来源。
+export function fingerprint(source, secrets = {}) {
+  const entry = getConnector(source.connector)
+  const parts = entry ? entry.fingerprintParts(source, secrets) : defaultFingerprintParts(source)
+  return createHash('sha256').update(JSON.stringify(parts)).digest('hex')
 }
 
 /**
@@ -75,7 +54,7 @@ function mcpEndpointUrl(raw) {
 function legacyAuthorization(source) {
   const config = {}
   for (const key of AUTH_CONFIG_FIELDS) if (source[key] !== undefined && source[key] !== null) config[key] = source[key]
-  const base = CONNECTOR_NAME[source.connector] || source.connector || '授权'
+  const base = getConnector(source.connector)?.name || source.connector || '授权'
   return {
     id: String(source.authId || source.id),
     connector: source.connector,
@@ -97,54 +76,6 @@ function withLegacyAuthorizations(authorizations, sources) {
     if (!id || have.has(id)) continue
     out.push(legacyAuthorization({ ...source, id }))
     have.add(id)
-  }
-  return out
-}
-
-/** Validate and keep only the non-secret connection settings that belong to a login. */
-function authConfig(connector, transport, raw = {}) {
-  const out = {}
-  if (connector === 'ths') return out
-  if (connector === 'futu' && transport === 'mcp') {
-    const mcpEndpoint = mcpEndpointUrl(raw.mcpEndpoint)
-    if (mcpEndpoint) out.mcpEndpoint = mcpEndpoint
-    const currency = String(raw.currency || '').toUpperCase()
-    if (currency) { if (!/^[A-Z]{3}$/.test(currency)) throw bad('富途资金币种无效'); out.currency = currency }
-    return out
-  }
-  if (connector === 'futu') {
-    out.host = String(raw.host || '127.0.0.1').trim()
-    if (!['127.0.0.1','localhost','::1'].includes(out.host)) throw bad('富途连接须指向本机 OpenD')
-    out.port = Number(raw.port || 33333)
-    if (!Number.isInteger(out.port) || out.port < 1 || out.port > 65535) throw bad('OpenD 端口无效')
-    out.tls = raw.tls === true
-    out.tradeEnvironment = ['SIMULATE','REAL'].includes(String(raw.tradeEnvironment || '').toUpperCase()) ? String(raw.tradeEnvironment).toUpperCase() : 'REAL'
-    out.tradeMarket = ['HK','US','CN'].includes(String(raw.tradeMarket || '').toUpperCase()) ? String(raw.tradeMarket).toUpperCase() : 'HK'
-    out.currency = ['HKD','USD','CNH'].includes(String(raw.currency || '').toUpperCase()) ? String(raw.currency).toUpperCase() : 'HKD'
-    return out
-  }
-  if (connector === 'longbridge' && transport === 'mcp') {
-    const mcpEndpoint = mcpEndpointUrl(raw.mcpEndpoint)
-    if (mcpEndpoint) {
-      if (mcpEndpoint.endsWith('/agent')) throw bad('长桥 MCP 地址不能是授权端点 /agent')
-      out.mcpEndpoint = mcpEndpoint
-    }
-    return out
-  }
-  if (connector === 'qieman' || connector === 'tiger') {
-    const mcpEndpoint = mcpEndpointUrl(raw.mcpEndpoint)
-    if (mcpEndpoint) out.mcpEndpoint = mcpEndpoint
-    return out
-  }
-  if (connector === 'fosun') {
-    const gatewayUrl = String(raw.gatewayUrl || '').trim() || 'https://openapi.fosunxcz.com'
-    out.gatewayUrl = endpoint(gatewayUrl).replace(/\/$/,'')
-    return out
-  }
-  if (connector === 'ib') {
-    out.gatewayUrl = endpoint(raw.gatewayUrl || 'https://localhost:5000/v1/api').replace(/\/$/,'')
-    out.trustLocalGateway = raw.trustLocalGateway === true
-    return out
   }
   return out
 }
@@ -254,8 +185,8 @@ export function createSyncService(ctx, options = {}) {
     })
     const authorizations = authList().map(a=>({
       ...a,
-      // IB and OpenD authenticate outside the vault; the other logins need a saved secret.
-      credentialsConfigured: a.connector === 'ib' || (a.connector === 'futu' && a.transport !== 'mcp') ? true : vault.configured(a.id,a.connector),
+      // IB 与 OpenD 在账本之外完成认证；其他登录需要库里保存的凭据。
+      credentialsConfigured: getConnector(a.connector)?.credentialsAlwaysConfigured?.(a.transport) ? true : vault.configured(a.id,a.connector),
       status: a.lastError ? 'error' : a.authorizedAt ? 'authorized' : 'ready',
       sources: sources.filter(s=>s.authId === a.id).map(s=>({ id:s.id, name:s.name, accountId:s.accountId, intervalMinutes:s.intervalMinutes, enabled:s.enabled, lastStatus:s.lastStatus, lastSuccessAt:s.lastSuccessAt, portfolioId:s.portfolioId, brokerAccountId:s.brokerAccountId, thsBookType:s.thsBookType })),
     }))
@@ -273,12 +204,10 @@ export function createSyncService(ctx, options = {}) {
     }
     const saved = vault.get(authId)
     const typed = validateCredentials(source.connector, credentials)
+    // 浏览器/设备码流程的暂存槽：保存的 token 字段缺失时才合并，避免旧流程覆盖新凭据。
+    const pending = getConnector(source.connector)?.auth
     return {
-      ...(source.connector === 'ths' && !saved.cookie ? vault.get('pending-ths') : {}),
-      ...(source.connector === 'futu' && !saved.mcpToken ? vault.get('pending-futu-mcp') : {}),
-      ...(source.connector === 'tiger' && !saved.accessToken ? vault.get('pending-tiger-mcp') : {}),
-      ...(source.connector === 'qieman' && !saved.bearerToken && !saved.apiKey ? vault.get('pending-qieman-mcp') : {}),
-      ...(source.connector === 'fosun' && !saved.apiKey ? vault.get('pending-fosun') : {}),
+      ...(pending?.pendingSlot && pending.pendingFields.every(field => !saved[field]) ? vault.get(pending.pendingSlot) : {}),
       ...saved, ...typed,
     }
   }
@@ -287,23 +216,17 @@ export function createSyncService(ctx, options = {}) {
   // so two concurrent syncs do not invalidate each other.
   const refreshing = new Map()
   async function refreshSecrets(source, secrets) {
-    if (!MCP_CONNECTORS.includes(source.connector) || source.transport !== 'mcp') return null
+    // 只有注册了续期函数的 MCP transport（富途/且慢/老虎）才自动续期。
+    const auth = getConnector(source.connector)?.transports[source.transport]?.auth
+    if (!auth?.refresh) return null
     if (!secrets.refreshToken || !secrets.clientId) return null
     const owner = source.authId || source.id
     let work = refreshing.get(owner)
     if (!work) {
       work = (async () => {
-        const token = source.connector === 'tiger'
-          ? await refreshTigerToken({ refreshToken: secrets.refreshToken, clientId: secrets.clientId, signal: AbortSignal.timeout(20000) })
-          : source.connector === 'qieman'
-            ? await refreshQiemanToken({ refreshToken: secrets.refreshToken, clientId: secrets.clientId, signal: AbortSignal.timeout(20000) })
-            : await refreshFutuToken({ refreshToken: secrets.refreshToken, clientId: secrets.clientId, signal: AbortSignal.timeout(20000) })
+        const token = await auth.refresh({ refreshToken: secrets.refreshToken, clientId: secrets.clientId, signal: AbortSignal.timeout(20000) })
         if (!token || !token.accessToken) return null
-        const fields = source.connector === 'tiger'
-          ? { accessToken: token.accessToken, ...(token.refreshToken ? { refreshToken: token.refreshToken } : {}) }
-          : source.connector === 'qieman'
-            ? { bearerToken: token.accessToken, ...(token.refreshToken ? { refreshToken: token.refreshToken } : {}) }
-            : { mcpToken: token.accessToken, ...(token.refreshToken ? { refreshToken: token.refreshToken } : {}) }
+        const fields = auth.tokenFields(token)
         vault.set(owner, source.connector, fields)
         if (source.authId) { try { updateAuth(source.authId, { authorizedAt: iso(), lastError: null }) } catch { /* refreshed token is still usable */ } }
         return fields
@@ -329,15 +252,6 @@ export function createSyncService(ctx, options = {}) {
     }
   }
   const withFutuAuth = withAuthRefresh
-  function fingerprint(source, secrets = {}) {
-    const remoteId = source.connector === 'ths' ? source.portfolioId : source.brokerAccountId
-    // 股票账本保持旧指纹（4 段），基金账本追加账本类型避免与同号股票账本混淆。
-    const parts = [source.connector,String(remoteId || ''),source.connector === 'futu' ? source.tradeEnvironment || 'REAL' : '',source.connector === 'longbridge' ? secrets.appKey || '' : '',source.connector === 'tiger' ? secrets.clientId || '' : '',source.connector === 'qieman' ? secrets.apiKey || secrets.bearerToken || '' : '']
-    if (source.connector === 'fosun') parts.push(secrets.apiKey || '')
-    const bookType = source.connector === 'ths' ? String(source.thsBookType || 'common') : ''
-    if (bookType && bookType !== 'common') parts.push(bookType)
-    return createHash('sha256').update(JSON.stringify(parts)).digest('hex')
-  }
   // ---- 银证转账回扫（asset_change 二分定位到日）----
   // 首次全历史深扫必须显式触发（scanThsTransfersDeep，可能要几分钟）；
   // 已有游标的账户随每次同步做小预算增量——新转账只会出现在已扫区间之后，
@@ -394,35 +308,26 @@ export function createSyncService(ctx, options = {}) {
       if (!auth) throw bad('授权不存在')
       // The authorization owns where its token goes; a request body must never move it.
       const moved = AUTH_TARGET_FIELDS.filter(key => input[key] !== undefined && String(input[key]) !== String((auth.config || {})[key] ?? ''))
-      if (moved.length) throw bad(auth.connector === 'futu' && auth.transport !== 'mcp'
+      // 需要本机网关的来源（富途原生，带 listPrecheck）单独提示 OpenD 限制。
+      const authEntry = getConnector(auth.connector), localGateway = (authEntry?.transports[auth.transport] || authEntry?.transports[authEntry?.defaultTransport])?.listPrecheck
+      if (moved.length) throw bad(localGateway
         ? '富途账户读取须指向本机 OpenD；连接地址由授权统一管理'
         : '连接地址由授权统一管理，请重新授权后再修改')
       source = { ...source, ...authWideConfig(auth), connector: auth.connector, transport: auth.transport, authId: auth.id }
       delete source.id
     }
-    if (!NATIVE_CONNECTORS.includes(source.connector)) throw bad('请选择独立账户连接来源')
-    if (source.connector === 'futu' && source.transport !== 'mcp') {
-      if (!['127.0.0.1','localhost','::1'].includes(String(source.host || '127.0.0.1'))) throw bad('富途账户读取须指向本机 OpenD')
-      const port = Number(source.port || 33333)
-      if (!Number.isInteger(port) || port < 1 || port > 65535) throw bad('OpenD 端口无效')
-    }
-    const secrets = secretsFor(source, credentials), signal = AbortSignal.timeout(source.transport === 'mcp' ? 180000 : 45000)
+    const entry = getConnector(source.connector)
+    if (!entry) throw bad('请选择独立账户连接来源')
+    // 读取凭据前的来源校验（富途原生只能连本机 OpenD）。
+    ;(entry.transports[source.transport] || entry.transports[entry.defaultTransport]).listPrecheck?.(source)
+    const secrets = secretsFor(source, credentials), signal = AbortSignal.timeout(timeoutMs('list', source.transport))
     const load = async (current) => {
-      let result
-      if (options.listAccounts) result = await options.listAccounts(source,current,signal)
-      else if (source.connector === 'ths') result = await listThsAccounts(source,current,signal)
-      else if (source.connector === 'futu' && source.transport === 'mcp') result = await listFutuMcpAccounts(source,current,signal)
-      else if (source.connector === 'futu') result = await listFutuAccounts(source,current,signal)
-      else if (source.connector === 'ib') result = await listIbAccounts(source,current,signal)
-      else if (source.connector === 'longbridge' && (source.transport === 'mcp' || !current.appKey && current.mcpToken)) result = await listLongbridgeMcpAccounts(source,current,signal)
-      else if (source.connector === 'qieman') result = await listQiemanAccounts(source,current,signal)
-      else if (source.connector === 'tiger') result = await listTigerAccounts(source,current,signal)
-      else if (source.connector === 'fosun') result = await listFosunAccounts(source,current,signal)
-      else {
-        const sdk = await import('./brokers-sdk.mjs')
-        if (!sdk.listLongbridgeAccounts) throw bad('请读取并选择长桥账户通道')
-        result = await sdk.listLongbridgeAccounts(source,current,signal)
-      }
+      // 长桥重复连接：保存了 appKey 用原生 SDK，只有 MCP token 时走官方 MCP。
+      const resolved = entry.resolveTransport ? entry.resolveTransport(source, current) : source.transport
+      const transport = entry.transports[resolved] || entry.transports[entry.defaultTransport]
+      const result = options.listAccounts
+        ? await options.listAccounts(source,current,signal)
+        : await transport.listAccounts(source,current,signal)
       if (!Array.isArray(result.accounts)) throw bad('来源未返回有效账户列表')
       return result
     }
@@ -436,13 +341,13 @@ export function createSyncService(ctx, options = {}) {
           lastError: null,
         }
         // First discovery gives a bare "富途" authorization a recognisable identity.
-        if (current && (!current.label || current.label === CONNECTOR_NAME[current.connector]) && result.accounts[0]?.name) patch.label = (CONNECTOR_NAME[current.connector] || current.connector) + ' · ' + String(result.accounts[0].name).slice(0, 80)
+        if (current && (!current.label || current.label === getConnector(current.connector)?.name) && result.accounts[0]?.name) patch.label = (getConnector(current.connector)?.name || current.connector) + ' · ' + String(result.accounts[0].name).slice(0, 80)
         updateAuth(source.authId, patch)
       } catch { /* discovery stays usable even if the cache cannot be written */ }
     }
     const db = readLedger()
-    return { ...result, accounts:result.accounts.filter(a=>source.connector !== 'futu' || !source.tradeEnvironment || !a.tradeEnvironment || a.tradeEnvironment === source.tradeEnvironment).map(a=>{
-      const candidate = {...source,[source.connector === 'ths' ? 'portfolioId' : 'brokerAccountId']:String(a.id),...(source.connector === 'ths' ? {thsBookType:a.thsType || 'common'} : {})}
+    return { ...result, accounts:result.accounts.filter(a=>!entry.filterAccountsByEnvironment || !source.tradeEnvironment || !a.tradeEnvironment || a.tradeEnvironment === source.tradeEnvironment).map(a=>{
+      const candidate = {...source,[entry.accountIdField]:String(a.id),...(entry.bookTypeFromList ? {thsBookType:a.thsType || 'common'} : {})}
       const imported = existingImport(candidate,secrets), account = imported && db.accounts.find(x=>x.id === imported.accountId)
       return {...a,imported:!!imported,sourceId:imported?.id || null,accountId:account?.id || null,accountName:account?.name || null}
     }) }
@@ -475,10 +380,10 @@ export function createSyncService(ctx, options = {}) {
   async function createAuthorization(input = {}, credentials = {}) {
     if (!plain(input)) throw bad('缺少授权信息')
     const connector = String(input.connector || '')
-    if (!NATIVE_CONNECTORS.includes(connector)) throw bad('该来源不需要登录授权')
-    const transport = ['qieman','tiger'].includes(connector) ? 'mcp'
-      : ['ths','ib','fosun'].includes(connector) ? 'native'
-      : (input.transport === 'mcp' ? 'mcp' : 'native')
+    const entry = getConnector(connector)
+    if (!entry) throw bad('该来源不需要登录授权')
+    const transport = resolveAuthTransport(connector, input.transport)
+    const transportImpl = entry.transports[transport]
     const all = authList()
     const existing = input.authId ? all.find(a => a.id === input.authId) : null
     if (input.authId && !existing) throw bad('授权不存在')
@@ -487,22 +392,16 @@ export function createSyncService(ctx, options = {}) {
       const bound = config.read().filter(s => (s.authId || s.id) === existing.id)
       if (bound.length) throw bad('该授权下已有导入账户，不能切换接入方式；请新建授权')
     }
-    const authSettings = { ...authWideConfig(existing), ...authConfig(connector, transport, { ...authWideConfig(existing), ...(input.config || {}), ...input }) }
+    const authSettings = { ...authWideConfig(existing), ...transportImpl.authConfig({ ...authWideConfig(existing), ...(input.config || {}), ...input }) }
     const id = existing?.id || 'AUTH_'+randomUUID()
     const typed = validateCredentials(connector, credentials)
-    // A browser flow can belong to one specific login. Only a brand-new
-    // authorization may consume the unscoped slot; an existing one needs a
-    // pending token that was captured for its own id, so a stale flow for a
-    // different login can never replace a valid token.
-    const pending = connector === 'futu' && transport === 'mcp'
-      ? (existing ? vault.get('pending-futu-mcp:' + existing.id) : vault.get('pending-futu-mcp'))
-      : connector === 'tiger' && transport === 'mcp'
-        ? (existing ? vault.get('pending-tiger-mcp:' + existing.id) : vault.get('pending-tiger-mcp'))
-        : connector === 'qieman' && transport === 'mcp'
-          ? (existing ? vault.get('pending-qieman-mcp:' + existing.id) : vault.get('pending-qieman-mcp'))
-          : connector === 'fosun'
-            ? (existing ? vault.get('pending-fosun:' + existing.id) : vault.get('pending-fosun'))
-            : existing ? {} : (connector === 'ths' ? vault.get('pending-ths') : {})
+    // A browser flow can belong to one specific login. Only a brand-new authorization may
+    // consume the unscoped slot; an existing one needs a token captured for its own id.
+    const pendingSpec = entry.auth?.pendingSlot && entry.auth.pendingTransports.includes(transport) ? entry.auth : null
+    const pending = !pendingSpec ? {}
+      : pendingSpec.pendingScope === 'scoped'
+        ? (existing ? vault.get(pendingSpec.pendingSlot + ':' + existing.id) : vault.get(pendingSpec.pendingSlot))
+        : existing ? {} : vault.get(pendingSpec.pendingSlot)
     const saved = existing ? vault.get(id) : {}
     // A fresh browser token must win over the stored one, otherwise "重新授权"
     // keeps using a possibly revoked credential.
@@ -510,18 +409,12 @@ export function createSyncService(ctx, options = {}) {
     // Connection settings decide where the stored token is sent. They may only
     // change together with fresh credentials, which are verified against the
     // bound sub-accounts below.
-    if (existing && ['futu','longbridge','qieman','tiger','fosun'].includes(connector) && !Object.keys(typed).length && !Object.keys(pending).length) {
+    if (existing && entry.configRequiresReauth && !Object.keys(typed).length && !Object.keys(pending).length) {
       const before = existing.config || {}
       if (AUTH_TARGET_FIELDS.some(key => (before[key] ?? null) !== (authSettings[key] ?? null))) throw bad('修改登录的连接地址需要重新授权并验证账户')
     }
-    if (connector === 'ths' && !secrets.cookie) throw bad('请先完成同花顺浏览器登录')
-    if (connector === 'futu' && transport === 'mcp' && !secrets.mcpToken) throw bad('请先完成富途浏览器授权')
-    if (connector === 'longbridge' && transport === 'mcp' && !secrets.mcpToken) throw bad('请先兑换长桥授权码')
-    if (connector === 'longbridge' && transport !== 'mcp' && !(secrets.appKey && secrets.appSecret && secrets.accessToken)) throw bad('请填写长桥 App Key / App Secret / Access Token')
-    if (connector === 'qieman' && !(secrets.apiKey || secrets.bearerToken)) throw bad('请填写且慢 MCP API Key（ai.yingmi.com 申请，长期有效）')
-    if (connector === 'tiger' && !secrets.accessToken) throw bad('请先完成老虎浏览器设备码授权')
-    if (connector === 'tiger' && !(secrets.refreshToken && secrets.clientId)) throw bad('老虎授权缺少 refresh token，请重新授权以获得长期登录')
-    if (connector === 'fosun' && !(secrets.apiKey && secrets.privateKey && secrets.serverPublicKey)) throw bad('请填写复星 API Key（ak_ 开头）、客户端私钥与服务端公钥')
+    const invalid = transportImpl.auth?.validate?.(secrets)
+    if (invalid) throw bad(invalid)
     if (existing && connector === 'ths') {
       const bound = config.read().filter(s => (s.authId || s.id) === id && s.connector === 'ths')
       if (bound.length) {
@@ -534,31 +427,26 @@ export function createSyncService(ctx, options = {}) {
     }
     // A fresh Futu/Longbridge token can belong to a different login. Do not silently
     // repoint an authorization that already has imported sub-accounts.
-    if (existing && (Object.keys(pending).length || Object.keys(typed).length) && transport === 'mcp' && ['futu','longbridge','tiger'].includes(connector)) {
+    if (existing && (Object.keys(pending).length || Object.keys(typed).length) && transport === 'mcp' && transportImpl.auth?.reprobeBound) {
       const bound = config.read().filter(s => (s.authId || s.id) === id)
       if (bound.length) {
         const probe = { ...authSettings, connector, transport:'mcp', authId:id }
         const signal = AbortSignal.timeout(180000)
-        const result = options.listAccounts ? await options.listAccounts(probe,secrets,signal)
-          : connector === 'futu' ? await listFutuMcpAccounts(probe,secrets,signal)
-          : connector === 'tiger' ? await listTigerAccounts(probe,secrets,signal)
-          : await listLongbridgeMcpAccounts(probe,secrets,signal)
-        const missing = bound.find(s => !result.accounts.some(a => String(a.id) === String(s.connector === 'ths' ? s.portfolioId : s.brokerAccountId)))
+        const result = options.listAccounts ? await options.listAccounts(probe,secrets,signal) : await transportImpl.listAccounts(probe,secrets,signal)
+        const missing = bound.find(s => !result.accounts.some(a => String(a.id) === String(s[entry.accountIdField])))
         if (missing) throw bad('新授权不包含已绑定的账户，请为新账号创建授权')
       }
     }
     if (Object.keys(secrets).length) vault.set(id, connector, secrets)
-    if (connector === 'ths') vault.remove('pending-ths')
-    if (connector === 'futu') { vault.remove('pending-futu-mcp'); vault.remove('pending-futu-mcp:' + id) }
-    if (connector === 'tiger') { vault.remove('pending-tiger-mcp'); vault.remove('pending-tiger-mcp:' + id) }
-    if (connector === 'qieman') { vault.remove('pending-qieman-mcp'); vault.remove('pending-qieman-mcp:' + id) }
-    if (connector === 'fosun') { vault.remove('pending-fosun'); vault.remove('pending-fosun:' + id) }
+    // 新授权落地后清掉它的暂存槽（未绑定 id 的槽 + 本授权 scoped 槽）。
+    const pendingCleanup = entry.auth?.pendingSlot ? (entry.auth.pendingScope === 'new-only' ? [entry.auth.pendingSlot] : [entry.auth.pendingSlot, entry.auth.pendingSlot + ':' + id]) : []
+    for (const slot of pendingCleanup) vault.remove(slot)
     const auth = {
       ...(existing || {}),
       id,
       connector,
       transport,
-      label: String(input.label || existing?.label || CONNECTOR_NAME[connector] + (input.name ? ' · ' + String(input.name).slice(0,60) : '')).slice(0,120),
+      label: String(input.label || existing?.label || entry.name + (input.name ? ' · ' + String(input.name).slice(0,60) : '')).slice(0,120),
       config: authSettings,
       accounts: existing?.accounts || [],
       accountsFetchedAt: existing?.accountsFetchedAt || null,
@@ -630,7 +518,7 @@ export function createSyncService(ctx, options = {}) {
     const all = config.read(), previousConfig = structuredClone(all), previous = input.id ? all.find(s=>s.id === input.id) : null
     if (input.id && !previous) throw bad('数据源不存在')
     if (previous && inFlight.has(previous.id)) throw bad('正在同步，请完成后再修改连接')
-    if (![...NATIVE_CONNECTORS,'custom'].includes(input.connector)) throw bad('不支持的数据源')
+    if (input.connector !== 'custom' && !getConnector(input.connector)) throw bad('不支持的数据源')
     if (previous && previous.connector !== input.connector) throw bad('已有连接不可更换来源，请新建连接')
     let auth = null
     const targetAuthId = input.authId || previous?.authId
@@ -651,64 +539,18 @@ export function createSyncService(ctx, options = {}) {
     const interval = Number(input.intervalMinutes ?? 0)
     if (!Number.isInteger(interval) || (interval !== 0 && (interval < 5 || interval > 1440))) throw bad('同步间隔须为 0，或 5 至 1440 分钟')
     if (typeof input.enabled !== 'boolean') throw bad('enabled 必须为布尔值')
-    const source = { ...(previous || {}), id:previous?.id || transaction.sourceId || 'SRC_'+randomUUID(), name:String(input.name || '').trim(), connector:input.connector, transport:['ths','fosun','ib'].includes(input.connector) ? 'native' : (['qieman','tiger'].includes(input.connector) ? 'mcp' : (input.transport || (input.connector === 'custom' ? 'http' : 'native'))), accountId:account.id, ...(auth?.id || input.authId || previous?.authId ? { authId: auth?.id || input.authId || previous?.authId } : {}), intervalMinutes:interval, enabled:input.enabled, configRevision:randomUUID(), updatedAt:iso() }
+    const sourceEntry = getConnector(input.connector)
+    const source = { ...(previous || {}), id:previous?.id || transaction.sourceId || 'SRC_'+randomUUID(), name:String(input.name || '').trim(), connector:input.connector, transport:resolveSaveTransport(input.connector, input.transport), accountId:account.id, ...(auth?.id || input.authId || previous?.authId ? { authId: auth?.id || input.authId || previous?.authId } : {}), intervalMinutes:interval, enabled:input.enabled, configRevision:randomUUID(), updatedAt:iso() }
     if (!source.name || source.name.length > 120) throw bad('请输入不超过 120 字的数据源名称')
     delete source.url; delete source.toolName; delete source.args; delete source.credentialRef; delete source.portfolioId; delete source.thsBookType; delete source.mcpEndpoint; delete source.gatewayUrl; delete source.trustLocalGateway
-    if (source.connector === 'ths') {
-      if (!input.portfolioId || typeof input.portfolioId !== 'string') throw bad('请明确选择同花顺账本')
-      if (account.currency !== 'CNY') throw bad('同花顺账本须绑定 CNY 账户')
-      const bookType = input.thsBookType === undefined || input.thsBookType === null || input.thsBookType === '' ? 'common' : String(input.thsBookType)
-      if (!['common','manFund','ijj'].includes(bookType)) throw bad('同花顺账本类型无效')
-      source.portfolioId = input.portfolioId
-      source.thsBookType = bookType
-    } else if (source.transport === 'native' || (source.transport === 'mcp' && MCP_CONNECTORS.includes(source.connector))) {
-      source.brokerAccountId = String(input.brokerAccountId || '').trim()
-      if (!source.brokerAccountId) throw bad('请明确选择券商账户或通道')
-      if (source.connector === 'qieman') {
-        // 'main' = 总账户; any other id is one 且慢 sub-account (四笔钱/盈米宝).
-        const mcpEndpoint = mcpEndpointUrl(input.mcpEndpoint)
-        if (mcpEndpoint) source.mcpEndpoint = mcpEndpoint
-      } else if (source.connector === 'tiger') {
-        const mcpEndpoint = mcpEndpointUrl(input.mcpEndpoint)
-        if (mcpEndpoint) source.mcpEndpoint = mcpEndpoint
-      } else if (source.connector === 'fosun') {
-        if (source.transport !== 'native') throw bad('复星 OpenAPI 为原生接入，不支持 MCP')
-        source.gatewayUrl = endpoint(input.gatewayUrl || 'https://openapi.fosunxcz.com').replace(/\/$/,'')
-      } else if (source.connector === 'futu') {
-        if (source.transport === 'mcp') {
-          // 富途官方 MCP：按授权账户（acc_id）导入，可选自定义端点（默认 mcp.futunn.com）。
-          const mcpEndpoint = mcpEndpointUrl(input.mcpEndpoint)
-          if (mcpEndpoint) source.mcpEndpoint = mcpEndpoint
-          // Optional settlement currency, used to attribute cash-flow rows that carry no symbol.
-          const cashCurrency = String(input.currency || '').toUpperCase()
-          if (cashCurrency) {
-            if (!/^[A-Z]{3}$/.test(cashCurrency)) throw bad('富途资金币种无效')
-            source.currency = cashCurrency
-          }
-        } else {
-        source.host = String(input.host || '127.0.0.1').trim()
-        if (!['127.0.0.1','localhost','::1'].includes(source.host)) throw bad('富途连接须指向本机 OpenD')
-        source.port = Number(input.port || 33333)
-        if (!Number.isInteger(source.port) || source.port < 1 || source.port > 65535) throw bad('OpenD 端口无效')
-        source.tls = input.tls === true
-        source.tradeEnvironment = String(input.tradeEnvironment || 'REAL').toUpperCase()
-        source.tradeMarket = String(input.tradeMarket || '').toUpperCase()
-        source.currency = String(input.currency || '').toUpperCase()
-        if (!['REAL','SIMULATE'].includes(source.tradeEnvironment) || !['HK','US','CN'].includes(source.tradeMarket) || !/^[A-Z]{3}$/.test(source.currency)) throw bad('请设置富途交易环境、市场和资金币种')
-        }
-      } else if (source.connector === 'ib') {
-        if (source.transport !== 'native') throw bad('IB 不支持 MCP 接入')
-        source.gatewayUrl = endpoint(input.gatewayUrl || 'https://localhost:5000/v1/api').replace(/\/$/,'')
-        source.trustLocalGateway = input.trustLocalGateway === true
-      } else if (source.connector === 'longbridge' && source.transport === 'mcp') {
-        // 长桥官方 MCP：单账户（brokerAccountId='main'），可选自定义端点（默认 mcp.longbridge.com）。
-        if (source.brokerAccountId !== 'main') throw bad('长桥 MCP 接入为单一账户（main）')
-        const mcpEndpoint = mcpEndpointUrl(input.mcpEndpoint)
-        if (mcpEndpoint) {
-          if (mcpEndpoint.endsWith('/agent')) throw bad('长桥 MCP 地址不能是授权端点 /agent')
-          source.mcpEndpoint = mcpEndpoint
-        }
-      } else if (source.connector !== 'longbridge') throw bad('来源不支持该连接方式')
+    if (sourceEntry) {
+      const transportImpl = sourceEntry.transports[source.transport]
+      if (!transportImpl) throw bad('请选择 API 或 MCP 连接方式')
+      if (sourceEntry.accountIdField === 'brokerAccountId') {
+        source.brokerAccountId = String(input.brokerAccountId || '').trim()
+        if (!source.brokerAccountId) throw bad('请明确选择券商账户或通道')
+      }
+      Object.assign(source, transportImpl.sourceFields(input, { account, source }))
     } else if (source.transport === 'http') {
       source.url = endpoint(input.url)
       const ref = String(input.credentialRef || '').trim()
@@ -735,8 +577,8 @@ export function createSyncService(ctx, options = {}) {
     }
     const credentialOwner = source.authId || source.id
     const storedSecrets = { ...vault.get(credentialOwner), ...incomingSecrets }
-    if (source.connector === 'ths' && !storedSecrets.cookie) Object.assign(storedSecrets,vault.get('pending-ths'))
-    if (source.connector === 'futu' && !storedSecrets.mcpToken) Object.assign(storedSecrets,vault.get('pending-futu-mcp'))
+    const capture = sourceEntry?.auth
+    if (capture?.captureOnSave && capture.pendingFields.every(field => !storedSecrets[field])) Object.assign(storedSecrets,vault.get(capture.pendingSlot))
     if (Object.keys(storedSecrets).length) vault.set(credentialOwner,source.connector,storedSecrets)
     try {
       config.write(all)
@@ -762,17 +604,19 @@ export function createSyncService(ctx, options = {}) {
       input = { ...authWideConfig(auth), ...input, connector: auth.connector, transport: auth.transport, authId: auth.id }
       delete input.id
     }
-    if (!NATIVE_CONNECTORS.includes(input.connector)) return Promise.reject(bad('请选择支持登录导入的来源'))
+    const entry = getConnector(input.connector)
+    if (!entry) return Promise.reject(bad('请选择支持登录导入的来源'))
     if (input.id) return Promise.reject(bad('已导入账户请通过编辑保存，无需重新导入'))
-    const remoteId = input.connector === 'ths' ? input.portfolioId : input.brokerAccountId
+    const remoteId = input[entry.accountIdField]
     if (typeof remoteId !== 'string' || !remoteId.trim()) return Promise.reject(bad('请先登录并明确选择一个来源账户'))
+    // 同花顺专属：账本类型归一。
     if (input.connector === 'ths') {
       const bookType = input.thsBookType === undefined || input.thsBookType === null || input.thsBookType === '' ? 'common' : String(input.thsBookType)
       if (!['common','manFund','ijj'].includes(bookType)) return Promise.reject(bad('同花顺账本类型无效'))
       input = {...input,thsBookType:bookType}
     }
     // 长桥 / 且慢 MCP 接入：无 brokerAccountId 时固定为 'main'（单一账户）。
-    if ((input.connector === 'longbridge' || input.connector === 'qieman') && (input.transport === 'mcp' || !input.brokerAccountId)) input = {...input,brokerAccountId:String(input.brokerAccountId || 'main')}
+    if (entry.defaults?.accountId && (input.transport === 'mcp' || !input.brokerAccountId)) input = {...input,brokerAccountId:String(input.brokerAccountId || entry.defaults.accountId)}
     let secrets
     try { secrets = secretsFor(input,credentials) } catch (error) { return Promise.reject(error) }
     const key = fingerprint(input,secrets)
@@ -786,7 +630,7 @@ export function createSyncService(ctx, options = {}) {
       const previous = existingImport(input,secrets)
       if (previous) return resultFor(previous)
       const abort = new AbortController(); aborts.add(abort)
-      const timer = setTimeout(()=>abort.abort(), input.transport === 'mcp' ? 240000 : 45000);timer.unref?.()
+      const timer = setTimeout(()=>abort.abort(), timeoutMs('connect', input.transport));timer.unref?.()
       try {
         const found = await listAccounts({...input,transport:(input.transport === 'mcp' ? 'mcp' : 'native')},credentials)
         const selected = found.accounts.filter(a=>String(a.id) === remoteId)
@@ -794,13 +638,13 @@ export function createSyncService(ctx, options = {}) {
         if (disposed || abort.signal.aborted) throw bad('账户导入已中止')
         const duplicate = existingImport(input,secrets)
         if (duplicate) return resultFor(duplicate)
-        const ledger = readLedger(), sourceId = 'SRC_'+randomUUID(), labels = {ths:'同花顺',futu:'富途',longbridge:'长桥',qieman:'且慢',tiger:'老虎证券',fosun:'复星证券',ib:'IB'}
+        const ledger = readLedger(), sourceId = 'SRC_'+randomUUID()
         const name = String(selected[0].name || remoteId).trim().slice(0,120) || remoteId
-        const currency = (input.connector === 'ths' || input.connector === 'qieman') ? 'CNY' : String(selected[0].currency || (input.connector === 'futu' ? input.currency : null) || ledger.baseCurrency || 'CNY').toUpperCase()
+        const currency = entry.connectCurrency(input, selected[0], ledger.baseCurrency)
         if (!/^[A-Z]{3}$/.test(currency)) throw bad('来源账户币种无效，导入未保存')
-        const {account} = applyOp(ledger,'account.upsert',{name,type:'broker',currency,note:'从'+labels[input.connector]+'导入'})
+        const {account} = applyOp(ledger,'account.upsert',{name,type:'broker',currency,note:'从'+entry.name+'导入'})
         account.externalAccountId = remoteId;account.connector = input.connector
-        const sourceInput = {...input,name:String(input.name || labels[input.connector]+' · '+name).trim(),accountId:account.id,transport:(input.transport === 'mcp' ? 'mcp' : 'native'),intervalMinutes:input.intervalMinutes ?? 15,enabled:input.enabled !== false}
+        const sourceInput = {...input,name:String(input.name || entry.name+' · '+name).trim(),accountId:account.id,transport:(input.transport === 'mcp' ? 'mcp' : 'native'),intervalMinutes:input.intervalMinutes ?? 15,enabled:input.enabled !== false}
         // 先建账户与来源，再尝试首次读取：上游慢或临时失败时账户照常出现，错误显示在账户上，由自动同步/手动同步重试。
         let staged = ledger, snapshot = null, firstError = null
         try {
@@ -845,19 +689,12 @@ export function createSyncService(ctx, options = {}) {
   }
   async function fetchSnapshot(source, signal, suppliedSecrets) {
     if (options.fetchSnapshot) return options.fetchSnapshot(source, signal, suppliedSecrets)
-    // 原生四来源（含 futu/longbridge 的 MCP transport）由独立适配器读取；custom 才走宿主 MCP 工具。
-    if (NATIVE_CONNECTORS.includes(source.connector)) {
+    // 注册表来源（含 futu/longbridge 的 MCP transport）由独立适配器读取；custom 才走宿主 MCP 工具。
+    const entry = getConnector(source.connector)
+    if (entry) {
       const secrets = suppliedSecrets || secretsFor(source)
-      const load = current => {
-        if (source.connector === 'ths') return fetchStandaloneThsSnapshot(source,current,signal)
-        if (source.connector === 'futu') return source.transport === 'mcp' ? fetchFutuMcpSnapshot(source,current,signal) : fetchFutuSnapshot(source,current,signal)
-        if (source.connector === 'longbridge') return source.transport === 'mcp' ? fetchLongbridgeMcpSnapshot(source,current,signal) : fetchLongbridgeSnapshot(source,current,signal)
-        if (source.connector === 'qieman') return fetchQiemanSnapshot(source,current,signal)
-        if (source.connector === 'tiger') return fetchTigerSnapshot(source,current,signal)
-        if (source.connector === 'fosun') return fetchFosunSnapshot(source,current,signal)
-        return fetchIbSnapshot(source,current,signal)
-      }
-      return withAuthRefresh(source, load, secrets)
+      const transport = entry.transports[source.transport] || entry.transports[entry.defaultTransport]
+      return withAuthRefresh(source, current => transport.fetchSnapshot(source, current, signal), secrets)
     }
     if (source.transport === 'http') {
       const headers = { accept:'application/json' }
@@ -885,7 +722,7 @@ export function createSyncService(ctx, options = {}) {
     const revision = source.configRevision
     updateRecord(id, { lastAttemptAt:iso(), lastStatus:'syncing',lastError:null })
     const abort = new AbortController(); aborts.add(abort)
-    const timer = setTimeout(()=>abort.abort(new Error('同步超时')), source.transport === 'mcp' ? 240000 : 45000); timer.unref?.()
+    const timer = setTimeout(()=>abort.abort(new Error('同步超时')), timeoutMs('sync', source.transport)); timer.unref?.()
     try {
       const input = await fetchSnapshot(source, abort.signal)
       if (disposed || abort.signal.aborted) throw bad('同步已中止')
@@ -923,15 +760,14 @@ export function createSyncService(ctx, options = {}) {
   async function readHistory(accountId, range) {
     if (disposed) throw bad('同步服务已停止')
     const source = config.read().find(s=>s.accountId === accountId)
-    const nativeLike = source && (source.transport === 'native' || (source.transport === 'mcp' && MCP_CONNECTORS.includes(source.connector)))
-    if (!source || !nativeLike || !['futu','longbridge','ths','tiger','fosun'].includes(source.connector)) throw bad('此来源请通过账单文件补充历史流水')
-    if (source.connector === 'longbridge' && source.transport === 'mcp' && !secretsFor(source).mcpToken) throw bad('长桥 MCP 未授权，请先完成授权码兑换')
-    if (source.connector === 'futu' && source.transport === 'mcp' && !secretsFor(source).mcpToken) throw bad('富途 MCP 未授权，请先完成浏览器授权')
-    if (source.connector === 'tiger' && !secretsFor(source).accessToken) throw bad('老虎 MCP 未授权，请先完成浏览器设备码授权')
+    const transport = source ? getConnector(source.connector)?.transports[source.transport] : null
+    if (!transport?.fetchHistory) throw bad('此来源请通过账单文件补充历史流水')
+    const guard = transport.auth?.historyGuard
+    if (guard) { const message = guard(secretsFor(source)); if (message) throw bad(message) }
     const revision = source.configRevision, abort = new AbortController()
     aborts.add(abort)
     // MCP sources are slow per call (5–20s) and history spans several markets + paged cash logs.
-    const timer = setTimeout(()=>abort.abort(), source.transport === 'mcp' ? 600000 : 180000); timer.unref?.()
+    const timer = setTimeout(()=>abort.abort(), timeoutMs('history', source.transport)); timer.unref?.()
     try {
       const result = await withAuthRefresh(source, current => (options.fetchHistory || fetchNativeHistory)(source,current,range,abort.signal), secretsFor(source))
       const current = config.read().find(s=>s.id===source.id)

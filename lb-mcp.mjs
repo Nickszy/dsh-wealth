@@ -266,12 +266,14 @@ export async function exchangeLongbridgeMcpCode(code, { endpoint, signal, deps =
 // Map MCP account_balance + stock_positions + fund_positions (+ optional quote) to
 // the canonical dsh-wealth snapshot. Prices come from quote when available; without
 // them holdings keep manualPrice null and a PRICE_UNAVAILABLE warning.
+const LB_AUTH_ERROR = /40[13]|授权|未授权|失效|过期|expired|unauthori[sz]ed|invalid.token|re-?auth/i
 const MARKET_CASH_CURRENCY = { CN: 'CNY', HK: 'HKD', US: 'USD', SG: 'SGD' }
 function stockHoldings(positions, warnings, seen) {
   const list = []
+  let skipped = false
   for (const entry of array(positions, 'stock_positions list')) {
     const info = entry?.stock_info
-    if (!info || typeof info !== 'object') { warnings.push({ message: 'THS_LB_MCP_STOCK_ROW' }); continue }
+    if (!info || typeof info !== 'object') { warnings.push('THS_LB_MCP_STOCK_ROW'); skipped = true; continue }
     for (const row of array(info, 'stock_positions.stock_info')) {
       const channel = entry?.account_channel && typeof entry.account_channel === 'string' ? entry.account_channel : ''
       const symbolRaw = String(row.symbol || '').trim()
@@ -281,23 +283,29 @@ function stockHoldings(positions, warnings, seen) {
       if (seen.has(key)) fail('长桥 MCP 返回了重复持仓 ' + symbol)
       seen.add(key)
       const qty = money(row.quantity, 'stock_positions.quantity')
-      if (qty == null || !(qty > 0)) { warnings.push({ message: 'LB_MCP_MISSING_QTY:' + symbol }); continue }
+      if (qty === 0) continue // 已清仓（当日卖光）：不是缺数据，旧持仓应随完整快照删除
+      if (qty == null || qty < 0) { warnings.push('LB_MCP_MISSING_QTY:' + symbol); skipped = true; continue }
+      const currencyValue = currency(row.currency || MARKET_CASH_CURRENCY[market] || 'USD', 'stock_positions.currency')
+      // v1 契约要求 avgCost 必填：缺成本价时跳过该行并降级覆盖，绝不伪造成本。
+      const cost = money(row.cost_price, 'stock_positions.cost_price')
+      if (cost == null) { warnings.push('LB_MCP_COST_UNAVAILABLE:' + symbol); skipped = true; continue }
       list.push({
         symbol, name: typeof row.symbol_name === 'string' && row.symbol_name.trim() ? row.symbol_name.trim() : symbol,
         market, assetClass: market === 'CASH' ? 'cash' : 'stock',
-        currency: currency(row.currency || MARKET_CASH_CURRENCY[market] || 'USD', 'stock_positions.currency'),
-        qty, avgCost: money(row.cost_price, 'stock_positions.cost_price') ?? undefined,
+        currency: currencyValue,
+        qty, avgCost: cost,
         manualPrice: null, externalId: symbol, channel,
       })
     }
   }
-  return list
+  return { list, skipped }
 }
 function fundHoldings(positions, warnings, seen) {
   const list = []
+  let skipped = false
   for (const entry of array(positions, 'fund_positions list')) {
     const info = entry?.fund_info
-    if (!info || typeof info !== 'object') { warnings.push({ message: 'LB_MCP_FUND_ROW' }); continue }
+    if (!info || typeof info !== 'object') { warnings.push('LB_MCP_FUND_ROW'); skipped = true; continue }
     for (const row of array(info, 'fund_positions.fund_info')) {
       // counter_id like UT/FD/HK0000384492 — the last segment is the ISIN.
       const counterId = String(row.counter_id || '').trim()
@@ -307,27 +315,32 @@ function fundHoldings(positions, warnings, seen) {
       if (seen.has(key)) fail('长桥 MCP 返回了重复基金持仓 ' + symbol)
       seen.add(key)
       const qty = money(row.holding_units, 'fund_positions.holding_units')
-      if (qty == null || !(qty > 0)) { warnings.push({ message: 'LB_MCP_MISSING_FUND_QTY:' + symbol }); continue }
+      if (qty === 0) continue // 已清仓（当日卖光）：不是缺数据，旧持仓应随完整快照删除
+      if (qty == null || qty < 0) { warnings.push('LB_MCP_MISSING_FUND_QTY:' + symbol); skipped = true; continue }
+      const currencyValue = currency(row.currency || 'HKD', 'fund_positions.currency')
+      const cost = money(row.cost_net_asset_value, 'fund_positions.cost_net_asset_value')
+      if (cost == null) { warnings.push('LB_MCP_COST_UNAVAILABLE:' + symbol); skipped = true; continue }
       list.push({
         symbol, name: typeof row.symbol_name === 'string' && row.symbol_name.trim() ? row.symbol_name.trim() : symbol,
         market: 'FUND', assetClass: 'fund',
-        currency: currency(row.currency || 'HKD', 'fund_positions.currency'),
-        qty, avgCost: money(row.cost_net_asset_value, 'fund_positions.cost_net_asset_value') ?? undefined,
+        currency: currencyValue,
+        qty, avgCost: cost,
         manualPrice: money(row.current_net_asset_value, 'fund_positions.current_net_asset_value'),
         externalId: symbol, channel: entry?.account_channel && typeof entry.account_channel === 'string' ? entry.account_channel : '',
       })
     }
   }
-  return list
+  return { list, skipped }
 }
 function cashHoldings(balance, warnings) {
   const list = []
+  let skipped = false
   for (const row of array(balance, 'account_balance')) {
     const infos = Array.isArray(row?.cash_infos) ? row.cash_infos : []
     for (const info of infos) {
       const c = currency(info?.currency || row?.currency, 'account_balance.cash_infos.currency')
       const available = money(info?.available_cash, 'available_cash')
-      if (available == null) { warnings.push({ message: 'LB_MCP_MISSING_CASH:' + c }); continue }
+      if (available == null) { warnings.push('LB_MCP_MISSING_CASH:' + c); skipped = true; continue }
       const frozen = money(info?.frozen_cash, 'frozen_cash') ?? 0
       const settling = money(info?.settling_cash, 'settling_cash') ?? 0
       const total = available + frozen + settling
@@ -335,10 +348,11 @@ function cashHoldings(balance, warnings) {
       list.push({ symbol: `CASH:${c}`, name: `${c} cash`, market: 'CASH', assetClass: 'cash', currency: c, qty: total, avgCost: 1, manualPrice: 1, externalId: `CASH:${c}` })
     }
     if (!infos.length && money(row?.total_cash, 'account_balance.total_cash') != null) {
-      warnings.push({ message: 'LB_MCP_CASH_WITHOUT_COMPONENTS:' + (row?.currency || '?') })
+      warnings.push('LB_MCP_CASH_WITHOUT_COMPONENTS:' + (row?.currency || '?'))
+      skipped = true
     }
   }
-  return list
+  return { list, skipped }
 }
 function pickChannel(list, source) {
   const wanted = source?.brokerAccountId && String(source.brokerAccountId) !== 'main' ? String(source.brokerAccountId) : null
@@ -361,7 +375,7 @@ async function fetchQuotes(mcp, symbols, warnings) {
     }
     return map
   } catch (error) {
-    warnings.push({ message: 'LB_MCP_QUOTE_UNAVAILABLE:' + (error?.message || 'quote failed') })
+    warnings.push('LB_MCP_QUOTE_UNAVAILABLE:' + (error?.message || 'quote failed'))
     return new Map()
   }
 }
@@ -369,13 +383,26 @@ export async function fetchLongbridgeMcpSnapshot(source, secrets, signal, deps =
   const mcp = createLongbridgeMcp({ secrets, endpoint: source?.mcpEndpoint, signal, deps })
   try {
     const warnings = []
-    const stocks = await mcp.call('stock_positions', {})
-    const funds = await mcp.call('fund_positions', {})
-    const balance = await mcp.call('account_balance', {})
+    let coverageLost = false
+    // 单个接口失败时降级为 partial（complete=false），保留账本里的旧持仓；
+    // 只有全部来源都为空时才整体报错。
+    const callOrWarn = async (tool, code) => {
+      try { return await mcp.call(tool, {}) } catch (error) {
+        // 认证失败必须抛出，交给上层续期/提示重新授权，不能降级成 partial。
+        if (LB_AUTH_ERROR.test(String(error?.message || error))) throw error
+        warnings.push(code + ':' + (error?.message || 'failed')); coverageLost = true; return [] }
+    }
+    const stocks = await callOrWarn('stock_positions', 'LB_MCP_POSITIONS_UNAVAILABLE')
+    const funds = await callOrWarn('fund_positions', 'LB_MCP_FUND_POSITIONS_UNAVAILABLE')
+    const balance = await callOrWarn('account_balance', 'LB_MCP_BALANCE_UNAVAILABLE')
     const seen = new Set()
-    const holdings = [...stockHoldings(stocks, warnings, seen), ...fundHoldings(funds, warnings, seen), ...cashHoldings(balance, warnings)]
+    const stockResult = stockHoldings(stocks, warnings, seen)
+    const fundResult = fundHoldings(funds, warnings, seen)
+    const cashResult = cashHoldings(balance, warnings)
+    if (stockResult.skipped || fundResult.skipped || cashResult.skipped) coverageLost = true
+    const holdings = [...stockResult.list, ...fundResult.list, ...cashResult.list]
     if (!holdings.length) fail('长桥 MCP 没有返回任何持仓或现金；请确认账户内有资产或已授权对应权限')
-    const { filtered, channels } = pickChannel(holdings, source)
+    const { filtered } = pickChannel(holdings, source)
     const symbolQuotes = await fetchQuotes(mcp, filtered.filter(h => h.market !== 'CASH' && h.market !== 'FUND').map(h => h.symbol), warnings)
     let priced = 0
     for (const h of filtered) {
@@ -384,18 +411,31 @@ export async function fetchLongbridgeMcpSnapshot(source, secrets, signal, deps =
       if (price != null) { h.manualPrice = price; priced++ }
     }
     if (filtered.some(h => h.market !== 'CASH' && h.market !== 'FUND') && priced === 0) {
-      warnings.push({ message: 'PRICE_UNAVAILABLE:长桥行情接口未返回价格，证券按成本价暂估' })
+      warnings.push('PRICE_UNAVAILABLE:长桥行情接口未返回价格，证券按成本价暂估')
     }
-    const totalsBalance = array(balance, 'account_balance')
-    const netAssets = totalsBalance.reduce((acc, row) => acc + (money(row?.net_assets, 'account_balance.net_assets') ?? 0), 0)
-    const totalCash = totalsBalance.reduce((acc, row) => acc + (money(row?.total_cash, 'account_balance.total_cash') ?? 0), 0)
+    // 只有单一币种时才能由适配器求和；多币种直接省略合计（券商已折算的字段才原样保留）。
+    const balanceRows = array(balance, 'account_balance')
+    const balanceCurrencies = new Set(balanceRows.map(r => typeof r?.currency === 'string' && /^[A-Za-z]{3}$/.test(r.currency.trim()) ? r.currency.trim().toUpperCase() : null))
+    const cashCurrencies = new Set(cashResult.list.map(h => h.currency))
+    const singleBalance = balanceRows.length > 0 && balanceCurrencies.size === 1 && !balanceCurrencies.has(null)
+    const singleCash = cashResult.list.length > 0 && cashCurrencies.size === 1
     const sourceTotals = {}
-    if (netAssets) sourceTotals.netAssets = netAssets
-    if (totalCash) sourceTotals.cash = totalCash
+    if (singleBalance) {
+      const netAssets = balanceRows.reduce((acc, row) => acc + (money(row?.net_assets, 'account_balance.net_assets') ?? 0), 0)
+      if (netAssets) sourceTotals.netAssets = netAssets
+    }
+    if (singleBalance && singleCash) {
+      const totalCash = balanceRows.reduce((acc, row) => acc + (money(row?.total_cash, 'account_balance.total_cash') ?? 0), 0)
+      if (totalCash) sourceTotals.cash = totalCash
+    }
+    if ((!singleBalance && balanceRows.length > 1) || cashCurrencies.size > 1) {
+      warnings.push('LB_MCP_MIXED_CURRENCY_TOTALS:多币种资产总额不做汇率折算，已省略合计')
+    }
     const snapshot = {
       holdings: filtered.map(({ channel, ...rest }) => rest),
-      complete: priced > 0 || filtered.every(h => h.manualPrice != null),
-      warnings: warnings.map(w => (typeof w === 'string' ? { message: w } : w)),
+      // complete 只看覆盖：接口失败或有行因缺 qty/成本被跳过都不能删旧持仓；缺价不影响。
+      complete: !coverageLost,
+      warnings,
       queriedAt: new Date(deps.now?.() ?? Date.now()).toISOString(),
       uploadedAt: null, quoteDate: null,
       ...(Object.keys(sourceTotals).length ? { sourceTotals } : {}),

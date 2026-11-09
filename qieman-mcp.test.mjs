@@ -7,6 +7,7 @@ import {
   QIEMAN_OAUTH_SCOPES,
 } from './qieman-mcp.mjs'
 import { createHash } from 'node:crypto'
+import { assertSnapshotContract } from './snapshot-contract.mjs'
 
 const SECRETS = { apiKey: 'qm-key-1' }
 
@@ -56,6 +57,7 @@ test('且慢 tool names resolve case-insensitively and holdings map with derived
   assert.equal(accounts.accounts[0].currency, 'CNY')
 
   const snapshot = await fetchQiemanSnapshot({ mcpEndpoint: 'https://mcp.test', brokerAccountId: 'main' }, SECRETS, undefined, deps)
+  assertSnapshotContract(snapshot, { complete: true })
   assert.equal(snapshot.holdings.length, 2) // zero-share row skipped
   const first = snapshot.holdings.find(h => h.symbol === '000001')
   assert.equal(first.market, 'FUND')
@@ -116,7 +118,7 @@ test('且慢 sub-account reads funds from the asset tree by account name', async
   assert.deepEqual(snapshot.holdings.map(h => h.qty).sort((a, b) => a - b), [181.98, 1339.45])
   assert.equal(snapshot.sourceTotals.totalAsset, 29801.66)
   assert.ok(snapshot.warnings.some(w => /子账户视图不含成本/.test(w)))
-  assert.equal(snapshot.complete, true)
+  assertSnapshotContract(snapshot, { complete: true })
 })
 
 test('且慢 fails clearly without holdings tools or API key', async () => {
@@ -161,4 +163,70 @@ test('且慢 fingerprint hashes the credential without storing it', () => {
   const part = qiemanMcpFingerprintPart(SECRETS)
   assert.equal(part, createHash('sha256').update('qm-key-1').digest('hex').slice(0, 16))
   assert.equal(qiemanMcpFingerprintPart({}), '')
+})
+
+test('且慢 snapshot contract: an unknown-cost row makes it incomplete, zero shares do not', async () => {
+  const deps = jsonDeps(
+    ['GetUserM4FundDetail', 'GetUserAssetTree'],
+    {
+      GetUserM4FundDetail: () => ({ funds: [
+        { fundCode: '000001', fundName: 'A', staticShare: 100, staticShareAsset: 200, holdingProfit: 20 },
+        { fundCode: '000002', fundName: 'B', staticShare: 100 },
+        { fundCode: '000003', fundName: 'C', staticShare: 0, staticShareAsset: 0 },
+      ] }),
+      GetUserAssetTree: () => ({ totalAsset: 200, accounts: [] }),
+    },
+  )
+  const snapshot = await fetchQiemanSnapshot({}, SECRETS, undefined, deps)
+  assertSnapshotContract(snapshot, { complete: false, warning: /QIEMAN_COST_UNAVAILABLE:000002/ })
+  assert.ok(!snapshot.holdings.some(h => h.symbol === '000002'))
+  assert.ok(snapshot.warnings.some(w => /QIEMAN_ZERO_SHARES/.test(w)))
+})
+
+test('且慢 snapshot contract: an invalid NAV only warns and stays complete', async () => {
+  const deps = jsonDeps(['GetUserM4FundDetail'], {
+    GetUserM4FundDetail: () => ({ funds: [
+      { fundCode: '000001', fundName: 'A', staticShare: 100, staticShareAsset: 200, holdingProfit: 20, nav: 0 },
+    ] }),
+  })
+  const snapshot = await fetchQiemanSnapshot({}, SECRETS, undefined, deps)
+  assertSnapshotContract(snapshot, { complete: true })
+  assert.equal(snapshot.holdings[0].manualPrice, null)
+  assert.equal(snapshot.holdings[0].avgCost, 1.8)
+})
+
+test('且慢 snapshot contract: fund detail failure falls back to the tree and marks incomplete', async () => {
+  const deps = jsonDeps(['GetUserM4FundDetail', 'GetUserAssetTree'], {
+    GetUserM4FundDetail: () => { throw new Error('boom') },
+    GetUserAssetTree: () => ({ fundAssetGroupList: [{ fundCode: '000001', staticShare: 100, staticShareAsset: 200, holdingProfit: 20 }] }),
+  })
+  const snapshot = await fetchQiemanSnapshot({}, SECRETS, undefined, deps)
+  assertSnapshotContract(snapshot, { complete: false, warning: /QIEMAN_FUND_DETAIL_UNAVAILABLE/ })
+  assert.equal(snapshot.holdings.length, 1)
+})
+
+test('且慢 snapshot contract: a missing fund-detail tool still reads the tree but is incomplete', async () => {
+  const deps = jsonDeps(['GetUserAssetTree'], {
+    GetUserAssetTree: () => ({ fundAssetGroupList: [{ fundCode: '000001', staticShare: 100, staticShareAsset: 200, holdingProfit: 20 }] }),
+  })
+  const snapshot = await fetchQiemanSnapshot({}, SECRETS, undefined, deps)
+  assertSnapshotContract(snapshot, { complete: false })
+  assert.equal(snapshot.holdings.length, 1)
+})
+
+test('且慢 sub-account contract: a skipped unknown-cost row makes it incomplete', async () => {
+  const catalog = { data: {
+    rootAccount: { serviceAccountId: 'SA0ROOT', assetName: '总账户' },
+    subAccounts: [{ serviceAccountId: 'SA0AAA', accountName: '长钱', accountType: 'SUB_ACCOUNT' }],
+  } }
+  const tree = { accounts: [{ accountName: '长钱', totalAsset: 385.02, strategies: [{ funds: [
+    { fundCode: '000051', fundName: 'A', totalAsset: 285.02, totalShare: 181.98 },
+    { fundCode: '000099', fundName: 'B', totalShare: 100 },
+  ] }] }] }
+  const deps = jsonDeps(['GetUserAccountsAndProducts', 'GetUserAssetTree'], {
+    GetUserAccountsAndProducts: () => catalog,
+    GetUserAssetTree: () => tree,
+  })
+  const snapshot = await fetchQiemanSnapshot({ brokerAccountId: 'SA0AAA' }, SECRETS, undefined, deps)
+  assertSnapshotContract(snapshot, { complete: false, warning: /QIEMAN_COST_UNAVAILABLE:000099/ })
 })

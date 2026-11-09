@@ -2,6 +2,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createFutuMcp, createFutuPkce, registerFutuClient, buildFutuAuthorizeUrl, exchangeFutuCode, fetchFutuMcpSnapshot, fetchFutuMcpHistory, listFutuMcpAccounts, FUTU_MCP_DEFAULT_ENDPOINT, quoteBigInts, classifyFutuCashLog } from './futu-mcp.mjs'
+import { assertSnapshotContract, assertNoCrossCurrencySum } from './snapshot-contract.mjs'
 
 test('real Futu shapes: uint64 account ids keep precision and English cash log names classify', () => {
   const parsed = JSON.parse(quoteBigInts('{"accounts":[{"account_id":281756479859749122,"enable_market":[1,2]}]}'))
@@ -95,18 +96,52 @@ test('Futu MCP client rejects missing token, /agent endpoint and 401 with re-aut
   await assert.rejects(() => createFutuMcp({ secrets: SECRET, deps: mcpDeps({}, { failStatus: 403 }) }).call('account_positions', {}), /trade:read/)
 })
 
-test('snapshot maps positions and per-currency cash, single-currency totals', async () => {
+test('snapshot maps positions and per-currency cash; mixed currencies omit summed totals', async () => {
   const deps = snapshotDeps()
-  const snapshot = await fetchFutuMcpSnapshot({ transport: 'mcp', brokerAccountId: '123456' }, SECRET, undefined, deps)
+  const raw = await fetchFutuMcpSnapshot({ transport: 'mcp', brokerAccountId: '123456' }, SECRET, undefined, deps)
   // 2 stocks + 2 cash rows (HKD + USD)
-  assert.equal(snapshot.holdings.length, 4)
-  const tencent = snapshot.holdings.find(h => h.symbol === 'HK.00700')
+  assert.equal(raw.holdings.length, 4)
+  const tencent = raw.holdings.find(h => h.symbol === 'HK.00700')
   assert.deepEqual([tencent.market, tencent.currency, tencent.qty, tencent.avgCost, tencent.manualPrice, tencent.assetClass], ['HK', 'HKD', 100, 350.5, 380.2, 'stock'])
-  const cashHkd = snapshot.holdings.find(h => h.symbol === 'CASH:HKD')
+  const cashHkd = raw.holdings.find(h => h.symbol === 'CASH:HKD')
   assert.deepEqual([cashHkd.market, cashHkd.assetClass, cashHkd.currency, cashHkd.qty], ['CASH', 'cash', 'HKD', 4500.25])
-  assert.equal(snapshot.sourceTotals, undefined) // mixed currencies → totals omitted entirely
-  assert.ok(snapshot.warnings.some(w => /FUTU_MCP_MIXED_CURRENCY_TOTALS/.test(w.message)))
-  assert.equal(snapshot.complete, true)
+  assert.equal(raw.sourceTotals, undefined) // mixed currencies → totals omitted entirely
+  assertNoCrossCurrencySum(raw, ['cash', 'netAssets'])
+  assertSnapshotContract(raw, { complete: true, warning: /FUTU_MCP_MIXED_CURRENCY_TOTALS/ })
+})
+
+test('single-currency account emits netAssets and cash totals', async () => {
+  const deps = snapshotDeps({ account_positions: () => ({ positions: [POSITIONS.positions[0]] }) })
+  const raw = await fetchFutuMcpSnapshot({ transport: 'mcp', brokerAccountId: '123456' }, SECRET, undefined, deps)
+  const snapshot = assertSnapshotContract(raw, { complete: true })
+  assert.equal(snapshot.sourceTotals.netAssets, 42520.25)
+  assert.equal(snapshot.sourceTotals.cash, 4500.25)
+  assert.equal(snapshot.warnings.length, 0)
+})
+
+test('position without cost price is skipped, warns and drops coverage', async () => {
+  const deps = snapshotDeps({ account_positions: () => ({ positions: [
+    { position_side: 'LONG', code: 'HK.00700', qty: '100', currency: 'HKD', nominal_price: '380.2', cost_price: '350.5', security_type: 'STOCK' },
+    { position_side: 'LONG', code: 'US.AAPL', qty: '10', currency: 'USD', nominal_price: '185.4', security_type: 'STOCK' },
+  ] }) })
+  const raw = await fetchFutuMcpSnapshot({ transport: 'mcp', brokerAccountId: '123456' }, SECRET, undefined, deps)
+  assert.ok(!raw.holdings.some(h => h.symbol === 'US.AAPL'))
+  assert.ok(raw.holdings.every(h => h.avgCost !== undefined))
+  assertSnapshotContract(raw, { complete: false, warning: /FUTU_MCP_COST_UNAVAILABLE:US\.AAPL/ })
+})
+
+test('funds call failure keeps holdings but drops coverage', async () => {
+  const deps = snapshotDeps({ account_funds: () => { throw new Error('funds down') } })
+  const raw = await fetchFutuMcpSnapshot({ transport: 'mcp', brokerAccountId: '123456' }, SECRET, undefined, deps)
+  assert.equal(raw.holdings.filter(h => h.assetClass === 'stock').length, 2)
+  assertSnapshotContract(raw, { complete: false, warning: /FUTU_MCP_FUNDS_UNAVAILABLE:HKD/ })
+})
+
+test('missing market prices warn but coverage stays complete', async () => {
+  const deps = snapshotDeps({ account_positions: () => ({ positions: POSITIONS.positions.map(p => ({ ...p, nominal_price: null })) }) })
+  const raw = await fetchFutuMcpSnapshot({ transport: 'mcp', brokerAccountId: '123456' }, SECRET, undefined, deps)
+  assert.ok(raw.holdings.filter(h => h.assetClass === 'stock').every(h => h.manualPrice === null))
+  assertSnapshotContract(raw, { complete: true, warning: /PRICE_UNAVAILABLE/ })
 })
 
 test('snapshot rejects derivatives, shorts and duplicate positions', async () => {

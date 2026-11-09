@@ -298,6 +298,7 @@ const UNSUPPORTED_SECURITY = /OPTION|FUTURES|MULTILEG/i
 
 function mapPositions(positions, warnings, seen) {
   const list = []
+  let skipped = false
   for (const row of array(positions, 'positions')) {
     const type = String(row?.security_type || '').toUpperCase()
     if (UNSUPPORTED_SECURITY.test(type)) throw new Error('富途 MCP 返回了期权或衍生品持仓，本插件暂不支持：' + (row?.code || '?'))
@@ -307,28 +308,34 @@ function mapPositions(positions, warnings, seen) {
     if (seen.has(key)) fail('富途 MCP 返回了重复持仓 ' + symbol)
     seen.add(key)
     const qty = money(row?.qty, 'positions.qty')
-    if (qty == null || !(qty > 0)) { warnings.push({ message: 'FUTU_MCP_MISSING_QTY:' + symbol }); continue }
+    if (qty === 0) continue // 已清仓（当日卖光）：不是缺数据，旧持仓应随完整快照删除
+    if (qty == null || qty < 0) { warnings.push('FUTU_MCP_MISSING_QTY:' + symbol); skipped = true; continue }
     const currencyValue = currency(row?.currency || marketDefaultCurrency(market) || 'USD', 'positions.currency')
+    // v1 契约要求 avgCost 必填：缺成本价时跳过该行并降级覆盖，绝不伪造成本。
+    const cost = money(row?.cost_price, 'positions.cost_price')
+    if (cost == null) { warnings.push('FUTU_MCP_COST_UNAVAILABLE:' + symbol); skipped = true; continue }
     list.push({
       symbol,
       name: typeof row?.stock_name === 'string' && row.stock_name.trim() ? row.stock_name.trim() : symbol,
       market, assetClass: type === 'FUND' ? 'fund' : 'stock', currency: currencyValue,
-      qty, avgCost: money(row?.cost_price, 'positions.cost_price') ?? undefined,
+      qty, avgCost: cost,
       manualPrice: money(row?.nominal_price, 'positions.nominal_price'), externalId: symbol,
     })
   }
-  return list
+  return { list, skipped }
 }
 
 async function fetchCash(mcp, accId, currencies, warnings) {
   const list = []
   const totals = { assets: [] }
+  // 任一币种的资金接口失败或被跳过的行都会丢失现金覆盖，不能当作完整快照。
+  let failed = false
   for (const c of currencies) {
     let funds
-    try { funds = await mcp.call('account_funds', { acc_id: accId, currency: c }) } catch (error) { warnings.push({ message: 'FUTU_MCP_FUNDS_UNAVAILABLE:' + c + ':' + (error?.message || 'failed') }); continue }
+    try { funds = await mcp.call('account_funds', { acc_id: accId, currency: c }) } catch (error) { warnings.push('FUTU_MCP_FUNDS_UNAVAILABLE:' + c + ':' + (error?.message || 'failed')); failed = true; continue }
     const rows = Array.isArray(funds) ? funds : [funds]
     for (const row of rows) {
-      if (!row || typeof row !== 'object') continue
+      if (!row || typeof row !== 'object') { warnings.push('FUTU_MCP_FUNDS_ROW_INVALID:' + c); failed = true; continue }
       const cash = money(row.cash, 'account_funds.cash') ?? 0
       const available = money(row.available_funds, 'account_funds.available_funds')
       const frozen = money(row.frozen_cash, 'account_funds.frozen_cash') ?? 0
@@ -339,7 +346,7 @@ async function fetchCash(mcp, accId, currencies, warnings) {
       if (assets != null) totals.assets.push({ currency: c, assets })
     }
   }
-  return { list, totals }
+  return { list, totals, failed }
 }
 
 export async function fetchFutuMcpSnapshot(source, secrets, signal, deps = {}) {
@@ -350,25 +357,26 @@ export async function fetchFutuMcpSnapshot(source, secrets, signal, deps = {}) {
     const rawPositions = await mcp.call('account_positions', { acc_id: accId })
     const positionRows = Array.isArray(rawPositions) ? rawPositions : Array.isArray(rawPositions?.positions) ? rawPositions.positions : []
     const seen = new Set()
-    const holdings = mapPositions(positionRows, warnings, seen)
+    const { list: holdings, skipped } = mapPositions(positionRows, warnings, seen)
     const currencies = [...new Set(holdings.map(h => h.currency))]
     if (!currencies.length) currencies.push('HKD')
-    const { list: cashList, totals } = await fetchCash(mcp, accId, currencies, warnings)
+    const { list: cashList, totals, failed } = await fetchCash(mcp, accId, currencies, warnings)
     const all = [...holdings, ...cashList]
     if (!all.length) fail('富途 MCP 没有返回任何持仓或现金；请确认账户内有资产或已授权 trade:read 权限')
     const sourceTotals = {}
     // Mixed-currency accounts cannot be summed without FX; only report a single-currency total.
     if (totals.assets.length === 1) sourceTotals.netAssets = totals.assets[0].assets
-    else if (totals.assets.length > 1) warnings.push({ message: 'FUTU_MCP_MIXED_CURRENCY_TOTALS:多币种资产总额不做汇率折算，已省略合计' })
+    else if (totals.assets.length > 1) warnings.push('FUTU_MCP_MIXED_CURRENCY_TOTALS:多币种资产总额不做汇率折算，已省略合计')
     const cashSum = cashList.length === 1 ? cashList[0].qty : null
     if (cashSum != null) sourceTotals.cash = cashSum
     const priced = all.filter(h => h.market !== 'CASH' && h.manualPrice != null).length
     const securityCount = all.filter(h => h.market !== 'CASH').length
-    if (securityCount && !priced) warnings.push({ message: 'PRICE_UNAVAILABLE:富途持仓未返回市价，证券按成本价暂估' })
+    if (securityCount && !priced) warnings.push('PRICE_UNAVAILABLE:富途持仓未返回市价，证券按成本价暂估')
     return {
       holdings: all,
-      complete: securityCount === 0 || priced > 0,
-      warnings: warnings.map(w => (typeof w === 'string' ? { message: w } : w)),
+      // complete 只看覆盖：接口失败或有行因缺 qty/成本被跳过都不能删旧持仓；缺价不影响。
+      complete: !skipped && !failed,
+      warnings,
       queriedAt: new Date(deps.now?.() ?? Date.now()).toISOString(),
       uploadedAt: null, quoteDate: null,
       ...(Object.keys(sourceTotals).length ? { sourceTotals } : {}),

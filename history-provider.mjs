@@ -1,6 +1,6 @@
 // Read-only execution archives; never a complete cash ledger or a position snapshot.
 import { withFutu, withLongbridge } from './brokers-sdk.mjs'
-import { fetchThsHistory } from './ths-client.mjs'
+import { getConnector } from './connector-registry.mjs'
 
 const fail = message => { throw new Error(message) }
 const fallback = message => fail(`${message}; narrow the date range or import an official broker statement file`)
@@ -85,7 +85,8 @@ function futuBudget(id) {
     used.push(now); futuBudgets.set(key, used)
   }
 }
-async function futuHistory(source, secrets, range, signal, deps, now) {
+// 导出供连接器注册表引用；本模块只在函数体内使用注册表，函数声明的提升保证循环引用安全。
+export async function futuHistory(source, secrets, range, signal, deps, now) {
   const id = uint64(source.brokerAccountId, 'source.brokerAccountId'), marketNum = { HK: 1, US: 2, CN: 3 }[source.tradeMarket]
   if (source.tradeEnvironment !== 'REAL') fail('Futu history supports only REAL accounts; paper history is unsupported')
   if (!['HK', 'US', 'CN'].includes(source.tradeMarket)) fail('Futu history requires tradeMarket HK/US/CN')
@@ -172,7 +173,7 @@ function lbInstrument(value) {
   instrument(match[1], market)
   return { symbol, market }
 }
-async function longbridgeHistory(source, secrets, range, signal, deps, now) {
+export async function longbridgeHistory(source, secrets, range, signal, deps, now) {
   const id = text(source.brokerAccountId, 'source.brokerAccountId (accountChannel)')
   return withLongbridge(secrets, signal, { ...deps, timeoutMs: deps.timeoutMs ?? 170000 }, async call => {
     const ids = new Set([...channels(await call('stockPositions'), 'stocks'), ...channels(await call('fundPositions'), 'funds')])
@@ -266,28 +267,18 @@ async function longbridgeHistory(source, secrets, range, signal, deps, now) {
 export async function fetchNativeHistory(source, secrets, range, signal, deps = {}) {
   const from = day(range?.from, 'from'), to = day(range?.to, 'to')
   if (from > to) fail('from must not be after to')
-  if (source?.transport === 'mcp' && source.connector === 'longbridge') {
-    const { fetchLongbridgeMcpHistory } = await import('./lb-mcp.mjs')
-    return fetchLongbridgeMcpHistory(source, secrets, { from, to }, signal, deps)
+  const transport = getConnector(source?.connector)?.transports[source?.transport]
+  // 原生 SDK 历史以本地时间定位交易日，分发前统一做时间基准与中止检查。
+  if (transport?.fetchHistory && transport.usesLocalNow) {
+    const now = new Date(deps.now?.() ?? Date.now())
+    if (!Number.isFinite(now.getTime())) fail('Invalid current time')
+    signal?.throwIfAborted()
+    return transport.fetchHistory(source, secrets, { from, to }, signal, deps, now)
   }
-  if (source?.transport === 'mcp' && source.connector === 'futu') {
-    const { fetchFutuMcpHistory } = await import('./futu-mcp.mjs')
-    return fetchFutuMcpHistory(source, secrets, { from, to }, signal, deps)
-  }
-  if (source?.transport === 'mcp' && source.connector === 'tiger') {
-    const { fetchTigerHistory } = await import('./tiger-mcp.mjs')
-    return fetchTigerHistory(source, secrets, { from, to }, signal, deps)
-  }
-  if (source?.transport === 'native' && source.connector === 'fosun') {
-    const { fetchFosunHistory } = await import('./fosun-client.mjs')
-    return fetchFosunHistory(source, secrets, { from, to }, signal, deps)
-  }
+  if (transport?.fetchHistory) return transport.fetchHistory(source, secrets, { from, to }, signal, deps)
   if (source?.transport !== 'native') fail('Native history requires a native source')
   const now = new Date(deps.now?.() ?? Date.now())
   if (!Number.isFinite(now.getTime())) fail('Invalid current time')
   signal?.throwIfAborted()
-  if (source.connector === 'futu') return futuHistory(source, secrets, { from, to }, signal, deps, now)
-  if (source.connector === 'longbridge') return longbridgeHistory(source, secrets, { from, to }, signal, deps, now)
-  if (source.connector === 'ths') return fetchThsHistory(source, secrets, { from, to }, signal, deps)
   fail('Native execution history is unavailable for this connector; import an official broker statement file')
 }

@@ -1,5 +1,6 @@
 // Native adapters and pure snapshot validation. No credentials, network, or storage here.
 import { normalizeSymbol } from './symbols.mjs'
+import { CONNECTORS } from './connector-registry.mjs'
 const CLASSES = new Set(['stock', 'fund', 'etf', 'cash', 'bond', 'crypto', 'other'])
 const SAFE_PARTIAL = new Set(['NAME_LOOKUP_UNAVAILABLE', 'UPLOAD_TIME_UNAVAILABLE', 'QUOTE_DATE_UNAVAILABLE', 'QUOTE_TIME_UNAVAILABLE'])
 const fail = (message) => { throw new Error(message) }
@@ -44,7 +45,7 @@ function identity(row, field) {
   if (row.externalId !== undefined) result.externalId = text(row.externalId, `${field}.externalId`)
   return result
 }
-const TOTAL_KEYS = ['cash', 'totalValue', 'totalAsset', 'totalCost', 'totalLiability', 'investedPct', 'holdingProfit', 'dayProfit', 'transferIn', 'transferOut', 'assetProfit', 'assetBonus', 'assetStart', 'assetEnd']
+const TOTAL_KEYS = ['cash', 'totalValue', 'totalAsset', 'netAssets', 'totalCost', 'totalLiability', 'investedPct', 'holdingProfit', 'dayProfit', 'transferIn', 'transferOut', 'assetProfit', 'assetBonus', 'assetStart', 'assetEnd']
 // 转账统计的区间说明来自来源接口本身，按文本保留（不是金额字段）。
 const TOTAL_TEXT_KEYS = ['transferFrom', 'transferTo']
 
@@ -97,15 +98,10 @@ export function normalizeSnapshot(snapshot) {
   }
   return result
 }
+// 目录由连接器注册表生成；custom（http / 宿主 MCP 桥接）不是注册表来源，单列一项。
 export function getConnectorStatus(ctx) {
   return [
-    { id:'ths',label:'同花顺投资账本',available:true,transport:'native',description:'插件独立登录并读取人民币股票、ETF 和现金，无需安装其他插件。' },
-    { id:'futu',label:'富途',available:true,transport:'native',description:'官方 OpenD JavaScript 只读连接；请运行并登录 OpenD，启用 WebSocket。' },
-    { id:'longbridge',label:'长桥',available:true,transport:'native',description:'官方 Longport SDK，使用自己的 App Key、Secret 和 Access Token。' },
-    { id:'qieman',label:'且慢',available:true,transport:'mcp',description:'盈米 / 且慢官方 MCP；用长期 API Key 读取基金持仓与收益，无需浏览器授权。' },
-    { id:'tiger',label:'老虎证券',available:true,transport:'mcp',description:'老虎官方远程 MCP；浏览器设备码授权后自动续期，读取账户、持仓、现金与成交。' },
-    { id:'fosun',label:'复星证券',available:true,transport:'native',description:'复星财富 / 星财富官方 OpenAPI；填写开放平台网关、API Key 与密钥对。' },
-    { id:'ib',label:'Interactive Brokers',available:true,transport:'native',description:'IB 官方 Client Portal Gateway；需要在官方网关完成登录。' },
+    ...Object.values(CONNECTORS).map(entry => ({ id:entry.id, label:entry.label, available:true, transport:entry.defaultTransport, description:entry.description })),
     { id:'custom',label:'通用 API / MCP',available:true,transport:'bridge',description:'高级选项：标准持仓快照 API 或已配置的 MCP 读工具。' },
   ]
 }

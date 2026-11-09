@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { listThsAccounts, fetchStandaloneThsSnapshot, fetchThsHistory, fetchThsAssetChange, scanThsTransfers, createThsVTokenRefresher } from './ths-client.mjs'
+import { assertSnapshotContract, assertNoCrossCurrencySum } from './snapshot-contract.mjs'
 
 const source = { portfolioId: 'chosen' }, secrets = { cookie: 'userid=123; v=fixture' }
 const rows = [{ fund_key: 'other', manualname: 'Other' }, { fund_key: 'chosen', manualname: 'Selected', brokername: 'Broker' }]
@@ -43,10 +44,52 @@ test('missing quantity/cost skips row and cannot prune; null cash never becomes 
   assert.equal(result.complete, false); assert.deepEqual(result.holdings, [])
   assert.equal(result.sourceTotals.cash, null); assert.ok(result.warnings.some(v => v.startsWith('MISSING_POSITION_FIELDS')))
 })
-test('null quote stays null and makes snapshot incomplete', async () => {
+test('null quote stays null and does not lose coverage', async () => {
   const f = fixture(); f.position[0].price = null
-  const result = await fetchStandaloneThsSnapshot(source, secrets, undefined, deps(f))
-  assert.equal(result.holdings[0].manualPrice, null); assert.equal(result.complete, false)
+  const raw = await fetchStandaloneThsSnapshot(source, secrets, undefined, deps(f))
+  const result = assertSnapshotContract(raw, { complete: true, warning: /^PRICE_UNAVAILABLE:2:600000/ })
+  assert.equal(result.holdings[0].manualPrice, null)
+})
+
+// ---- 快照契约（P0-C）----
+test('contract: normal THS snapshot passes the shared snapshot contract', async () => {
+  const raw = await fetchStandaloneThsSnapshot(source, secrets, undefined, deps())
+  const normalized = assertSnapshotContract(raw, { complete: true })
+  assert.deepEqual(normalized.holdings.map(h => [h.symbol, h.assetClass]), [['600000', 'stock'], ['CASH:CNY', 'cash']])
+  assert.deepEqual(normalized.sourceTotals, { cash: 50, totalValue: 200, totalAsset: 250, totalLiability: 0, investedPct: 80, holdingProfit: 40, dayProfit: -2 })
+  assertNoCrossCurrencySum(raw, ['cash'])
+})
+test('contract: a cost-less position is skipped and coverage is marked incomplete', async () => {
+  const f = fixture(); f.position[0].cost = null
+  const raw = await fetchStandaloneThsSnapshot(source, secrets, undefined, deps(f))
+  assertSnapshotContract(raw, { complete: false, warning: /^MISSING_POSITION_FIELDS:2:600000/ })
+  assert.ok(!raw.holdings.some(h => h.symbol === '600000'))
+  assert.deepEqual(raw.holdings.map(h => h.assetClass), ['cash'])
+})
+test('contract: a failed holdings call returns no snapshot instead of a prunable one', async () => {
+  const base = deps()
+  const d = { ...base, fetch: async (url, init) => {
+    if (url.endsWith('stock_position')) throw new Error('credential-secret')
+    return base.fetch(url, init)
+  } }
+  await assert.rejects(fetchStandaloneThsSnapshot(source, secrets, undefined, d),
+    error => error.code === 'NETWORK_ERROR' && !error.message.includes('credential-secret'))
+})
+test('contract: HKD stock holdings never make the CNY cash total cross-currency', async () => {
+  const f = fixture({ total_value: '9082.5', total_asset: '9132.5' })
+  f.position.push({ code: '01164', market: '15', name: '中广核矿', count: '5000', cost: '2.6035', price: '2.09', value: '8882.5', hold_profit: '10', pre_profit: '1' })
+  const raw = await fetchStandaloneThsSnapshot(source, secrets, undefined, deps(f))
+  assertSnapshotContract(raw, { complete: true })
+  assert.deepEqual([...new Set(raw.holdings.filter(h => h.assetClass === 'cash').map(h => h.currency))], ['CNY'])
+  assertNoCrossCurrencySum(raw, ['cash'])
+})
+test('contract: a NAV-less fund holding warns without losing coverage', async () => {
+  const merge = { account: { cust_id: '100108832246', username: '爱基金', total_asset: '90', total_cost: '85', trans_date: '2026-11-01' },
+    fund: [{ fundcode: '110022', fundname: '消费龙头', fundcount: '100', fundcost: '85', fundnav: '', fundvalue: '', date: '2026-11-01', percost: '' }],
+    currencyfund: [], onwayfund: [], clearfund: [], empty: 'false' }
+  const raw = await fetchStandaloneThsSnapshot({ portfolioId: '100108832246', thsBookType: 'ijj' }, secrets, undefined, fundDeps({ merge }))
+  const normalized = assertSnapshotContract(raw, { complete: true, warning: /^PRICE_UNAVAILABLE:110022/ })
+  assert.equal(normalized.holdings[0].manualPrice, null)
 })
 test('missing upstream arrays, null data, error results reject without snapshot', async () => {
   for (const data of [null, {}, { position: null }]) await assert.rejects(fetchStandaloneThsSnapshot(source, secrets, undefined, deps(data)), { code: 'INVALID_RESPONSE' })

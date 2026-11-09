@@ -154,8 +154,10 @@ export async function fetchStandaloneThsSnapshot(source, secrets, signal, deps =
     holdingProfit = holdingProfit === null || hp === null ? null : holdingProfit + hp
     dayProfit = dayProfit === null || dp === null ? null : dayProfit + dp
     if (qty === null || avgCost === null) { missing('MISSING_POSITION_FIELDS:' + key); continue }
-    if (manualPrice === null || value === null) missing('MISSING_POSITION_VALUE:' + key)
-    else if (!hkConnect && Math.abs(qty * manualPrice - value) > 0.011) missing('POSITION_VALUE_MISMATCH:' + key)
+    // 价格/市值缺失只影响估值与对账质量，持仓行仍然可入库：complete 不受影响（P0 契约）。
+    if (manualPrice === null) warnings.push('PRICE_UNAVAILABLE:' + key)
+    if (value === null) warnings.push('MISSING_POSITION_VALUE:' + key)
+    if (manualPrice !== null && value !== null && !hkConnect && Math.abs(qty * manualPrice - value) > 0.011) missing('POSITION_VALUE_MISMATCH:' + key)
     holdings.push({
       symbol, name: scalar(row.name).trim() || symbol, market: hkConnect ? 'HK' : 'CN',
       assetClass: hkConnect || !/^(?:5[168]|15)/.test(symbol) ? 'stock' : 'etf',
@@ -216,8 +218,10 @@ async function fundSnapshot(post, source, id, deps) {
       const quoteDate = thsDay(scalar(row.date).trim(), '净值日期')
       if (quoteDate && (sourceTotals.quoteDate === undefined || quoteDate > sourceTotals.quoteDate)) sourceTotals.quoteDate = quoteDate
       holdings.push({ symbol, name: scalar(row.fundname).trim() || symbol, market: 'CN', assetClass: 'fund', currency: 'CNY', qty, avgCost, manualPrice, externalId: symbol })
-      if (manualPrice === null || value === null) missing('MISSING_FUND_VALUE:' + symbol)
-      else if (Math.abs(qty * manualPrice - value) > 0.011) missing('FUND_VALUE_MISMATCH:' + symbol)
+      // 净值/市值缺失只影响估值与对账质量，基金行仍然可入库：complete 不受影响（P0 契约）。
+      if (manualPrice === null) warnings.push('PRICE_UNAVAILABLE:' + symbol)
+      if (value === null) warnings.push('MISSING_FUND_VALUE:' + symbol)
+      if (manualPrice !== null && value !== null && Math.abs(qty * manualPrice - value) > 0.011) missing('FUND_VALUE_MISMATCH:' + symbol)
     }
   }
   for (const key of ['onwayfund', 'clearfund']) {

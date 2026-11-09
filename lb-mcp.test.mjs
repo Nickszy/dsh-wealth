@@ -2,6 +2,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createLongbridgeMcp, exchangeLongbridgeMcpCode, fetchLongbridgeMcpSnapshot, fetchLongbridgeMcpHistory, listLongbridgeMcpAccounts } from './lb-mcp.mjs'
+import { assertSnapshotContract, assertNoCrossCurrencySum } from './snapshot-contract.mjs'
 
 const TOKEN = 'tok_test_123'
 const SECRET = { mcpToken: TOKEN }
@@ -107,23 +108,53 @@ test('agent code exchange returns token from /agent authenticate', async () => {
 
 test('snapshot maps stocks, funds and cash with quote prices and channel filter', async () => {
   const deps = snapshotDeps()
-  const snapshot = await fetchLongbridgeMcpSnapshot({ transport: 'mcp', brokerAccountId: 'main' }, SECRET, undefined, deps)
-  assert.equal(snapshot.holdings.length, 4) // 2 stocks + 1 fund + 1 cash (HKD)
-  const tencent = snapshot.holdings.find(h => h.symbol === '700.HK')
+  const raw = await fetchLongbridgeMcpSnapshot({ transport: 'mcp', brokerAccountId: 'main' }, SECRET, undefined, deps)
+  const snapshot = assertSnapshotContract(raw, { complete: true })
+  assert.equal(raw.holdings.length, 4) // 2 stocks + 1 fund + 1 cash (HKD)
+  const tencent = raw.holdings.find(h => h.symbol === '700.HK')
   assert.deepEqual([tencent.market, tencent.currency, tencent.qty, tencent.avgCost, tencent.manualPrice], ['HK', 'HKD', 100, 350.5, 380.2])
-  const fund = snapshot.holdings.find(h => h.assetClass === 'fund')
+  const fund = raw.holdings.find(h => h.assetClass === 'fund')
   assert.deepEqual([fund.symbol, fund.market, fund.currency, fund.qty, fund.avgCost, fund.manualPrice], ['HK0000384492', 'FUND', 'HKD', 1000, 1.1, 1.23])
-  const cash = snapshot.holdings.find(h => h.assetClass === 'cash')
+  const cash = raw.holdings.find(h => h.assetClass === 'cash')
   assert.equal(cash.qty, 4500.25) // available + frozen + settling, withdraw is a subset
   assert.equal(snapshot.sourceTotals.netAssets, 7000.25)
-  assert.equal(snapshot.complete, true)
+  assert.equal(snapshot.sourceTotals.cash, 5000.25)
+  assert.equal(snapshot.warnings.length, 0)
 })
 
-test('snapshot tolerates missing quotes with warning and assumes null prices', async () => {
+test('snapshot tolerates missing quotes with a warning but keeps complete coverage', async () => {
   const deps = snapshotDeps({ quote: () => { throw new Error('quote denied') } })
-  const snapshot = await fetchLongbridgeMcpSnapshot({ transport: 'mcp', brokerAccountId: 'main' }, SECRET, undefined, deps)
-  assert.equal(snapshot.holdings.find(h => h.symbol === '700.HK').manualPrice, null)
-  assert.ok(snapshot.warnings.some(w => /QUOTE_UNAVAILABLE|PRICE_UNAVAILABLE/.test(w.message)))
+  const raw = await fetchLongbridgeMcpSnapshot({ transport: 'mcp', brokerAccountId: 'main' }, SECRET, undefined, deps)
+  assert.equal(raw.holdings.find(h => h.symbol === '700.HK').manualPrice, null)
+  assertSnapshotContract(raw, { complete: true, warning: /PRICE_UNAVAILABLE/ })
+})
+
+test('position without cost price is skipped, warns and drops coverage', async () => {
+  const deps = snapshotDeps({ stock_positions: () => [{ account_channel: 'main', stock_info: [
+    { symbol: '700.HK', quantity: '100', currency: 'HKD', cost_price: '350.5' },
+    { symbol: 'AAPL.US', quantity: '10', currency: 'USD' },
+  ] }] })
+  const raw = await fetchLongbridgeMcpSnapshot({ transport: 'mcp', brokerAccountId: 'main' }, SECRET, undefined, deps)
+  assert.ok(!raw.holdings.some(h => h.symbol === 'AAPL.US'))
+  assert.ok(raw.holdings.every(h => h.avgCost !== undefined))
+  assertSnapshotContract(raw, { complete: false, warning: /LB_MCP_COST_UNAVAILABLE:AAPL\.US/ })
+})
+
+test('positions call failure degrades coverage instead of failing the sync', async () => {
+  const deps = snapshotDeps({ stock_positions: () => { throw new Error('positions down') } })
+  const raw = await fetchLongbridgeMcpSnapshot({ transport: 'mcp', brokerAccountId: 'main' }, SECRET, undefined, deps)
+  assert.ok(!raw.holdings.some(h => h.assetClass === 'stock'))
+  assertSnapshotContract(raw, { complete: false, warning: /LB_MCP_POSITIONS_UNAVAILABLE/ })
+})
+
+test('multi-currency balance omits adapter-summed totals', async () => {
+  const deps = snapshotDeps({ account_balance: () => [...BALANCE,
+    { currency: 'USD', total_cash: '120', net_assets: '1900', cash_infos: [{ currency: 'USD', available_cash: '120', frozen_cash: '0', settling_cash: '0' }] },
+  ] })
+  const raw = await fetchLongbridgeMcpSnapshot({ transport: 'mcp', brokerAccountId: 'main' }, SECRET, undefined, deps)
+  assert.equal(raw.sourceTotals, undefined)
+  assertNoCrossCurrencySum(raw, ['cash', 'netAssets'])
+  assertSnapshotContract(raw, { complete: true, warning: /LB_MCP_MIXED_CURRENCY_TOTALS/ })
 })
 
 test('snapshot rejects derivatives and duplicate holdings', async () => {
@@ -173,4 +204,19 @@ test('history assumes currency from market with warning and rejects bad ranges',
   assert.equal(result.rows[0].currency, 'HKD')
   assert.ok(result.warnings.some(w => /CURRENCY_ASSUMED_FROM_MARKET/.test(w.message)))
   await assert.rejects(() => fetchLongbridgeMcpHistory({ transport: 'mcp' }, SECRET, { from: '2026-11-07', to: '2026-11-01' }, undefined, mcpDeps({})), /开始日期不能晚于/)
+})
+
+test('zero-quantity position is a closed position, not missing data, and keeps coverage', async () => {
+  const deps = snapshotDeps({ stock_positions: () => [{ account_channel: 'main', stock_info: [
+    { symbol: '700.HK', quantity: '100', currency: 'HKD', cost_price: '350.5' },
+    { symbol: 'AAPL.US', quantity: '0', currency: 'USD', cost_price: '180' },
+  ] }] })
+  const raw = await fetchLongbridgeMcpSnapshot({ transport: 'mcp', brokerAccountId: 'main' }, SECRET, undefined, deps)
+  assert.ok(!raw.holdings.some(h => h.symbol === 'AAPL.US'))
+  assertSnapshotContract(raw, { complete: true })
+})
+
+test('auth failure on a positions call is rethrown for re-auth instead of degrading to partial', async () => {
+  const deps = snapshotDeps({ stock_positions: () => { throw new Error('HTTP 401 unauthorized') } })
+  await assert.rejects(fetchLongbridgeMcpSnapshot({ transport: 'mcp', brokerAccountId: 'main' }, SECRET, undefined, deps), /401/)
 })

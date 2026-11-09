@@ -2,6 +2,11 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { listTigerAccounts, fetchTigerSnapshot, fetchTigerHistory, startTigerDeviceAuth, pollTigerDeviceToken, refreshTigerToken, registerTigerAuthCodeClient, createTigerPkce, buildTigerAuthorizeUrl, exchangeTigerCode } from './tiger-mcp.mjs'
+import { assertSnapshotContract, assertNoCrossCurrencySum } from './snapshot-contract.mjs'
+
+const US_CASH = (cash) => ({ segments: [{ category: 'S', currency: 'USD', net_liquidation: 1000, cash_balance: cash, unrealized_pnl: 0 }] })
+const STK = (positions) => ({ positions })
+const FUND = (positions = []) => ({ positions })
 
 const SECRETS = { accessToken: 'tok', refreshToken: 'refresh', clientId: 'client-1' }
 
@@ -63,7 +68,8 @@ test('老虎 snapshot maps prime_assets segments, positions and totals; skips de
   const apple = snapshot.holdings.find(h => h.symbol === 'CHA')
   assert.deepEqual([apple.avgCost, apple.manualPrice], [28, 12.45])
   assert.equal(snapshot.sourceTotals.totalAsset, 1066)
-  assert.equal(snapshot.sourceTotals.cash, -161.13)
+  assert.equal(snapshot.sourceTotals.cash, undefined, '负现金合计不能写进 sourceTotals.cash')
+  assertSnapshotContract(snapshot)
   assert.equal(snapshot.sourceTotals.holdingProfit, -1035.83)
   assert.equal(snapshot.complete, true)
 })
@@ -165,4 +171,90 @@ test('authorization-code flow registers loopback client and exchanges code with 
   assert.equal(exchange.body.code, 'ac1')
   assert.equal(exchange.body.code_verifier, pkce.verifier)
   assert.equal(exchange.body.resource, 'https://mcp.tigerfintech.com/mcp')
+})
+
+const AAPL = { symbol: 'AAPL', sec_type: 'STK', market: 'US', quantity: 10, average_cost: 180, latest_price: 185, currency: 'USD' }
+
+test('老虎 snapshot contract: missing price only warns and stays complete', async () => {
+  const deps = mcpDeps({
+    get_assets: () => US_CASH(100),
+    get_positions: (args) => args.sec_type === 'STK'
+      ? STK([{ ...AAPL, latest_price: undefined }])
+      : FUND(),
+  })
+  const snapshot = await fetchTigerSnapshot({ brokerAccountId: 'A1' }, SECRETS, undefined, deps)
+  assertSnapshotContract(snapshot, { complete: true })
+  assert.equal(snapshot.holdings.find((h) => h.symbol === 'AAPL').manualPrice, null)
+  assert.ok(snapshot.warnings.some((w) => /缺少现价/.test(w)))
+})
+
+test('老虎 snapshot contract: a row skipped for unknown cost makes it incomplete', async () => {
+  const deps = mcpDeps({
+    get_assets: () => US_CASH(100),
+    get_positions: (args) => args.sec_type === 'STK'
+      ? STK([AAPL, { symbol: 'MSFT', sec_type: 'STK', market: 'US', quantity: 5, currency: 'USD' }])
+      : FUND(),
+  })
+  const snapshot = await fetchTigerSnapshot({ brokerAccountId: 'A1' }, SECRETS, undefined, deps)
+  assertSnapshotContract(snapshot, { complete: false, warning: /TIGER_COST_UNAVAILABLE:MSFT/ })
+  assert.ok(!snapshot.holdings.some((h) => h.symbol === 'MSFT'))
+})
+
+test('老虎 snapshot contract: get_assets failure drops cash and marks incomplete', async () => {
+  const deps = mcpDeps({
+    get_assets: () => { throw new Error('boom') },
+    get_positions: (args) => args.sec_type === 'STK' ? STK([AAPL]) : FUND(),
+  })
+  const snapshot = await fetchTigerSnapshot({ brokerAccountId: 'A1' }, SECRETS, undefined, deps)
+  assertSnapshotContract(snapshot, { complete: false, warning: /TIGER_ASSET_SUMMARY_UNAVAILABLE/ })
+  assert.ok(!snapshot.holdings.some((h) => h.assetClass === 'cash'))
+})
+
+test('老虎 snapshot contract: STK positions failure marks incomplete', async () => {
+  const deps = mcpDeps({
+    get_assets: () => US_CASH(100),
+    get_positions: (args) => {
+      if (args.sec_type === 'STK') throw new Error('boom')
+      return FUND()
+    },
+  })
+  const snapshot = await fetchTigerSnapshot({ brokerAccountId: 'A1' }, SECRETS, undefined, deps)
+  assertSnapshotContract(snapshot, { complete: false, warning: /TIGER_STK_POSITIONS_UNAVAILABLE/ })
+})
+
+test('老虎 snapshot contract: FUND positions failure marks incomplete', async () => {
+  const deps = mcpDeps({
+    get_assets: () => US_CASH(100),
+    get_positions: (args) => {
+      if (args.sec_type === 'FUND') throw new Error('boom')
+      return STK([AAPL])
+    },
+  })
+  const snapshot = await fetchTigerSnapshot({ brokerAccountId: 'A1' }, SECRETS, undefined, deps)
+  assertSnapshotContract(snapshot, { complete: false, warning: /TIGER_FUND_POSITIONS_UNAVAILABLE/ })
+})
+
+test('老虎 snapshot contract: hitting the 200-row page limit marks incomplete', async () => {
+  const rows = Array.from({ length: 200 }, (_, i) => ({ ...AAPL, symbol: 'S' + i }))
+  const deps = mcpDeps({
+    get_assets: () => US_CASH(100),
+    get_positions: (args) => args.sec_type === 'STK' ? STK(rows) : FUND(),
+  })
+  const snapshot = await fetchTigerSnapshot({ brokerAccountId: 'A1' }, SECRETS, undefined, deps)
+  assertSnapshotContract(snapshot, { complete: false, warning: /TIGER_POSITIONS_PAGE_LIMIT:STK/ })
+})
+
+test('老虎 snapshot contract: cash across currencies is not summed', async () => {
+  const deps = mcpDeps({
+    get_assets: () => ({ segments: [
+      { category: 'S', currency: 'USD', net_liquidation: 100, cash_balance: 100 },
+      { category: 'S', currency: 'HKD', net_liquidation: 500, cash_balance: 500 },
+    ] }),
+    get_positions: () => FUND(),
+  })
+  const snapshot = await fetchTigerSnapshot({ brokerAccountId: 'A1' }, SECRETS, undefined, deps)
+  assertNoCrossCurrencySum(snapshot)
+  assertSnapshotContract(snapshot, { complete: true, warning: /TIGER_MIXED_CURRENCY_TOTALS/ })
+  assert.equal(snapshot.sourceTotals.cash, undefined)
+  assert.equal(snapshot.sourceTotals.totalAsset, 600, 'broker-reported total asset is kept')
 })

@@ -306,59 +306,83 @@ export async function fetchFosunSnapshot(source, secrets, signal, deps = {}) {
   if (!accountId) fail('请选择复星交易账户')
   const session = await openSession(source, secrets, signal, deps)
   const warnings = []
+  // complete 只表示覆盖完整；缺价格只警告，不影响 complete。
+  let complete = true
+  const authError = (error) => /认证|授权|401|403|expired|unauthor/i.test(String(error?.message || error))
 
   const summary = await session.post('/v1/portfolio/CashSummary', { subAccountId: accountId }).catch((error) => {
-    warnings.push('复星资金汇总读取失败：' + String(error?.message || error))
+    if (authError(error)) throw error
+    complete = false
+    warnings.push('FOSUN_CASH_SUMMARY_UNAVAILABLE:复星资金汇总读取失败：' + String(error?.message || error))
     return null
   })
 
   const holdings = []
   const seen = new Set()
-  let start = 0
-  for (let page = 0; page < 20; page++) {
-    const payload = await session.post('/v1/portfolio/Holdings', {
-      subAccountId: accountId, start, count: 100,
-      productTypes: [], currencies: [], symbols: [],
-      useUsPre: false, useUsPost: false, useUsNight: false,
-    })
-    const rows = []
-    eachArray(payload, (list) => {
-      for (const item of list) {
-        if (!item || typeof item !== 'object' || Array.isArray(item)) continue
-        if (text(pick(flattenHolding(item), CODE_FIELDS))) rows.push(flattenHolding(item))
-      }
-    })
-    if (Array.isArray(payload)) payload.forEach((item) => { if (item && text(pick(flattenHolding(item), CODE_FIELDS))) rows.push(flattenHolding(item)) })
-    for (const row of rows) {
-      const symbol = text(pick(row, CODE_FIELDS))
-      const qty = number(pick(row, QTY_FIELDS))
-      if (!symbol || qty === null || !(qty > 0)) continue
-      const market = marketOf(row)
-      const currency = (text(pick(row, CURRENCY_FIELDS)) || CURRENCY_BY_MARKET[market] || 'HKD').toUpperCase()
-      const price = number(pick(row, PRICE_FIELDS))
-      let cost = number(pick(row, COST_FIELDS))
-      if (cost === null && price !== null) { cost = price; warnings.push(`FOSUN_COST_ASSUMED:${symbol} 来源未提供成本，按现价暂估`) }
-      if (cost === null) { warnings.push(`FOSUN_COST_UNAVAILABLE:${symbol} 成本未知，已跳过`); continue }
-      const key = market + ':' + symbol + ':' + currency
-      if (seen.has(key)) continue
-      seen.add(key)
-      holdings.push({
-        symbol,
-        name: text(pick(row, NAME_FIELDS)) || symbol,
-        market: market || 'HK',
-        assetClass: market === 'FUND' ? 'fund' : 'stock',
-        currency, qty, avgCost: cost, manualPrice: price, externalId: symbol,
+  let truncated = false
+  try {
+    let start = 0
+    for (let page = 0; page < 20; page++) {
+      const payload = await session.post('/v1/portfolio/Holdings', {
+        subAccountId: accountId, start, count: 100,
+        productTypes: [], currencies: [], symbols: [],
+        useUsPre: false, useUsPost: false, useUsNight: false,
       })
+      const rows = []
+      eachArray(payload, (list) => {
+        for (const item of list) {
+          if (!item || typeof item !== 'object' || Array.isArray(item)) continue
+          if (text(pick(flattenHolding(item), CODE_FIELDS))) rows.push(flattenHolding(item))
+        }
+      })
+      if (Array.isArray(payload)) payload.forEach((item) => { if (item && text(pick(flattenHolding(item), CODE_FIELDS))) rows.push(flattenHolding(item)) })
+      for (const row of rows) {
+        const symbol = text(pick(row, CODE_FIELDS))
+        const qty = number(pick(row, QTY_FIELDS))
+        if (!symbol || qty === null || !(qty > 0)) continue
+        const market = marketOf(row)
+        const currency = (text(pick(row, CURRENCY_FIELDS)) || CURRENCY_BY_MARKET[market] || 'HKD').toUpperCase()
+        const price = number(pick(row, PRICE_FIELDS))
+        let cost = number(pick(row, COST_FIELDS))
+        if (cost === null && price !== null) { cost = price; warnings.push(`FOSUN_COST_ASSUMED:${symbol} 来源未提供成本，按现价暂估`) }
+        if (cost === null) {
+          warnings.push(`FOSUN_COST_UNAVAILABLE:${symbol} 成本未知，已跳过`)
+          complete = false
+          continue
+        }
+        const key = market + ':' + symbol + ':' + currency
+        if (seen.has(key)) continue
+        seen.add(key)
+        holdings.push({
+          symbol,
+          name: text(pick(row, NAME_FIELDS)) || symbol,
+          market: market || 'HK',
+          assetClass: market === 'FUND' ? 'fund' : 'stock',
+          currency, qty, avgCost: cost, manualPrice: price, externalId: symbol,
+        })
+      }
+      if (rows.length < 100) break
+      start += 100
+      if (page === 19) truncated = true
     }
-    if (rows.length < 100) break
-    start += 100
+  } catch (error) {
+    if (authError(error)) throw error
+    complete = false
+    warnings.push('FOSUN_HOLDINGS_UNAVAILABLE:复星持仓读取失败：' + String(error?.message || error))
+  }
+  if (truncated) {
+    complete = false
+    warnings.push('FOSUN_POSITIONS_PAGE_LIMIT:持仓分页达到 20 页上限，可能被截断')
   }
 
   const cash = findNumberFields(summary, CASH_FIELDS)
   const currency = (text(pick(summary || {}, CURRENCY_FIELDS)) || 'HKD').toUpperCase()
   if (cash !== null && cash > 0) {
     holdings.push({ symbol: 'CASH:' + currency, name: currency + ' cash', market: 'CASH', assetClass: 'cash', currency, qty: cash, avgCost: 1, manualPrice: 1, externalId: 'CASH:' + currency })
-  } else if (cash === null) warnings.push('FOSUN_CASH_UNAVAILABLE 未读到现金余额')
+  } else if (cash === null) {
+    warnings.push('FOSUN_CASH_UNAVAILABLE 未读到现金余额')
+    complete = false
+  }
   if (!holdings.length) fail('复星 OpenAPI 没有返回任何持仓或现金；请确认账户内有资产')
 
   const sourceTotals = {}
@@ -372,7 +396,7 @@ export async function fetchFosunSnapshot(source, secrets, signal, deps = {}) {
 
   return {
     holdings,
-    complete: priced && cash !== null,
+    complete,
     warnings,
     queriedAt: new Date(deps.now?.() ?? Date.now()).toISOString(),
     uploadedAt: null,
