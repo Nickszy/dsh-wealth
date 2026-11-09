@@ -1680,7 +1680,6 @@ window.__ModuleLoader__.load({
         const source = { id: form.id, name: form.name.trim(), connector: choice, transport: choice === 'custom' ? form.transport : (mcp ? 'mcp' : 'native'), accountId: form.accountId, intervalMinutes: Number(form.intervalMinutes), enabled: !!form.enabled }
         if (choice === 'ths') { source.portfolioId = form.portfolioId; source.thsBookType = form.thsBookType || 'common' }
         if (['futu','longbridge','qieman','tiger','fosun','ib'].includes(choice)) source.brokerAccountId = (choice === 'longbridge' && mcp) ? 'main' : form.brokerAccountId
-        if (['futu','longbridge','qieman','tiger'].includes(choice) && mcp && form.mcpEndpoint.trim()) source.mcpEndpoint = form.mcpEndpoint.trim().replace(/\/+$/,'')
         if (choice === 'futu' && !mcp) Object.assign(source, { host: form.host.trim(), port: Number(form.port), tls: !!form.tls, tradeEnvironment: form.tradeEnvironment, tradeMarket: form.tradeMarket, currency: form.currency })
         if (choice === 'futu' && mcp && form.currency) source.currency = form.currency
         if (choice === 'fosun') source.gatewayUrl = form.gatewayUrl.trim()
@@ -1692,10 +1691,8 @@ window.__ModuleLoader__.load({
       const transportOf = () => choice === 'custom' ? form.transport : (choice === 'qieman' || choice === 'tiger' || ((choice === 'longbridge' && form.lbInterface === 'mcp') || (choice === 'futu' && form.futuInterface === 'mcp')) ? 'mcp' : 'native')
       const authSettings = () => {
         const out = {}
-        if (choice === 'futu' && form.futuInterface === 'mcp') { if (form.mcpEndpoint.trim()) out.mcpEndpoint = form.mcpEndpoint.trim().replace(/\/+$/,''); if (form.currency) out.currency = form.currency }
+        if (choice === 'futu' && form.futuInterface === 'mcp') { if (form.currency) out.currency = form.currency }
         if (choice === 'futu' && form.futuInterface !== 'mcp') Object.assign(out, { host: form.host.trim(), port: Number(form.port), tls: !!form.tls, tradeEnvironment: form.tradeEnvironment, tradeMarket: form.tradeMarket, currency: form.currency })
-        if (choice === 'longbridge' && form.lbInterface === 'mcp' && form.mcpEndpoint.trim()) out.mcpEndpoint = form.mcpEndpoint.trim().replace(/\/+$/,'')
-        if ((choice === 'qieman' || choice === 'tiger') && form.mcpEndpoint.trim()) out.mcpEndpoint = form.mcpEndpoint.trim().replace(/\/+$/,'')
         if (choice === 'fosun' && form.gatewayUrl.trim()) out.gatewayUrl = form.gatewayUrl.trim().replace(/\/+$/,'')
         if (choice === 'ib') Object.assign(out, { gatewayUrl: form.gatewayUrl.trim(), trustLocalGateway: !!form.trustLocalGateway })
         return out
@@ -1769,7 +1766,7 @@ window.__ModuleLoader__.load({
       const exchangeLbCode = () => act('lb-exchange', async current => {
         const code = String(lbCode || '').trim()
         if (!code) throw new Error('请先在 open.longbridge.com/connect 生成授权码并粘贴到输入框')
-        const r = await fetch('/portfolio/api/sources/longbridge/mcp/exchange', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code, endpoint: form.mcpEndpoint.trim() || undefined }) })
+        const r = await fetch('/portfolio/api/sources/longbridge/mcp/exchange', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code }) })
         const data = await r.json().catch(() => ({}))
         if (!r.ok || !data.ok) throw new Error(data.error?.message || '授权码兑换失败')
         const out = await requestAuth({ mcpToken: data.token })
@@ -1843,19 +1840,7 @@ window.__ModuleLoader__.load({
         return act('tiger-auth', async current => {
           const r = await post('sources/tiger/login/start', { authId: auth?.id || reauth?.id })
           if (!current() || attempt !== loginAttempt.current) return
-          setLogin({ kind: 'browser', status: r.status || 'waiting', message: r.message, authorizeUrl: r.authorizeUrl })
-        })
-      }
-      // 备用：设备码流（部分环境浏览器回调不可达时使用）。
-      const startTigerDevice = () => {
-        if (disabled || lock.current) return
-        invalidate()
-        loginAttempt.current++
-        const attempt = loginAttempt.current
-        return act('tiger-auth', async current => {
-          const r = await post('sources/tiger/oauth/start', { authId: auth?.id || reauth?.id })
-          if (!current() || attempt !== loginAttempt.current) return
-          setLogin({ kind: 'device', status: r.status || 'waiting', message: r.message, userCode: r.userCode, verificationUri: r.verificationUri, verificationUriComplete: r.verificationUriComplete })
+          setLogin({ status: r.status || 'waiting', message: r.message, authorizeUrl: r.authorizeUrl })
         })
       }
       React.useEffect(() => {
@@ -1863,18 +1848,17 @@ window.__ModuleLoader__.load({
         let live = true, inflight = false
         const version = generation.current
         const current = () => live && mounted.current && version === generation.current
-        const endpoint = login?.kind === 'device' ? 'sources/tiger/oauth/status' : 'sources/tiger/login/status'
         const timer = setInterval(async () => {
           if (inflight || !current()) return
           inflight = true
           try {
-            const r = await get(endpoint)
-            if (current() && r.status !== 'waiting') setLogin({ ...login, status: r.status, message: r.message })
+            const r = await get('sources/tiger/login/status')
+            if (current() && r.status !== 'waiting') setLogin({ status: r.status, message: r.message, authorizeUrl: login?.authorizeUrl })
           } catch { /* keep waiting; transient polling errors stay silent */ }
           finally { inflight = false }
         }, 2000)
         return () => { live = false; clearInterval(timer) }
-      }, [login?.status, login?.kind, choice])
+      }, [login?.status, choice])
       const selectAccount = account => { update(choice === 'ths' ? 'portfolioId' : 'brokerAccountId', String(account.id)); if (choice === 'ths') update('thsBookType', account.thsType || 'common'); if (!form.id) update('accountId', '') }
       const connect = () => act('connect', async current => {
         if (!auth) throw new Error('请先完成授权并读取账户')
@@ -1981,45 +1965,34 @@ window.__ModuleLoader__.load({
           choice === 'futu' ? h('div', { style: { marginTop: 18 } },
             selectField('接入方式', 'futuInterface', [['mcp','官方 MCP（浏览器授权，推荐）'],['sdk','本机 OpenD（WebSocket）']]),
             form.futuInterface === 'mcp' ? h('div', { style: { marginTop: 12 } },
-              h('div', { className: 'wealth-source-fields' }, field('MCP 地址（可选，默认官方 mcp.futunn.com）', 'mcpEndpoint', { placeholder: 'https://mcp.futunn.com', autoComplete: 'off' }), selectField('资金币种（无标的资金流水用，可选）', 'currency', [['HKD','HKD 港币'],['USD','USD 美元'],['CNH','CNH 离岸人民币']])),
+              h('div', { className: 'wealth-source-fields' }, selectField('资金币种（无标的资金流水用，可选）', 'currency', [['HKD','HKD 港币'],['USD','USD 美元'],['CNH','CNH 离岸人民币']])),
               h('div', { className: 'wealth-source-actions', style: { alignItems: 'center' } },
                 h('button', { style: T.btn(t, false), disabled: disabled || ['opening','waiting'].includes(login?.status), onClick: startFutuMcp }, working === 'futu-mcp' ? '正在打开授权…' : ['opening','waiting'].includes(login?.status) ? '等待浏览器授权…' : login?.status === 'ready' || auth || credentials.mcpToken ? '重新授权' : '浏览器授权'),
                 h('span', { style: { color: login?.status === 'error' ? t.red : login?.status === 'ready' ? t.accent : t.sub, fontSize: 11 }, role: 'status' }, login ? loginText(login.status, login.message, { opening: '正在打开授权页面', waiting: '请在浏览器完成富途授权', ready: '富途授权已保存，可读取账户', error: '授权未完成' }) : credentials.mcpToken ? '✓ 已获得 MCP Token' : '授权后会自动读取持仓、余额与流水')),
-              login?.authorizeUrl && ['opening','waiting'].includes(login.status) ? h('p', { style: { marginTop: 8, fontSize: 11 } }, h('a', { href: login.authorizeUrl, target: '_blank', rel: 'noreferrer', style: { color: t.accent } }, '如果没有自动打开，点这里完成富途授权 ↗')) : null,
-              h('details', { style: { marginTop: 10, fontSize: 12, color: t.sub } }, h('summary', { style: { cursor: 'pointer' } }, '手动粘贴 Token（可选备用方式）'), h('div', { style: { marginTop: 10 } }, secret('MCP Token', 'mcpToken')))) :
+              login?.authorizeUrl && ['opening','waiting'].includes(login.status) ? h('p', { style: { marginTop: 8, fontSize: 11 } }, h('a', { href: login.authorizeUrl, target: '_blank', rel: 'noreferrer', style: { color: t.accent } }, '如果没有自动打开，点这里完成富途授权 ↗')) : null) :
             h('div', { className: 'wealth-source-fields', style: { marginTop: 12 } }, field('OpenD 主机', 'host'), field('WebSocket 端口', 'port', { type: 'number', min: 1, max: 65535 }), selectField('交易环境', 'tradeEnvironment', [['REAL','真实账户'],['SIMULATE','模拟账户']]), selectField('交易市场', 'tradeMarket', [['HK','香港 HK'],['US','美国 US'],['CN','沪深 CN']]), selectField('资金币种', 'currency', [['HKD','HKD 港币'],['USD','USD 美元'],['CNH','CNH 离岸人民币']]), secret('OpenD WebSocket Key（可选）', 'websocketKey'), check('通过 TLS 连接 OpenD', 'tls'))) : null,
           choice === 'longbridge' ? h('div', { style: { marginTop: 18 } },
             selectField('接入方式', 'lbInterface', [['mcp','官方 MCP（授权码，推荐）'],['sdk','OpenAPI 凭据（App Key / Secret / Token）']]),
             form.lbInterface === 'mcp' ? h('div', { style: { marginTop: 12 } },
-              h('div', { className: 'wealth-source-fields' }, field('MCP 地址（可选，默认官方 mcp.longbridge.com）', 'mcpEndpoint', { placeholder: 'https://mcp.longbridge.com', autoComplete: 'off' })),
               h('div', { className: 'wealth-source-fields', style: { marginTop: 10 } }, h('label', null, h('span', { style: T.label(t) }, '长桥授权码'), h('input', { value: lbCode, onChange: e => { setLbCode(e.target.value); invalidate() }, placeholder: '在 open.longbridge.com/connect 生成，10 分钟内有效', autoComplete: 'off', spellCheck: false, disabled, style: T.input(t) }))),
               h('div', { className: 'wealth-source-actions', style: { alignItems: 'center' } },
                 h('button', { style: T.btn(t, false), disabled, onClick: exchangeLbCode }, working === 'lb-exchange' ? '兑换中…' : credentials.mcpToken || auth ? '重新兑换授权码' : '兑换授权码'),
-                credentials.mcpToken ? h('span', { style: { color: t.accent, fontSize: 11 } }, '✓ 已获得 MCP Token') : h('span', { style: { color: t.sub, fontSize: 11 } }, '在 open.longbridge.com/connect 生成授权码后兑换')),
-              h('details', { style: { marginTop: 10, fontSize: 12, color: t.sub } }, h('summary', { style: { cursor: 'pointer' } }, '手动粘贴 Token（可选备用方式）'), h('div', { style: { marginTop: 10 } }, secret('MCP Token', 'mcpToken')))) :
+                credentials.mcpToken ? h('span', { style: { color: t.accent, fontSize: 11 } }, '✓ 已获得 MCP Token') : h('span', { style: { color: t.sub, fontSize: 11 } }, h('a', { href: 'https://open.longbridge.com/connect', target: '_blank', rel: 'noreferrer', style: { color: t.accent } }, '打开 open.longbridge.com/connect ↗'), ' 生成授权码后兑换'))) :
             h('div', { className: 'wealth-source-fields', style: { marginTop: 18 } }, secret('App Key', 'appKey'), secret('App Secret', 'appSecret'), secret('Access Token', 'accessToken'))) : null,
           choice === 'qieman' ? h('div', { style: { marginTop: 18 } },
             h('div', { className: 'wealth-source-actions', style: { alignItems: 'center' } },
               h('button', { style: T.btn(t, false), disabled: disabled || login?.status === 'waiting', onClick: startQiemanAuth }, working === 'qieman-auth' ? '正在准备授权…' : login?.status === 'waiting' ? '等待浏览器授权…' : credentials.bearerToken || auth ? '重新授权' : '浏览器授权（读取账户）'),
               h('span', { style: { color: login?.status === 'error' ? t.red : login?.status === 'ready' ? t.accent : t.sub, fontSize: 11 }, role: 'status' }, login ? loginText(login.status, login.message, { waiting: '请在浏览器完成且慢登录并授权', ready: '且慢授权已保存，可读取账户', error: '授权未完成' }) : credentials.bearerToken ? '✓ 已获得且慢 Token' : '授权一次后自动续期，无需重复登录')),
             login?.authorizeUrl && login?.status === 'waiting' ? h('p', { style: { marginTop: 8, fontSize: 11 } }, h('a', { href: login.authorizeUrl, target: '_blank', rel: 'noreferrer', style: { color: t.accent } }, '如果没有自动打开，点这里完成且慢授权 ↗')) : null,
-            h('div', { className: 'wealth-source-fields', style: { marginTop: 12 } }, field('MCP 地址（可选，默认官方 OAuth 端点）', 'mcpEndpoint', { placeholder: 'https://stargate-partner.yingmi.com/mcp/v2/oauth/qieman', autoComplete: 'off' })),
             h('details', { style: { marginTop: 10, fontSize: 12, color: t.sub } }, h('summary', { style: { cursor: 'pointer' } }, '研究工具 API Key（可选，读不到账户资产）'), h('div', { style: { marginTop: 10 } }, secret('且慢 MCP API Key', 'apiKey'), secret('Bearer Token', 'bearerToken'))),
-            h('small', { style: { display: 'block', marginTop: 10, color: t.sub, fontSize: 11 } }, '「账户与资产」工具只对且慢账号的 OAuth 授权开放；API Key 只能调用基金研究类工具。授权后会列出总账户与各子账户（盈米宝 / 四笔钱）。')) : null,
+            h('small', { style: { display: 'block', marginTop: 10, color: t.sub, fontSize: 11 } }, '「账户与资产」工具只对且慢账号的 OAuth 授权开放；API Key（ai.yingmi.com 申请）只能调用基金研究类工具。授权后会列出总账户与各子账户（盈米宝 / 四笔钱）。')) : null,
           choice === 'tiger' ? h('div', { style: { marginTop: 18 } },
-            h('div', { className: 'wealth-source-fields' }, field('MCP 地址（可选，默认官方 mcp.tigerfintech.com）', 'mcpEndpoint', { placeholder: 'https://mcp.tigerfintech.com/mcp', autoComplete: 'off' })),
             h('div', { className: 'wealth-source-actions', style: { alignItems: 'center' } },
               h('button', { style: T.btn(t, false), disabled: disabled || login?.status === 'waiting', onClick: startTigerAuth }, working === 'tiger-auth' ? '正在准备授权…' : login?.status === 'waiting' ? '等待浏览器授权…' : credentials.accessToken || auth ? '重新授权' : '浏览器授权'),
               h('span', { style: { color: login?.status === 'error' ? t.red : login?.status === 'ready' ? t.accent : t.sub, fontSize: 11 }, role: 'status' }, login ? loginText(login.status, login.message, { waiting: '请在浏览器完成授权', ready: '老虎授权已保存，可读取账户', error: '授权未完成' }) : credentials.accessToken ? '✓ 已获得老虎 Token' : '授权后自动续期，无需反复登录')),
             login?.authorizeUrl && login?.status === 'waiting' ? h('div', { style: { marginTop: 10, padding: 10, border: '1px solid ' + t.border, borderRadius: 10, background: t.panel, fontSize: 12 } },
               h('div', null, h('a', { href: login.authorizeUrl, target: '_blank', rel: 'noreferrer', style: { color: t.accent } }, '打开老虎授权页面 ↗')),
-              h('div', { style: { marginTop: 6, color: t.sub, fontSize: 11 } }, '登录后请勾选全部 5 项权限（基础数据 / 行情 / 资讯 / 账户信息 / 交易查询）、选择要导入的账户并确认；完成后自动返回本页。')) : null,
-            h('details', { style: { marginTop: 10, fontSize: 12, color: t.sub } },
-              h('summary', { style: { cursor: 'pointer' } }, '设备码授权 / 手动粘贴 Token（备用）'),
-              h('div', { style: { marginTop: 10 } },
-                h('button', { style: { ...T.btn(t, false), marginBottom: 10 }, disabled: disabled || login?.status === 'waiting', onClick: startTigerDevice }, '使用设备码授权'),
-                login?.userCode && login?.status === 'waiting' ? h('div', { style: { marginBottom: 10 } }, '设备码：' + login.userCode + ' · ', h('a', { href: login.verificationUriComplete || login.verificationUri, target: '_blank', rel: 'noreferrer', style: { color: t.accent } }, '打开页面')) : null,
-                secret('Access Token', 'accessToken'), secret('Refresh Token', 'refreshToken'), secret('OAuth Client ID', 'clientId')))) : null,
+              h('div', { style: { marginTop: 6, color: t.sub, fontSize: 11 } }, '登录后请勾选全部 5 项权限（基础数据 / 行情 / 资讯 / 账户信息 / 交易查询）、选择要导入的账户并确认；完成后自动返回本页。')) : null) : null,
           choice === 'fosun' ? h('div', { style: { marginTop: 18 } },
             h('div', { className: 'wealth-source-actions', style: { alignItems: 'center' } },
               h('button', { style: T.btn(t, false), disabled: disabled || login?.status === 'waiting', onClick: startFosunOnboard }, working === 'fosun-onboard' ? '正在签发开通码…' : login?.status === 'waiting' ? '等待扫码开通…' : credentials.apiKey || auth ? '重新扫码开通' : '扫码开通'),
