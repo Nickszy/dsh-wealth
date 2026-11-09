@@ -597,6 +597,17 @@ test('a rate-limited daily source waits for the next scheduled occurrence',async
  f.advance((24*60-5)*60000);await f.service.tick();assert.equal(calls,2) // 次日 21:00
 })
 
+test('a daily source that failed before today slot waits until the slot',async()=>{
+ let calls=0
+ const now=localTime(2026,11,6,14,0) // 周五 14:00，今天的 21:00 还没到
+ const f=setup({clockStart:now,fetchSnapshot:async()=>{calls++;throw Error('network down')}})
+ f.add({schedule:{kind:'daily',time:'21:00'}})
+ f.config.write(f.config.read().map(s=>({...s,lastAttemptAt:new Date(localTime(2026,11,6,10,0)).toISOString(),failCount:1,lastError:'network down'})))
+ await f.service.tick();assert.equal(calls,0) // 10:00 的失败不能在 14:00 提前重试
+ f.advance(6*60*60000);await f.service.tick();assert.equal(calls,0) // 20:00 仍未到点
+ f.advance(60*60000);await f.service.tick();assert.equal(calls,1) // 21:00 到点才同步
+})
+
 test('tick uses schedule over a stale intervalMinutes field',async()=>{
  let calls=0
  const start=localTime(2026,11,6,20,0)

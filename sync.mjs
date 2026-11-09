@@ -976,13 +976,16 @@ export function createSyncService(ctx, options = {}) {
     return occurrence.getTime()
   }
   const dailyDue = (source, schedule) => {
+    const at = now()
     const last = Date.parse(source.lastAttemptAt || '')
-    const occurrence = latestDailyOccurrence(now(), schedule.time)
+    const occurrence = latestDailyOccurrence(at, schedule.time)
     if (!Number.isFinite(last) || last < occurrence) return true
-    // 失败后可提前重试（上限 120 分钟）；限流例外，直接等下一个定时点。
-    if (source.failCount >= 1 && !RATE_LIMIT.test(String(source.lastError || ''))) {
+    // 提前重试只覆盖今天已经到点、并且失败发生在该定时点之后的那一轮。
+    // 定时点之前的失败（手动同步，或白天留下的 failCount）等到今天的 HH:MM，不在白天连打。
+    const occurrenceIsToday = new Date(occurrence).toDateString() === new Date(at).toDateString()
+    if (occurrenceIsToday && source.failCount >= 1 && !RATE_LIMIT.test(String(source.lastError || ''))) {
       const retry = Math.min(120, 5 * 2 ** (source.failCount - 1)) * 60000
-      return now() - last >= retry
+      return at - last >= retry
     }
     return false
   }

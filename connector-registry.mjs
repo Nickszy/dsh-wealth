@@ -248,6 +248,7 @@ export const CONNECTORS = {
         auth: {
           validate: secrets => secrets.mcpToken ? null : '请先兑换长桥授权码',
           historyGuard: secrets => secrets.mcpToken ? null : '长桥 MCP 未授权，请先完成授权码兑换',
+          reprobeBound: true,
         },
       },
     },

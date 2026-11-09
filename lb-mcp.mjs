@@ -271,7 +271,7 @@ export async function exchangeLongbridgeMcpCode(code, { endpoint, signal, deps =
 // Map MCP account_balance + stock_positions + fund_positions (+ optional quote) to
 // the canonical dsh-wealth snapshot. Prices come from quote when available; without
 // them holdings keep manualPrice null and a PRICE_UNAVAILABLE warning.
-const LB_AUTH_ERROR = /40[13]|授权|未授权|失效|过期|expired|unauthori[sz]ed|invalid.token|re-?auth/i
+const LB_AUTH_ERROR = /\b40[13]\b|授权|未授权|失效|过期|expired|unauthori[sz]ed|invalid.token|re-?auth/i
 const MARKET_CASH_CURRENCY = { CN: 'CNY', HK: 'HKD', US: 'USD', SG: 'SGD' }
 function stockHoldings(positions, warnings, seen) {
   const list = []
