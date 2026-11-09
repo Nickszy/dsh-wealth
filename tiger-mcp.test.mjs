@@ -34,42 +34,54 @@ test('老虎 accounts discovery maps authorized account rows', async () => {
   assert.equal(call.headers.authorization, 'Bearer tok')
 })
 
-test('老虎 snapshot maps positions, cash and totals; skips derivatives', async () => {
+test('老虎 snapshot maps prime_assets segments, positions and totals; skips derivatives', async () => {
+  // 真实返回（2026-11-09 实测）：segments 按类别/币种拆分，现金允许为负（融资负债）。
   const deps = mcpDeps({
-    get_assets: () => ({ account: 'A1', net_liquidation: '15250.5', currency: 'USD', cash: [{ currency: 'USD', cash: '500.5' }, { currency: 'HKD', cash: '1000' }] }),
+    get_assets: () => ({
+      account: '5018786', account_type: 'REAL', route: 'prime_assets',
+      segments: [
+        { category: 'S', currency: 'USD', net_liquidation: 1065.8, cash_balance: -161.13, cash_available_for_trade: 591.18, gross_position_value: 1227.14, unrealized_pnl: -1035.84 },
+        { category: 'C', currency: 'USD', net_liquidation: 0, cash_balance: 0, gross_position_value: 0, unrealized_pnl: 0 },
+        { category: 'F', currency: 'USD', net_liquidation: 0.2, cash_balance: 0, gross_position_value: 0.2, unrealized_pnl: 0.01 },
+      ],
+    }),
     get_positions: (args) => args.sec_type === 'STK'
       ? { positions: [
-          { symbol: 'AAPL', name: 'Apple', sec_type: 'STK', market: 'US', position: '10', average_cost: '180', market_price: '185.5', currency: 'USD' },
-          { symbol: '00700', name: '腾讯控股', sec_type: 'STK', market: 'HK', position: '100', average_cost: '350', market_price: '365', currency: 'HKD' },
-          { symbol: 'AAPL  260117C00200000', sec_type: 'OPT', position: '1', average_cost: '2', market_price: '3', currency: 'USD' },
+          { symbol: 'CHA', name: 'Chagee Holdings', sec_type: 'STK', market: 'US', quantity: 2, average_cost: 28, latest_price: 12.45, market_value: 24.9, currency: 'USD' },
+          { symbol: '00700', name: '腾讯控股', sec_type: 'STK', market: 'HK', quantity: 100, average_cost: 350, latest_price: 365, currency: 'HKD' },
+          { symbol: 'AAPL  260117C00200000', sec_type: 'OPT', quantity: 1, average_cost: 2, latest_price: 3, currency: 'USD' },
         ] }
-      : { positions: [{ symbol: '519674', name: '银河成长', sec_type: 'FUND', position: '250', average_cost: '1.8', market_price: '2', currency: 'CNY' }] },
+      : { positions: [] },
   })
-  const snapshot = await fetchTigerSnapshot({ brokerAccountId: 'A1' }, SECRETS, undefined, deps)
+  const snapshot = await fetchTigerSnapshot({ brokerAccountId: '5018786' }, SECRETS, undefined, deps)
   const symbols = snapshot.holdings.map(h => h.symbol)
-  assert.ok(symbols.includes('AAPL'))
+  assert.ok(symbols.includes('CHA'))
   assert.ok(symbols.includes('00700'))
-  assert.ok(symbols.includes('519674'))
-  assert.ok(symbols.includes('CASH:USD'))
-  assert.ok(symbols.includes('CASH:HKD'))
+  assert.ok(symbols.includes('CASH:USD'), '现金行必须出现（即使为负）')
   assert.ok(!symbols.some(s => s.startsWith('AAPL ')), 'option rows skipped')
-  const apple = snapshot.holdings.find(h => h.symbol === 'AAPL')
-  assert.deepEqual([apple.market, apple.currency, apple.avgCost, apple.manualPrice], ['US', 'USD', 180, 185.5])
-  const fund = snapshot.holdings.find(h => h.symbol === '519674')
-  assert.deepEqual([fund.market, fund.assetClass], ['FUND', 'fund'])
-  assert.equal(snapshot.sourceTotals.totalAsset, 15250.5)
-  assert.equal(snapshot.sourceTotals.cash, 1500.5)
+  const cash = snapshot.holdings.find(h => h.symbol === 'CASH:USD')
+  assert.equal(cash.qty, -161.13)
+  const apple = snapshot.holdings.find(h => h.symbol === 'CHA')
+  assert.deepEqual([apple.avgCost, apple.manualPrice], [28, 12.45])
+  assert.equal(snapshot.sourceTotals.totalAsset, 1066)
+  assert.equal(snapshot.sourceTotals.cash, -161.13)
+  assert.equal(snapshot.sourceTotals.holdingProfit, -1035.83)
   assert.equal(snapshot.complete, true)
 })
 
-test('老虎 history pages through transactions and maps buy/sell flows', async () => {
+test('老虎 history pages through orders and maps filled buy/sell flows', async () => {
   const deps = mcpDeps({
-    get_transactions: (args) => args.page_token === 'p2'
-      ? { transactions: [{ id: 'T2', symbol: '00700', sec_type: 'STK', market: 'HK', action: 'SELL', filled_quantity: '50', filled_price: '370', trade_time: '2026-11-06T09:30:00+08:00', currency: 'HKD', commission: '3' }], next_page_token: null }
-      : { transactions: [{ id: 'T1', symbol: 'AAPL', sec_type: 'STK', market: 'US', action: 'BUY', filled_quantity: '5', filled_price: '180', trade_time: 1794113400000, currency: 'USD', commission: '1' }], next_page_token: 'p2' },
+    get_orders: (args) => args.page_token === 'p2'
+      ? { orders: [
+          { order_id: 'O2', symbol: '00700', sec_type: 'STK', market: 'HK', side: 'SELL', status: 'FILLED', filled_quantity: 50, avg_fill_price: 370, created_time: '2026-11-06T09:30:00+08:00', currency: 'HKD', commission: 3 },
+          { order_id: 'O3', symbol: 'AAPL', sec_type: 'STK', market: 'US', side: 'BUY', status: 'CANCELLED', quantity: 5, created_time: '2026-11-06T10:00:00+08:00', currency: 'USD' },
+        ], next_page_token: null }
+      : { orders: [
+          { order_id: 'O1', symbol: 'AAPL', sec_type: 'STK', market: 'US', side: 'BUY', status: 'FILLED', filled_quantity: 5, avg_fill_price: 180, created_time: 1794113400000, currency: 'USD', commission: 1 },
+        ], next_page_token: 'p2' },
   })
   const result = await fetchTigerHistory({ brokerAccountId: 'A1' }, SECRETS, { from: '2026-11-01', to: '2026-11-07' }, undefined, deps)
-  assert.equal(result.rows.length, 2)
+  assert.equal(result.rows.length, 2, '撤单不产生流水')
   const buy = result.rows.find(r => r.symbol === 'AAPL')
   assert.equal(buy.kind, 'buy')
   assert.ok(buy.cashAmount < 0)

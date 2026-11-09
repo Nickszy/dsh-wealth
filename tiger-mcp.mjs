@@ -346,6 +346,38 @@ function positionRows(payload) {
   return rows
 }
 
+/**
+ * get_assets 实测返回 prime_assets 结构：
+ * { account, account_type, route, updated_at, segments: [
+ *   { category: 'S'|'C'|'F', currency, net_liquidation, cash_balance,
+ *     cash_available_for_trade, gross_position_value, buying_power, unrealized_pnl } ] }
+ * 旧结构（顶层 cash[] + 汇总字段）作为兜底。
+ */
+function assetSummary(payload) {
+  const segments = Array.isArray(payload?.segments) ? payload.segments : null
+  if (segments && segments.length) {
+    const cash = new Map()
+    let total = 0, hasTotal = false, unrealized = 0, hasUnrealized = false
+    for (const seg of segments) {
+      if (!seg || typeof seg !== 'object') continue
+      const nlv = number(pick(seg, ASSET_TOTAL_FIELDS))
+      if (nlv !== null) { total += nlv; hasTotal = true }
+      const currency = text(pick(seg, CURRENCY_FIELDS))?.toUpperCase()
+      const balance = number(pick(seg, CASH_FIELDS))
+      // 现金允许为负（融资融券负债），不能像旧逻辑那样丢掉负值。
+      if (currency && balance !== null && /^[A-Z]{3}$/.test(currency)) cash.set(currency, (cash.get(currency) || 0) + balance)
+      const pnl = number(pick(seg, UNREALIZED_FIELDS))
+      if (pnl !== null) { unrealized += pnl; hasUnrealized = true }
+    }
+    return {
+      total: hasTotal ? total : null,
+      cash: [...cash.entries()].map(([currency, balance]) => ({ currency, cash: balance })),
+      unrealized: hasUnrealized ? unrealized : null,
+    }
+  }
+  return { total: assetTotal(payload), cash: cashRows(payload), unrealized: unrealizedTotal(payload) }
+}
+
 function cashRows(payload) {
   const rows = []
   eachArray(payload, (list) => {
@@ -428,7 +460,9 @@ export async function fetchTigerSnapshot(source, secrets, signal, deps = {}) {
   try {
     const warnings = []
     const authError = (error) => /认证|授权|401|403|expired|unauthor/i.test(String(error?.message || error))
-    const assets = await mcp.call('get_assets', { account, base_currency: 'ALL' }).catch((error) => {
+    // 不要传 base_currency：服务端只接受具体币种（baseCurrency，camelCase），
+    // 传 ALL/下划线会被整段拒绝；segments 本身按币种返回。
+    const assets = await mcp.call('get_assets', { account }).catch((error) => {
       if (authError(error)) throw error
       warnings.push('老虎资产汇总读取失败：' + String(error?.message || error))
       return null
@@ -456,9 +490,10 @@ export async function fetchTigerSnapshot(source, secrets, signal, deps = {}) {
       seen.add(key)
       holdings.push(holding)
     }
-    const cash = cashRows(assets)
+    const summary = assets ? assetSummary(assets) : { total: null, cash: [], unrealized: null }
+    const cash = summary.cash
     for (const row of cash) {
-      if (!(row.cash > 0)) continue
+      if (!row.cash) continue
       const key = 'CASH:' + row.currency
       if (seen.has(key)) continue
       seen.add(key)
@@ -467,11 +502,9 @@ export async function fetchTigerSnapshot(source, secrets, signal, deps = {}) {
     if (!holdings.length) fail('老虎 MCP 没有返回任何持仓或现金；请确认授权账户内有资产')
 
     const sourceTotals = {}
-    const total = assetTotal(assets)
-    if (total !== null) sourceTotals.totalAsset = total
+    if (summary.total !== null) sourceTotals.totalAsset = summary.total
     if (cash.length) sourceTotals.cash = cash.reduce((sum, row) => sum + row.cash, 0)
-    const profit = unrealizedTotal(assets)
-    if (profit !== null) sourceTotals.holdingProfit = profit
+    if (summary.unrealized !== null) sourceTotals.holdingProfit = summary.unrealized
 
     const priced = holdings.filter((h) => h.market !== 'CASH').every((h) => h.manualPrice != null)
     if (!priced) warnings.push('部分证券缺少现价，按成本暂估')
@@ -502,13 +535,16 @@ function canonicalFlow(row) {
 
 function mapTransaction(row, warnings) {
   if (!row || typeof row !== 'object') return null
+  // 订单行（get_orders）里未成交 / 已撤 / 已拒绝的委托不产生流水。
+  const status = String(text(pick(row, ['status', 'order_status', 'orderStatus', 'state'])) || '').toLowerCase()
+  if (status && !/fill|deal|execut|partial|complete|success/.test(status) && /cancel|reject|expire|invalid|pending|wait|new|submit|plac|init/.test(status)) return null
   const secType = String(text(pick(row, ['sec_type', 'secType', 'security_type'])) || 'STK').toUpperCase()
   if (!['STK', 'FUND', 'ETF'].includes(secType)) { warnings.push(`TIGER_HISTORY_UNSUPPORTED:${pick(row, CODE_FIELDS) || '?'}`); return null }
-  const action = String(text(pick(row, ['action', 'side', 'trade_side', 'direction'])) || '').toUpperCase()
-  const when = timestamp(pick(row, ['trade_time', 'tradeTime', 'filled_time', 'filledTime', 'create_time', 'time']))
+  const action = String(text(pick(row, ['action', 'side', 'trade_side', 'direction', 'order_side'])) || '').toUpperCase()
+  const when = timestamp(pick(row, ['trade_time', 'tradeTime', 'filled_time', 'filledTime', 'create_time', 'created_time', 'order_time', 'updated_time', 'time']))
   const symbol = text(pick(row, CODE_FIELDS))
-  const qty = number(pick(row, ['filled_quantity', 'filledQuantity', 'quantity', 'qty']))
-  const price = number(pick(row, ['filled_price', 'filledPrice', 'price']))
+  const qty = number(pick(row, ['filled_quantity', 'filledQuantity', 'executed_quantity', 'quantity', 'qty']))
+  const price = number(pick(row, ['filled_price', 'filledPrice', 'avg_fill_price', 'avgFillPrice', 'average_fill_price', 'avg_price', 'average_cost', 'order_price', 'price']))
   const externalId = text(pick(row, ['id', 'transaction_id', 'transactionId', 'trade_id', 'tradeId', 'order_id', 'orderId']))
   if (!when || !symbol || qty === null || price === null) { warnings.push('TIGER_HISTORY_INCOMPLETE_ROW'); return null }
   let kind = null
@@ -541,11 +577,13 @@ export async function fetchTigerHistory(source, secrets, range, signal, deps = {
     const rows = []
     let pageToken = null, pages = 0
     do {
-      const payload = await mcp.call('get_transactions', {
+      // get_transactions 只能按 order_id 或 symbol 查；账户级历史用 get_orders 翻页，
+      // 已成交委托再映射成买卖流水（字段与成交记录基本一致）。
+      const payload = await mcp.call('get_orders', {
         account, start_time: startMs, end_time: endMs, limit: 100,
         ...(pageToken ? { page_token: pageToken } : {}),
       })
-      const list = Array.isArray(payload) ? payload : (payload?.transactions || payload?.items || [])
+      const list = Array.isArray(payload) ? payload : (payload?.orders || payload?.items || [])
       for (const item of list) {
         const mapped = mapTransaction(item, warnings)
         if (mapped) rows.push(mapped)

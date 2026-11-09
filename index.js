@@ -23,7 +23,7 @@ import { createSyncService } from './sync.mjs'
 import { startTigerDeviceAuth, pollTigerDeviceToken } from './tiger-mcp.mjs'
 import { createTigerLogin } from './tiger-login.mjs'
 import { createQiemanLogin } from './qieman-login.mjs'
-import { generateFosunClientKey, fosunTicketCreate, checkFosunApiKey } from './fosun-client.mjs'
+import { generateFosunClientKey, fosunTicketCreate, checkFosunApiKey, verifyFosunCredentials } from './fosun-client.mjs'
 import { checkThsToken, THS_ADMIN_URL } from './ths-data.mjs'
 import { registerWestockClient, createWestockPkce, buildWestockAuthorizeUrl, exchangeWestockCode, refreshWestockToken, westockCallbackCode } from './westock-mcp.mjs'
 import qrcode from 'qrcode-generator'
@@ -248,11 +248,16 @@ export function apply(ctx, config = {}) {
         fosunOnboard.message = '等待手机端完成绑定…（当前 API Key 未激活）'
         return
       }
-      vault.set(pendingFosunOwner(), 'fosun', {
-        apiKey: ticket.apiKey,
-        privateKey: fosunOnboard.privatePem,
-        serverPublicKey: ticket.serverPubKey,
-      })
+      const secrets = { apiKey: ticket.apiKey, privateKey: fosunOnboard.privatePem, serverPublicKey: ticket.serverPubKey }
+      try {
+        await verifyFosunCredentials({ gatewayUrl: fosunOnboard.gatewayUrl }, secrets)
+      } catch (error) {
+        // 网关登记的客户端公钥不是本次会话这把 → 必须重置开通常数后重新绑定。
+        fosunOnboard.status = 'error'
+        fosunOnboard.message = '握手校验未通过（' + String(error?.message || error).slice(0, 80) + '）：该账户原先绑定过别的客户端公钥，请到开通页点「忘记API参数 / OpenAPI参数重置」，重置后重新扫码或粘贴新的 Key 与公钥'
+        return
+      }
+      vault.set(pendingFosunOwner(), 'fosun', secrets)
       fosunOnboard.status = 'ready'
       fosunOnboard.message = '复星开通完成，凭据已保存，可以读取账户'
     } catch (error) {
@@ -595,7 +600,16 @@ export function apply(ctx, config = {}) {
             send(res, 400, { ok: false, error: { code: 'bad-request', message: '这个 Key 还未激活（校验状态：' + check.status + '）——请在星财富 App 里把开通/绑定流程走完后再试' } })
             return
           }
-          vault.set(pendingFosunOwner(), 'fosun', { apiKey, privateKey: fosunOnboard.privatePem, serverPublicKey })
+          // 真正握手一次：网关登记的客户端公钥若不是本次会话这把，签名会被拒
+          //（Handshake signature verification failed），此时必须让用户重置开通常数。
+          const secrets = { apiKey, privateKey: fosunOnboard.privatePem, serverPublicKey }
+          try {
+            await verifyFosunCredentials({ gatewayUrl: fosunOnboard.gatewayUrl }, secrets)
+          } catch (error) {
+            send(res, 400, { ok: false, error: { code: 'handshake-failed', message: '握手校验未通过：' + String(error?.message || error) + '。该账户原先绑定过别的客户端公钥，请到开通页点「忘记API参数 / OpenAPI参数重置」，重置后把页面显示的新 API Key 和服务端公钥重新粘贴。' } })
+            return
+          }
+          vault.set(pendingFosunOwner(), 'fosun', secrets)
           fosunOnboard.status = 'ready'
           fosunOnboard.message = '复星开通完成，凭据已保存，可以读取账户'
           send(res, 200, { ok: true, ...fosunOnboardStatus() })
