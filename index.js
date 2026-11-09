@@ -563,13 +563,20 @@ export function apply(ctx, config = {}) {
           if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
           const body = JSON.parse(await readBody(req).catch(() => '{}') || '{}')
           const target = body.authId ? sync.list().authorizations.find(a => a.id === body.authId && a.connector === 'fosun') : null
-          // 客户端密钥对持久化复用：网关按「第一次绑定的公钥」校验签名，只要插件
-          // 每次都提交同一把公钥，页面显示的 Key/服务端公钥就永远与本机私钥配对，
-          // 不需要每次开通都重置。
-          let clientPrivatePem = vault.get('app:fosun-client').privateKey || ''
+          // 客户端密钥对按授权隔离：已有授权重新绑定时复用它保存的私钥；
+          // 新开通在「pending-fosun」里保留未完成会话的私钥（重试/扫码超时后
+          // 再发起仍是同一把，避免绑定与私钥错配——网关按第一次绑定的公钥校验），
+          // 一旦完成开通（pending 里已有 apiKey）下一次新开生成全新密钥对，
+          // 因此多账户各持各的私钥，删除授权时私钥随保险库一并删除。
+          let clientPrivatePem = ''
+          if (target) clientPrivatePem = vault.get(target.id).privateKey || ''
+          if (!clientPrivatePem) {
+            const pending = vault.get('pending-fosun')
+            if (!pending.apiKey && pending.privateKey) clientPrivatePem = pending.privateKey
+          }
           if (!clientPrivatePem) {
             clientPrivatePem = generateFosunClientKey().privatePem
-            vault.set('app:fosun-client', 'fosun', { privateKey: clientPrivatePem })
+            vault.set('pending-fosun', 'fosun', { privateKey: clientPrivatePem })
           }
           const key = fosunClientKeyFromPrivate(clientPrivatePem)
           const macId = randomUUID().replace(/-/g, '')
