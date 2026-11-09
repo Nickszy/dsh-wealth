@@ -886,7 +886,10 @@ export function createSyncService(ctx, options = {}) {
   }
   // 失败退避：连续失败后到期间隔缩短为 min(intervalMinutes, 5*2^(failCount-1)) 分钟（首次 5 分钟，
   // 之后逐次翻倍），永不超过配置的间隔；成功清零后回到完整间隔。
-  const dueMinutes = source => source.failCount >= 1 ? Math.min(source.intervalMinutes, 5 * 2 ** (source.failCount - 1)) : source.intervalMinutes
+  // 例外：服务端限流（HTTP 429/限流）不能提前重试——越快撞墙越严重，必须等满配置间隔。
+  const RATE_LIMIT = /\b429\b|限流|rate.?limit|too many requests/i
+  const dueMinutes = source => (source.failCount >= 1 && !RATE_LIMIT.test(String(source.lastError || '')))
+    ? Math.min(source.intervalMinutes, 5 * 2 ** (source.failCount - 1)) : source.intervalMinutes
   async function tick() {
     if (disposed || tickBusy) return
     tickBusy = true

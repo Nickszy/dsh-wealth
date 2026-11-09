@@ -441,6 +441,19 @@ test('non-auth failures back off exponentially capped at the configured interval
  f.advance(29*60000);await f.service.tick();assert.equal(calls,6)
  f.advance(1*60000);await f.service.tick();assert.equal(calls,7)
 })
+test('a rate-limited (429) source waits the full interval instead of the early backoff window',async()=>{
+ // HTTP 429 是服务端限流：提前重试只会加重限流，必须等满配置间隔（普通失败才吃 5 分钟提前退避）。
+ let mode=0
+ const f=setup({fetchSnapshot:async()=>{ if(mode===0) throw Error('MCP 返回 HTTP 429'); return snapshot() }})
+ const src=f.add({intervalMinutes:30})
+ await f.service.tick()
+ assert.equal(f.config.read()[0].failCount,1)
+ f.advance(5*60000);await f.service.tick() // 退避窗口内，且上次错误是限流 → 不重试
+ assert.equal(f.config.read()[0].lastError,'MCP 返回 HTTP 429')
+ f.advance(25*60000);mode=1;await f.service.tick() // 满一个完整间隔 → 正常重试并恢复
+ assert.equal(f.config.read()[0].lastStatus,'ok')
+ assert.equal(f.config.read()[0].failCount,0)
+})
 test('tick skips weekends unless syncWeekends; manual sync is unaffected',async()=>{
  // 取宿主本地时区的下一个周日中午，避免测试结果依赖机器时区。
  const sunday=new Date();sunday.setDate(sunday.getDate()+((7-sunday.getDay())%7));sunday.setHours(12,0,0,0)
