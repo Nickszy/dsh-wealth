@@ -63,7 +63,16 @@ test('every entry in package.json files exists on disk', () => {
   assert.deepEqual(missing, []);
 });
 
-// client.js never gets imported by any test — it is a browser module the host bundles.
+// Axis index lists must go through axisMarks(): building them inline from a length that can be
+// 0 yields [0, -1] and the chart then reads history[-1] -> "Cannot read properties of undefined"
+// and the whole page unmounts (seen on a fresh install with no snapshots yet).
+test('chart axis marks are built through axisMarks, never inline from a raw length', () => {
+  const src = fs.readFileSync(path.join(root, 'client.js'), 'utf8');
+  assert.ok(src.includes('const axisMarks = (len) =>'), 'axisMarks helper missing from client.js');
+  assert.ok((src.match(/axisMarks\(/g) || []).length >= 2, 'each chart should build its axis through axisMarks');
+  assert.equal((src.match(/const marks = \[0,/g) || []).length, 0, 'inline axis marks reintroduced: guard the empty series case');
+});
+
 // A stray paren there ships as "import failed" with no failing test, so parse it here.
 test('client.js parses as a module', async () => {
   const { execFileSync } = await import('node:child_process');

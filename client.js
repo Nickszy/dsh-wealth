@@ -639,7 +639,7 @@ window.__ModuleLoader__.load({
       // 近 7 天到期提醒：来自周期性流水推算，不触发系统通知，只做界面提示。
       const soon = fc && fc.generatedFor ? (() => {
         const end = new Date(Date.parse(fc.generatedFor + 'T00:00:00Z') + 7 * 86400000).toISOString().slice(0, 10)
-        return fc.series.filter(s => (s.dueDates || []).some(d => d >= fc.generatedFor && d <= end))
+        return (fc.series || []).filter(s => (s.dueDates || []).some(d => d >= fc.generatedFor && d <= end))
       })() : []
       const DIMS = { class: ['byClass', 'concentration', c => assetLabel(c.assetClass)], sector: ['bySector', 'sectorConcentration', c => c.sector], style: ['byStyle', 'styleConcentration', c => ({ growth: '成长', value: '价值', blend: '均衡', other: '其他' })[c.style] || c.style] }
       const [itemsKey, concKey, labelOf] = DIMS[dim] || DIMS.class
@@ -764,7 +764,7 @@ window.__ModuleLoader__.load({
             fc && fc.projection ? h('span', { style: { fontSize: 10.5, color: t.sub } }, '预计支出 ' + fmtMoney(fc.projection.outBase) + ' · 预计收入 ' + fmtMoney(fc.projection.inBase) + ' · ' + a.baseCurrency) : null),
           fcErr ? h('div', { style: { fontSize: 12, color: t.terra } }, fcErr) :
           !fc ? h('div', { style: { fontSize: 12, color: t.sub } }, '推算中…') :
-          fc.series.length ? h('div', null,
+          fc.series && fc.series.length ? h('div', null,
             fc.series.map((s) => h('div', { key: s.key, style: { display: 'flex', justifyContent: 'space-between', gap: 10, padding: '7px 0', borderBottom: '1px solid ' + t.border, fontSize: 12.5, flexWrap: 'wrap' } },
               h('span', { style: { color: t.text } }, s.label, h('small', { style: { display: 'block', color: t.sub } }, [s.cadenceLabel, s.accountName, '已发生 ' + s.occurrences + ' 次'].filter(Boolean).join(' · '))),
               h('span', { style: { textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' } },
@@ -783,7 +783,7 @@ window.__ModuleLoader__.load({
           h('div', null,
             billsErr ? h('div', { style: { fontSize: 12, color: t.terra } }, billsErr) :
             !bills ? h('div', { style: { fontSize: 12, color: t.sub } }, '读取中…') :
-            !bills.categories.length ? h('div', { style: { fontSize: 12, color: t.sub, lineHeight: 1.7 } }, '还没有归类的生活账单。用下方「导入微信 / 支付宝账单」自动归类，或在「流水」里给入金 / 出金选择分类（餐饮、居住、交通…）。') :
+            !(bills && bills.categories && bills.categories.length) ? h('div', { style: { fontSize: 12, color: t.sub, lineHeight: 1.7 } }, '还没有归类的生活账单。用下方「导入微信 / 支付宝账单」自动归类，或在「流水」里给入金 / 出金选择分类（餐饮、居住、交通…）。') :
             h('div', null,
               h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))', gap: 16 } },
                 h('div', null,
@@ -813,7 +813,7 @@ window.__ModuleLoader__.load({
                   h('div', { style: { fontSize: 11, color: t.sub, marginBottom: 6 } }, '按月'),
                   h('div', { style: { overflowX: 'auto' } }, h('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: 11.5 } },
                     h('thead', null, h('tr', null, ['月份', '支出', '收入', '净'].map((h2, i) => h('th', { key: h2, style: { textAlign: i ? 'right' : 'left', padding: '4px 6px', color: t.sub, fontWeight: 500, borderBottom: '1px solid ' + t.border } }, h2)))),
-                    h('tbody', null, bills.months.filter((m2) => m2.count).slice(-8).map((m2) => h('tr', { key: m2.month },
+                    h('tbody', null, (bills.months || []).filter((m2) => m2.count).slice(-8).map((m2) => h('tr', { key: m2.month },
                       h('td', { style: { padding: '4px 6px', color: t.sub } }, m2.month), h('td', { style: { textAlign: 'right', padding: '4px 6px', fontVariantNumeric: 'tabular-nums' } }, fmtMoney(m2.out)),
                       h('td', { style: { textAlign: 'right', padding: '4px 6px', fontVariantNumeric: 'tabular-nums' } }, fmtMoney(m2.in)), h('td', { style: { textAlign: 'right', padding: '4px 6px', fontVariantNumeric: 'tabular-nums', color: m2.net >= 0 ? t.green : t.red } }, fmtMoney(m2.net))))))))),
               bills.uncategorized ? h('div', { style: { fontSize: 10.5, color: t.terra, marginTop: 8 } }, '另有 ' + bills.uncategorized + ' 笔入金 / 出金尚未归类，可在「流水」里逐笔补选，或用 AI 助手批量归类。') : null,
@@ -1193,6 +1193,13 @@ window.__ModuleLoader__.load({
       }, h('path', { d: 'm6 9 6 6 6-6' }))
     }
 
+    // 坐标轴下标的唯一来源：数据点为空时必须返回空数组。
+    // 曾经写成 [0, floor((len-1)/2), len-1] 再 filter 去重，空数组得到 [0, -1]，
+    // 后续 dateOf(history[-1]) 取到 undefined 直接抛错，整页崩溃（新装用户首屏必现）。
+    const axisMarks = (len) => len > 0
+      ? Array.from(new Set([0, Math.floor((len - 1) / 2), len - 1])).sort((a, b) => a - b)
+      : []
+
     function NetWorthChart({ t, history, cur }) {
       const points = history.map((x) => ({ v: x.totalValueBase, label: (x.date || x.at || '').slice(0, 10) }))
       const vals = points.map((p) => p.v)
@@ -1208,7 +1215,7 @@ window.__ModuleLoader__.load({
       const area = path + ' L' + x(points.length - 1) + ',' + (PT + ih) + ' L' + PL + ',' + (PT + ih) + ' Z'
       const gid = 'zw-nw-' + String(t.accent).replace('#', '')
       const ticks = [0, .5, 1].map((f) => lo + (hi - lo) * f)
-      const marks = [0, Math.floor((points.length - 1) / 2), points.length - 1].filter((v, i, a) => a.indexOf(v) === i)
+      const marks = axisMarks(points.length)
       return h('svg', { viewBox: '0 0 ' + W + ' ' + H, role: 'img', 'aria-label': '净资产历史快照曲线', style: { width: '100%', height: 'auto', display: 'block', marginTop: 4 } },
         h('defs', null, h('linearGradient', { id: gid, x1: 0, y1: 0, x2: 0, y2: 1 },
           h('stop', { offset: '0%', stopColor: t.accent, stopOpacity: .22 }),
@@ -1219,7 +1226,7 @@ window.__ModuleLoader__.load({
         h('path', { d: area, fill: 'url(#' + gid + ')' }),
         h('path', { d: path, fill: 'none', stroke: t.accent, strokeWidth: 2.4, strokeLinejoin: 'round', strokeLinecap: 'round' }),
         points.map((p, i) => h('circle', { key: 'p' + i, cx: x(i), cy: y(p.v), r: 2.8, fill: t.accent, opacity: i === points.length - 1 ? 1 : .5 }, h('title', null, p.label + ' · ' + fmtMoney(p.v, cur)))),
-        marks.map((i) => h('text', { key: 'd' + i, x: x(i), y: H - PB + 18, textAnchor: i === 0 ? 'start' : i === points.length - 1 ? 'end' : 'middle', fontSize: 10, fill: t.sub }, points[i].label.slice(5) || points[i].label)),
+        marks.map((i) => h('text', { key: 'd' + i, x: x(i), y: H - PB + 18, textAnchor: i === 0 ? 'start' : i === points.length - 1 ? 'end' : 'middle', fontSize: 10, fill: t.sub }, (points[i]?.label || '').slice(5) || (points[i]?.label || ''))),
       )
     }
 
@@ -2353,7 +2360,7 @@ window.__ModuleLoader__.load({
       const area = line + ' L' + x(vals.length - 1) + ',' + (PT + ih) + ' L' + PL + ',' + (PT + ih) + ' Z'
       const gid = 'zw-area-' + String(t.accent).replace('#', '')
       const ticks = [0, .5, 1].map(f => lo + (hi - lo) * f)
-      const marks = [0, Math.floor((history.length - 1) / 2), history.length - 1].filter((v, i, a) => a.indexOf(v) === i)
+      const marks = axisMarks(history.length)
       const dateOf = (row) => (row.date || row.at || '').slice(0, 10)
       const card = { background: t.card, border: '1px solid ' + t.border, borderRadius: 20, padding: '18px 20px', boxShadow: t.shadow, minWidth: 0 }
 
@@ -2376,7 +2383,7 @@ window.__ModuleLoader__.load({
         key: 'd' + i, x: x(i), y: H - PB + 18,
         textAnchor: i === 0 ? 'start' : i === history.length - 1 ? 'end' : 'middle',
         fontSize: 10, fill: t.sub,
-      }, dateOf(history[i]).slice(5)))
+      }, dateOf(history[i] || {}).slice(5)))
 
       const trendChart = history.length > 1
         ? h('svg', { viewBox: '0 0 ' + W + ' ' + H, role: 'img', 'aria-label': '资产轨迹历史快照', style: { width: '100%', height: 'auto', display: 'block' } },
