@@ -1,12 +1,52 @@
 // Market quotes via Tencent's public batch endpoint. Read-only, one GET per refresh,
 // no keys, no redirects; failures degrade to per-symbol warnings, never to fake prices.
-// GBK text lines: v_sh600000="1~浦发银行~600000~10.86~..."; field 3 is the last price.
+// GBK text lines: v_sz002432="51~九安医疗~002432~57.65~..."; field 3 is the last price,
+// field 30 is the stamp, field 32 is today's change in percent (10 means +10%).
 import { normalizeSymbol } from './symbols.mjs'
 const QUOTES_URL = 'https://qt.gtimg.cn/q='
 const MARKET_CURRENCY = { sh: 'CNY', sz: 'CNY', hk: 'HKD', us: 'USD' }
 const number = (value) => {
   const n = Number(value)
   return Number.isFinite(n) && n > 0 ? n : null
+}
+const signed = (value) => {
+  if (value == null || String(value).trim() === '') return null
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
+}
+/**
+ * Field 30 is the exchange stamp. Live payloads use YYYYMMDDHHmmss (CN),
+ * YYYY/MM/DD HH:mm:ss (HK) or YYYY-MM-DD HH:mm:ss (US); field 31/32 are then
+ * the change and the percent. The older YYYYMMDD plus a clock in field 31
+ * has no change columns.
+ */
+function quoteStamp(fields) {
+  const stamp = String(fields[30] || '').trim()
+  const next = String(fields[31] || '').trim()
+  const clock = /^(\d{2}):(\d{2}):(\d{2})$/.exec(next)
+  let quotedAt = null
+  let match = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})$/.exec(stamp)
+  if (match) quotedAt = `${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:${match[6]}`
+  else {
+    match = /^(\d{4})[/-](\d{2})[/-](\d{2})(?:[ T](\d{2}):(\d{2}):(\d{2}))?$/.exec(stamp)
+    if (match) quotedAt = `${match[1]}-${match[2]}-${match[3]}` + (match[4] ? `T${match[4]}:${match[5]}:${match[6]}` : '')
+    else {
+      match = /^(\d{4})(\d{2})(\d{2})$/.exec(stamp)
+      if (match) quotedAt = `${match[1]}-${match[2]}-${match[3]}` + (clock ? `T${clock[1]}:${clock[2]}:${clock[3]}` : '')
+    }
+  }
+  return { quotedAt, changePct: clock ? null : signed(fields[32]) }
+}
+/** True when manualPrice is just the broker snapshot copied into the hand-price slot. */
+export function brokerCopiedManual(holding = {}) {
+  const manual = holding.manualPrice
+  const source = holding.sourcePrice
+  return manual != null && source != null && Number(manual) === Number(source)
+}
+/** 手填价 > 行情价 > 券商快照价 > 平均成本。与券商价相同的手填价不是用户覆盖。 */
+export function valuationPrice(holding = {}) {
+  const hand = holding.manualPrice != null && !brokerCopiedManual(holding) ? holding.manualPrice : null
+  return hand ?? holding.quotePrice ?? holding.sourcePrice ?? holding.avgCost
 }
 /** Exchange prefix for an instrument, or null when no public quote is expected. */
 export function quoteKey(instrument = {}) {
@@ -39,12 +79,10 @@ export function parseTencentQuotes(text) {
     const price = number(fields[3])
     const name = String(fields[1] || '').trim()
     if (price === null) { warnings.push(`QUOTE_UNAVAILABLE:${prefix}${code}`); continue }
-    const stamp = String(fields[30] || '').trim(), time = String(fields[31] || '').trim()
-    const date = /^(\d{4})(\d{2})(\d{2})$/.exec(stamp)
-    const quotedAt = date ? `${date[1]}-${date[2]}-${date[3]}` + (time ? 'T' + time : '') : null
+    const { quotedAt, changePct } = quoteStamp(fields)
     quotes.set(`${prefix}${code}`.toLowerCase(), {
       symbol: code, market: prefix.toLowerCase(), name, currency: MARKET_CURRENCY[prefix.toLowerCase()],
-      price, quotedAt,
+      price, quotedAt, changePct,
     })
   }
   return { quotes, warnings }
@@ -80,7 +118,7 @@ export async function fetchQuotes(keys, { fetch = globalThis.fetch, timeoutMs = 
 }
 /**
  * Refresh quotePrice for all holdings whose instrument has a public quote.
- * manualPrice (user override) always wins; quotePrice only fills the gap below it.
+ * A real hand price still wins; a broker snapshot copied into manualPrice does not.
  * Pure given a ledger clone; the caller persists and returns counts/warnings.
  */
 export function refreshQuotes(db, { fetch, timeoutMs } = {}) {
@@ -90,8 +128,10 @@ export function refreshQuotes(db, { fetch, timeoutMs } = {}) {
     const instrument = insMap.get(holding.instrumentId)
     const key = quoteKey(instrument || {})
     if (!key) continue
-    if (!byKey.has(key)) byKey.set(key, [])
-    byKey.get(key).push(holding)
+    // quoteKey keeps US tickers uppercase; the fetch map is lowercase.
+    const id = key.toLowerCase()
+    if (!byKey.has(id)) byKey.set(id, [])
+    byKey.get(id).push(holding)
   }
   return fetchQuotes([...byKey.keys()], { fetch, timeoutMs }).then(({ quotes, warnings }) => {
     let updated = 0
@@ -102,8 +142,11 @@ export function refreshQuotes(db, { fetch, timeoutMs } = {}) {
         holding.quotePrice = quote.price
         holding.quoteAt = quote.quotedAt ? new Date(quote.quotedAt + 'Z').toISOString().replace(/\.\d{3}Z$/, 'Z') : null
         holding.quoteSource = 'tencent'
+        holding.quoteChangePct = quote.changePct
+        // 同步曾经把券商价写进 manualPrice。它和 sourcePrice 相同就不是手填，留下会永远挡住今日行情。
+        if (brokerCopiedManual(holding)) holding.manualPrice = null
         updated++
-        applied.push({ holdingId: holding.id, symbol: quote.symbol, market: quote.market, name: quote.name, currency: quote.currency, price: quote.price, changed: previous !== quote.price })
+        applied.push({ holdingId: holding.id, symbol: quote.symbol, market: quote.market, name: quote.name, currency: quote.currency, price: quote.price, changePct: quote.changePct, changed: previous !== quote.price })
       }
     }
     // 附着汇率快照，便于核对当日折算来源。

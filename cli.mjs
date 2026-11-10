@@ -14,6 +14,7 @@ import { parseBillCsv, billPreview } from './bills-import.mjs'
 import { buildDigest } from './digest.mjs'
 import { inferredTransfers } from './timeline.mjs'
 import { normalizeSymbol, identityKey, resolveSecurity } from './symbols.mjs'
+import { valuationPrice } from './quotes.mjs'
 import { computePerformance } from './performance.mjs'
 import { scanThsTransfers } from './ths-client.mjs'
 import { sourceStore } from './sync.mjs'
@@ -125,8 +126,8 @@ else if (arg[0] === 'state') {
   const rows = db.holdings.filter((h) => !accountId || h.accountId === accountId).map((h) => {
     const ins = insMap.get(h.instrumentId) || {}
     const rate = fx[h.currency] || fx[h.currency || ''] || (h.currency === base ? 1 : undefined)
-    // 估值链：手填价 > 行情价 > 券商快照价 > 平均成本；全空时不可估值（null，而不是按 0 计）。
-    const price = h.manualPrice ?? h.quotePrice ?? h.sourcePrice ?? h.avgCost
+    // 估值链：手填价 > 行情价 > 券商快照价 > 平均成本；与券商价相同的手填价不挡行情。
+    const price = valuationPrice(h)
     const valueBase = typeof rate === 'number' && price != null ? Number((h.qty * price * rate).toFixed(2)) : null
     return { holdingId: h.id, accountId: h.accountId, symbol: ins.symbol, name: ins.name, market: ins.market, assetClass: ins.assetClass, sector: ins.sector || null, style: ins.style || null, currency: h.currency, qty: h.qty, avgCost: h.avgCost ?? null, price: price ?? null, valueBase }
   })

@@ -2,6 +2,7 @@
 // 区间涨跌与最大回撤。口径是「市值」，不是收益率——出入金会造成台阶，界面须注明。
 // 没有行情的标的按当前价格水平平推并明确告警，绝不用缺失价格算涨跌。
 import { maxDrawdown } from './analytics.mjs'
+import { valuationPrice } from './quotes.mjs'
 import { klineTarget, loadDailyCloses } from './klines.mjs'
 import { reconstructTimeline, mergeTimelines } from './timeline.mjs'
 
@@ -43,7 +44,7 @@ export function buildPerformance(db, timeline, { prices, fx, baseCurrency = db.b
   for (const id of new Set(timeline.states.flatMap((s) => Object.keys(s.positions)))) {
     if (prices.has(id)) continue
     const h = holdingById.get(id), ins = insById.get(id)
-    const price = h?.manualPrice ?? h?.quotePrice ?? h?.sourcePrice ?? h?.avgCost ?? null
+    const price = h ? valuationPrice(h) ?? null : null
     if (typeof price === 'number' && Number.isFinite(price) && price > 0) {
       flat.set(id, price)
       warnings.push('PERF_FLAT_PRICE:' + (ins?.symbol || id))

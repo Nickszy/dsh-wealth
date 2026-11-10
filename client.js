@@ -105,6 +105,7 @@ window.__ModuleLoader__.load({
       '最近同步': 'Last sync', '流水已同步至': 'Flows synced to', '同步到最新': 'Sync now',
       '编辑': 'Edit', '全部账户': 'All accounts', '个股': 'By symbol', '返回': 'Back',
       '持仓成本': 'Position cost', '持有盈亏（券商）': 'Holding P&L (broker)', '手动维护': 'Maintained manually',
+      '涨跌幅': 'Change',
       '按行业分布': 'By sector', '按风格分布': 'By style', '分布维度': 'Dimension',
       '月度预算': 'Monthly budget', '今日': 'Today', '提醒': 'Reminder', '设置币种': 'Set currency',
     }
@@ -1441,6 +1442,12 @@ window.__ModuleLoader__.load({
         setForm(null)
       }
       const list = db.holdings.filter(ho => accountId ? ho.accountId === accountId : (!acctFilter || ho.accountId === acctFilter))
+      // 与 quotes.mjs valuationPrice 一致：和券商快照相同的 manualPrice 是同步写入的昨收，不是手填。
+      const usedPrice = (ho) => {
+        const copied = ho.manualPrice != null && ho.sourcePrice != null && Number(ho.manualPrice) === Number(ho.sourcePrice)
+        const hand = ho.manualPrice != null && !copied ? ho.manualPrice : null
+        return { hand, price: hand ?? ho.quotePrice ?? ho.sourcePrice ?? ho.avgCost }
+      }
       const fld = (label, key, props = {}) => h('label', null, h('span', { style: T.label(t) }, label), h('input', { value: form[key], disabled: props.disabled, placeholder: props.placeholder, onChange: e => setForm({ ...form, [key]: props.upper ? e.target.value.toUpperCase() : props.trim ? e.target.value.trim() : e.target.value }), style: T.input(t) }))
       const sel = (label, key, options, disabled) => h('label', null, h('span', { style: T.label(t) }, label), h('select', { value: form[key], disabled, onChange: e => setForm({ ...form, [key]: e.target.value }), style: T.input(t) }, options.map(([v, n]) => h('option', { key: v, value: v }, n))))
       const styleLabel = key => ({ growth: '成长', value: '价值', blend: '均衡', other: '其他' })[key] || '未分类'
@@ -1461,7 +1468,7 @@ window.__ModuleLoader__.load({
         const ins = insMap.get(ho.instrumentId)
         const rate = ho.currency === db.baseCurrency ? 1 : db.fx[ho.currency]
         // 估值链：手填价 > 行情价 > 券商快照价 > 平均成本；全空时不计入（绝不按 0 计）。
-        const price = ho.manualPrice ?? ho.quotePrice ?? ho.sourcePrice ?? ho.avgCost
+        const price = usedPrice(ho).price
         if (Number.isFinite(rate) && rate > 0 && price != null) g.mv += ho.qty * price * rate
         g.rows.push([ho, ins])
       }
@@ -1479,29 +1486,35 @@ window.__ModuleLoader__.load({
               h('button', { style: T.btn(t, false), disabled: busy || quoting, onClick: refreshQuotes }, quoting ? '正在更新行情…' : '⟳ 更新行情'),
               h('button', { style: T.btn(t, true), disabled: busy || !db.accounts.length, onClick: () => open(blank()) }, '＋ 添加持仓'))),
           h('table', { style: { width: '100%', borderCollapse: 'collapse' } },
-            h('thead', null, h('tr', null, T.th('标的', t), accountId ? null : T.th('账户', t), T.th('数量', t), T.th('成本', t), T.th('现价', t), T.th('币种', t), T.th('市值(本位币)', t), T.th('操作', t))),
+            h('thead', null, h('tr', null, T.th('标的', t), accountId ? null : T.th('账户', t), T.th('数量', t), T.th('成本', t), T.th('现价', t), T.th('涨跌幅', t), T.th('币种', t), T.th('市值(本位币)', t), T.th('操作', t))),
             h('tbody', null, list.length ? groups.map((g) => [
-              h('tr', { key: 'g:' + g.key }, T.td(h('span', { style: { fontWeight: 650, fontSize: 12 } }, g.key, h('small', { style: { display: 'block', color: t.sub, fontWeight: 400 } }, g.rows.length + ' 项 · ' + fmtMoney(g.mv, db.baseCurrency) + (totalMv ? ' · ' + (g.mv / totalMv * 100).toFixed(1) + '%' : ''))), t, { colSpan: accountId ? 7 : 8 })),
+              h('tr', { key: 'g:' + g.key }, T.td(h('span', { style: { fontWeight: 650, fontSize: 12 } }, g.key, h('small', { style: { display: 'block', color: t.sub, fontWeight: 400 } }, g.rows.length + ' 项 · ' + fmtMoney(g.mv, db.baseCurrency) + (totalMv ? ' · ' + (g.mv / totalMv * 100).toFixed(1) + '%' : ''))), t, { colSpan: accountId ? 8 : 9 })),
               g.rows.map(([ho, ins]) => {
                 const acc = accMap.get(ho.accountId)
                 // 估值链：手填价 > 行情价 > 券商快照价 > 平均成本；全空时市值为「—」，绝不按 0 计。
-                const price = ho.manualPrice ?? ho.quotePrice ?? ho.sourcePrice ?? ho.avgCost
+                const { hand, price } = usedPrice(ho)
                 const rate = ho.currency === db.baseCurrency ? 1 : db.fx[ho.currency]
                 const mv = Number.isFinite(rate) && rate > 0 && price != null ? ho.qty * price * rate : null
-                const quoteTag = ho.manualPrice == null && ho.quotePrice != null ? h('small', { style: { display: 'block', color: t.sub, fontSize: 10 } }, '行情' + (ho.quoteAt ? ' ' + String(ho.quoteAt).slice(5, 10) : '')) : null
-                const sourceTag = ho.manualPrice == null && ho.quotePrice == null && ho.sourcePrice != null ? h('small', { style: { display: 'block', color: t.sub, fontSize: 10 } }, '券商价') : null
+                const quoteTag = hand == null && ho.quotePrice != null ? h('small', { style: { display: 'block', color: t.sub, fontSize: 10 } }, '行情' + (ho.quoteAt ? ' ' + String(ho.quoteAt).slice(5, 10) : '')) : null
+                const sourceTag = hand == null && ho.quotePrice == null && ho.sourcePrice != null ? h('small', { style: { display: 'block', color: t.sub, fontSize: 10 } }, '券商价') : null
+                const handTag = hand != null ? h('small', { style: { display: 'block', color: t.sub, fontSize: 10 } }, '手填') : null
+                const pct = typeof ho.quoteChangePct === 'number' && Number.isFinite(ho.quoteChangePct) ? ho.quoteChangePct : null
+                const pctText = pct == null ? '—' : (pct > 0 ? '+' : '') + pct.toFixed(2) + '%'
                 return h('tr', { key: ho.id },
                   T.td(h('span', null, (ins ? ins.name + ' ' + ins.symbol : ho.instrumentId), ins?.sector ? h('small', { style: { display: 'block', color: t.sub } }, ins.sector + (ins.style ? ' · ' + styleLabel(ins.style) : '')) : null), t),
                   accountId ? null : T.td(acc ? acc.name : ho.accountId, t),
                   T.td(String(ho.qty), t),
                   T.td(fmtMoney(ho.avgCost), t),
                   T.td(h('span', null,
-                    h('input', { defaultValue: ho.manualPrice ?? '', placeholder: ho.quotePrice != null ? String(ho.quotePrice) : '手填', title: ho.manualPrice != null ? '手填价格（清空则改用行情/成本）' : ho.quotePrice != null ? '输入框为空：使用行情价 ' + ho.quotePrice + '；填写后以手填优先' : '手填现价，离开输入框保存', onBlur: (e) => { const v = e.target.value; if (String(ho.manualPrice ?? '') !== v) call('price.set', { holdingId: ho.id, price: v === '' ? null : Number(v) }) }, style: { ...T.input(t), width: 78 } }),
-                    quoteTag, sourceTag), t),
+                    hand != null
+                      ? h('input', { key: ho.id + ':' + hand, defaultValue: String(hand), placeholder: '手填', title: '手填价格（清空则改用行情）', onBlur: (e) => { const v = e.target.value; if (String(hand) !== v) call('price.set', { holdingId: ho.id, price: v === '' ? null : Number(v) }) }, style: { ...T.input(t), width: 78 } })
+                      : h('span', { style: { fontWeight: 650, fontVariantNumeric: 'tabular-nums' } }, price == null ? '—' : String(price)),
+                    handTag, quoteTag, sourceTag), t),
+                  T.td(pctText, t, { color: pct == null || pct === 0 ? t.sub : pct > 0 ? t.green : t.red, fontWeight: 650, fontVariantNumeric: 'tabular-nums' }),
                   T.td(ho.currency, t),
                   T.td(fmtMoney(mv, db.baseCurrency), t),
                   T.td(h('span', null,
-                    h('button', { style: { ...T.btn(t, false), padding: '3px 8px', marginRight: 6 }, disabled: busy, onClick: () => open({ accountId: ho.accountId, symbol: ins?.symbol || '', name: ins?.name || '', market: ins?.market || 'CN', assetClass: ins?.assetClass || 'stock', sector: ins?.sector || '', style: ins?.style || '', qty: String(ho.qty), avgCost: String(ho.avgCost ?? ''), currency: ho.currency || '', manualPrice: ho.manualPrice == null ? '' : String(ho.manualPrice) }, true) }, '编辑'),
+                    h('button', { style: { ...T.btn(t, false), padding: '3px 8px', marginRight: 6 }, disabled: busy, onClick: () => open({ accountId: ho.accountId, symbol: ins?.symbol || '', name: ins?.name || '', market: ins?.market || 'CN', assetClass: ins?.assetClass || 'stock', sector: ins?.sector || '', style: ins?.style || '', qty: String(ho.qty), avgCost: String(ho.avgCost ?? ''), currency: ho.currency || '', manualPrice: hand == null ? '' : String(hand) }, true) }, '编辑'),
                     h('button', { style: { ...T.btn(t, false), padding: '3px 8px', borderColor: t.red, color: t.red }, disabled: busy, onClick: () => { if (window.confirm('删除该持仓？')) call('holding.remove', { id: ho.id }) } }, '删除')), t))
               }),
             ]) : h('tr', null, T.td('还没有持仓', t, { color: t.sub }))))),

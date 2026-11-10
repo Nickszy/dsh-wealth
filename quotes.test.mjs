@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { quoteKey, parseTencentQuotes, fetchQuotes, refreshQuotes } from './quotes.mjs'
+import { quoteKey, parseTencentQuotes, fetchQuotes, refreshQuotes, valuationPrice } from './quotes.mjs'
 
 const line = (key, name, price, date = '20261107', time = '15:00:03') => {
   const f = []
@@ -86,4 +86,57 @@ test('refreshQuotes fills quotePrice below manual overrides and reports changes'
   // 场外基金不在行情范围：不请求、无告警、quotePrice 保持 null。
   assert.deepEqual(result.warnings, [])
   assert.equal(db.holdings[2].quotePrice, null)
+})
+
+const fields = (name, price, stamp, change, pct) => {
+  const row = []
+  row[1] = name
+  row[3] = price
+  row[30] = stamp
+  row[31] = change
+  row[32] = pct
+  return row.join('~')
+}
+
+test('parses live stamps and today change percent, including a limit-up and a loss', () => {
+  const text = [
+    `v_sz002432="${fields('九安医疗', '57.65', '20261110120524', '5.24', '10.00')}"`,
+    `v_hk01164="${fields('中广核矿业', '2.250', '2026/11/10 11:56:46', '0.090', '4.17')}"`,
+    `v_usAAPL="${fields('苹果', '350.69', '2026-11-09 16:00:01', '8.32', '-0.42')}"`,
+  ].join(';')
+  const { quotes } = parseTencentQuotes(text)
+  const jiu = quotes.get('sz002432')
+  assert.deepEqual([jiu.price, jiu.quotedAt, jiu.changePct], [57.65, '2026-11-10T12:05:24', 10])
+  assert.equal(quotes.get('hk01164').quotedAt, '2026-11-10T11:56:46')
+  assert.equal(quotes.get('hk01164').changePct, 4.17)
+  const apple = quotes.get('usaapl')
+  assert.equal(apple.quotedAt, '2026-11-09T16:00:01')
+  assert.equal(apple.changePct, -0.42)
+})
+
+test('a broker price copied into manualPrice does not hide today quote; a real hand price still does', async () => {
+  const db = {
+    baseCurrency: 'CNY', fx: { CNY: 1 },
+    instruments: [
+      { id: 'I1', symbol: '002432', market: 'CN', assetClass: 'stock' },
+      { id: 'I2', symbol: '002364', market: 'CN', assetClass: 'stock' },
+    ],
+    holdings: [
+      { id: 'H1', instrumentId: 'I1', manualPrice: 52.41, sourcePrice: 52.41, quotePrice: null },
+      { id: 'H2', instrumentId: 'I2', manualPrice: 30, sourcePrice: 24.54, quotePrice: null },
+    ],
+  }
+  const payload = [
+    `v_sz002432="${fields('九安医疗', '57.65', '20261110120524', '5.24', '10.00')}"`,
+    `v_sz002364="${fields('中恒电气', '25.01', '20261110120524', '0.47', '1.92')}"`,
+  ].join(';')
+  await refreshQuotes(db, { fetch: async () => ({ ok: true, status: 200, arrayBuffer: async () => new TextEncoder().encode(payload).buffer }) })
+  assert.equal(db.holdings[0].manualPrice, null)
+  assert.equal(db.holdings[0].quotePrice, 57.65)
+  assert.equal(db.holdings[0].quoteChangePct, 10)
+  assert.equal(db.holdings[0].quoteAt.startsWith('2026-11-10T12:05:24'), true)
+  assert.equal(valuationPrice(db.holdings[0]), 57.65)
+  assert.equal(db.holdings[1].manualPrice, 30)
+  assert.equal(db.holdings[1].quoteChangePct, 1.92)
+  assert.equal(valuationPrice(db.holdings[1]), 30)
 })

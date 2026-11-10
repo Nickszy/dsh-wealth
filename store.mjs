@@ -6,6 +6,7 @@ import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { isFlowKind, KIND_NAMES, normalizeStyle, isLifeCategory, LIFE_CATEGORIES, canonicalMarket } from './model.mjs'
 import { normalizeSymbol, identityKey } from './symbols.mjs'
+import { valuationPrice } from './quotes.mjs'
 
 export const DATA_DIR = process.env.DSH_PORTFOLIO_DIR || join(homedir(), '.dsh', 'data', 'dsh-portfolio')
 export const DATA_FILE = join(DATA_DIR, 'ledger.json')
@@ -676,8 +677,8 @@ export function summarize(db) {
     const cur = h.currency || ins?.currency || base
     if (!ins) { exclude(h, cur, 'missing-instrument', '持仓标的不存在'); continue }
     if (!byAccount.has(h.accountId)) { exclude(h, cur, 'missing-account', '持仓账户不存在'); continue }
-    // 估值优先级：手填价 > 行情价 > 券商快照价 > 平均成本；全部缺失时不估值（绝不按 0 计）。
-    const price = h.manualPrice ?? h.quotePrice ?? h.sourcePrice ?? h.avgCost
+    // 估值优先级：手填价 > 行情价 > 券商快照价 > 平均成本；与券商价相同的手填价视为同步写入，不挡行情。
+    const price = valuationPrice(h)
     if (price == null) { exclude(h, cur, 'no-price', '没有价格且成本未知，无法估值'); continue }
     const rate = fx[cur]
     if (typeof rate !== 'number' || !Number.isFinite(rate) || rate <= 0) {
