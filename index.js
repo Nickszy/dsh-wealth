@@ -83,7 +83,7 @@ function trusted(req, ctx) {
 
 export function apply(ctx, config = {}) {
   const vault = config.syncOptions?.credentials || createCredentialStore()
-  const sync = createSyncService(ctx, { ...config.syncOptions, credentials:vault })
+  const sync = createSyncService(ctx, { ...config.syncOptions, credentials:vault, refreshQuotes: config.syncOptions?.refreshQuotes || refreshQuotes })
   const history = createHistoryService({sources:()=>sync.list().sources,readSourceHistory:sync.readHistory,...config.historyOptions})
   ctx.effect(()=>()=>history.dispose(), 'dsh-wealth: historical import previews')
   const syncHistory = async (accountId, opts) => {

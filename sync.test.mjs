@@ -42,6 +42,30 @@ test('successful repeated refresh updates managed holdings, not duplicates, and 
  r=await f.service.sync(src.id);assert.equal(r.ledger.holdings.length,1);assert.equal(f.writes(),2)
  assert.equal(f.service.list().sources[0].lastError,null)
 })
+
+test('sync keeps a hand price, stores the broker price separately, and applies external quotes',async()=>{
+ const f=setup({refreshQuotes:async db=>{ for(const h of db.holdings){ h.quotePrice=321; h.quoteAt='2026-11-09T08:00:00Z'; h.quoteSource='tencent' } return {updated:db.holdings.length} }})
+ const src=f.add()
+ await f.service.sync(src.id)
+ const db=f.db(); db.holdings[0].manualPrice=88; f.setDb(db)
+ const r=await f.service.sync(src.id)
+ const h=r.ledger.holdings[0]
+ assert.equal(h.manualPrice,88)
+ assert.equal(h.sourcePrice,400)
+ assert.equal(h.quotePrice,321)
+ assert.equal(h.quoteSource,'tencent')
+})
+
+test('a quote refresh failure does not fail the sync or clear the saved holding',async()=>{
+ const f=setup({refreshQuotes:async()=>{ throw new Error('quotes down') }})
+ const src=f.add()
+ const r=await f.service.sync(src.id)
+ assert.equal(r.source.lastStatus,'ok')
+ assert.equal(r.ledger.holdings.length,1)
+ assert.equal(r.ledger.holdings[0].quotePrice ?? null, null)
+ assert.equal(r.ledger.holdings[0].sourcePrice,400)
+})
+
 test('sync status is partial only for degraded warnings or incomplete coverage',async()=>{
  let warnings=[{code:'QUOTE_DATE_UNAVAILABLE',severity:'info',message:'缺少行情日期'}]
  const f=setup({fetchSnapshot:async()=>snapshot([row()],{warnings})}),src=f.add()

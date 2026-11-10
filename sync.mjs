@@ -224,10 +224,12 @@ export function mergeSnapshot(db, source, input) {
   const seen = new Set()
   for (const row of snapshot.holdings) {
     const holdingKey = keyOf(row)
-    const { holding } = applyOp(staged, 'holding.upsert', { holding: { ...row, accountId: account.id } })
+    // 快照上的 manualPrice 是券商价，只记到 sourcePrice。手填价 manualPrice 不被同步覆盖。
+    const { manualPrice: brokerPrice, ...position } = row
+    const { holding } = applyOp(staged, 'holding.upsert', { holding: { ...position, accountId: account.id } })
     if (seen.has(holding.id)) throw bad('多个来源持仓映射到相同本地标的，请拆分账户')
     seen.add(holding.id)
-    Object.assign(holding, { syncSourceId: source.id, externalHoldingKey: holdingKey, sourcePrice: row.manualPrice, sourceQueriedAt: snapshot.queriedAt, sourceUploadedAt: snapshot.uploadedAt, sourceQuoteDate: snapshot.quoteDate })
+    Object.assign(holding, { syncSourceId: source.id, externalHoldingKey: holdingKey, sourcePrice: brokerPrice, sourceQueriedAt: snapshot.queriedAt, sourceUploadedAt: snapshot.uploadedAt, sourceQuoteDate: snapshot.quoteDate })
   }
   // v1 无 coverage：complete 才全量删除。v2 有 coverage：只有段落为 full 的消失持仓可删，
   // 标的缺失时无法判段，永不删除。
@@ -877,6 +879,27 @@ export function createSyncService(ctx, options = {}) {
     const result = await tools.execute({ name:source.toolName,arguments:source.args || {},signal,callId:'wealth-sync-'+randomUUID() })
     return unwrapToolResult(result)
   }
+  // 同步成功后用外部行情补 quotePrice。失败不影响已写入的持仓。
+  // 行情请求在写账本之后；回写时只拷贝报价字段，避免盖掉期间另一笔同步写入的持仓。
+  async function applyExternalQuotes() {
+    if (typeof options.refreshQuotes !== 'function') return null
+    try {
+      const draft = readLedger()
+      const result = await options.refreshQuotes(draft)
+      if (!result?.updated) return readLedger()
+      const fresh = readLedger()
+      const byId = new Map((draft.holdings || []).map(h => [h.id, h]))
+      for (const holding of fresh.holdings || []) {
+        const src = byId.get(holding.id)
+        if (!src || src.quotePrice == null) continue
+        holding.quotePrice = src.quotePrice
+        holding.quoteAt = src.quoteAt ?? null
+        holding.quoteSource = src.quoteSource ?? null
+      }
+      writeLedger(fresh)
+      return fresh
+    } catch { return null }
+  }
   async function runSync(id) {
     const source = config.read().find(s=>s.id === id)
     if (!source) throw bad('数据源不存在')
@@ -904,13 +927,15 @@ export function createSyncService(ctx, options = {}) {
         throw bad('来源数据时间早于已保存快照，已保留原数据')
       }
       writeLedger(ledger)
+      const priced = await applyExternalQuotes()
+      const stored = priced || ledger
       // v2.3：仅 degraded 警告或覆盖不完整才标 partial，纯 info 警告保持 ok。
       const degraded = snapshot.warningDetails.some(d => d.severity === 'degraded')
       const updated = updateRecord(id, { lastSuccessAt:iso(),lastStatus:degraded || !snapshot.complete ? 'partial' : 'ok',lastError:null,warnings:snapshot.warnings,warningDetails:snapshot.warningDetails,coverage:snapshot.coverage ?? null,uploadedAt:snapshot.uploadedAt,quoteDate:snapshot.quoteDate,uploadedAtWatermark:latestDate(uploadWatermark,snapshot.uploadedAt),quoteDateWatermark:latestDate(quoteWatermark,snapshot.quoteDate),queriedAt:snapshot.queriedAt,imported,complete:snapshot.complete,snapshotHash:contentHash,needsReauth:false,failCount:0 })
       // 深扫过的账户随同步增量收尾新转账；失败或未开通游标都不影响本次持仓结果。
       let transferScan = null
       try { transferScan = await syncThsTransfers(current, abort.signal) } catch (error) { transferScan = { error: String(error?.message || error).slice(0, 200) } }
-      return { source:updated,ledger,summary:summarize(ledger),imported,transferScan }
+      return { source:updated,ledger:stored,summary:summarize(stored),imported,transferScan }
     } catch (error) {
       // Adapter messages are curated and safe; still redact every known secret
       // before the message reaches the browser or sources.json.
