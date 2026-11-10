@@ -1,7 +1,7 @@
 {
   "name": "dsh-wealth",
   "version": "1.0.0",
-  "description": "资产账本：多账户、多资产、多币种持仓与交易流水管理，支持对话维护与本机持久化 | Multi-account, multi-asset, multi-currency portfolio & trade ledger for DeepSeek Harness, with chat-based maintenance.",
+  "description": "一个本机账本，聚合券商、基金与生活账单：自动同步同花顺/富途/长桥/IB，历史净值回补，AI 直接读改写账本 | One local-first ledger for brokers, funds and life bills, with an AI that reads and edits it.",
   "type": "module",
   "main": "index.js",
   "icon": "./icon.svg",
@@ -74,18 +74,30 @@
     "ws": "8.22.1"
   },
   "scripts": {
-    "test": "node --test analytics.test.mjs model.test.mjs lb-mcp.test.mjs futu-mcp.test.mjs mcp-http.test.mjs qieman-mcp.test.mjs tiger-mcp.test.mjs fosun-client.test.mjs history-file.test.mjs history.test.mjs history-sync.test.mjs history-provider.test.mjs store.test.mjs importer.test.mjs chat.test.mjs host.test.mjs connectors.test.mjs connector-registry.test.mjs sync.test.mjs account-import.test.mjs authorization.test.mjs credentials.test.mjs ths-client.test.mjs ths-login.test.mjs brokers-sdk.test.mjs ib-client.test.mjs futu-transport.test.mjs quotes.test.mjs forecast.test.mjs klines.test.mjs ths-data.test.mjs westock-mcp.test.mjs timeline.test.mjs performance.test.mjs bills.test.mjs bills-import.test.mjs digest.test.mjs symbols.test.mjs client.test.mjs"
+    "test": "node --test analytics.test.mjs model.test.mjs lb-mcp.test.mjs futu-mcp.test.mjs mcp-http.test.mjs qieman-mcp.test.mjs tiger-mcp.test.mjs fosun-client.test.mjs history-file.test.mjs history.test.mjs history-sync.test.mjs history-provider.test.mjs store.test.mjs importer.test.mjs chat.test.mjs host.test.mjs connectors.test.mjs connector-registry.test.mjs sync.test.mjs account-import.test.mjs authorization.test.mjs credentials.test.mjs ths-client.test.mjs ths-login.test.mjs brokers-sdk.test.mjs ib-client.test.mjs futu-transport.test.mjs quotes.test.mjs forecast.test.mjs klines.test.mjs ths-data.test.mjs westock-mcp.test.mjs timeline.test.mjs performance.test.mjs bills.test.mjs bills-import.test.mjs digest.test.mjs symbols.test.mjs client.test.mjs",
+    "release:dry": "npm pack --dry-run"
   },
   "keywords": [
     "dsh",
     "dsh-plugin",
     "deepseek-harness",
+    "wealth",
     "portfolio",
     "ledger",
-    "assets",
+    "personal-finance",
+    "bookkeeping",
+    "broker",
+    "investment",
+    "china",
+    "ths",
+    "futu",
+    "longbridge",
+    "ai",
+    "资产账本",
     "投资",
     "持仓",
-    "记账"
+    "记账",
+    "理财"
   ],
   "license": "MIT",
   "repository": {
@@ -111,5 +123,9 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
   }
 }

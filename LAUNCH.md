@@ -103,6 +103,35 @@
 
 **结论：产品能力已具备发布条件，发布物料与真人验证是剩余瓶颈。** 冲刺第一名的关键不在再加功能，而在：60 秒内讲清"一个本机账本 + 所有券商 + 生活账单 + AI 直接改账"这一差异点，以及首批用户的可信评价。
 
+## 发布执行步骤（1.0.0）
+
+前置：package.json 已配置 publishConfig.registry = https://registry.npmjs.org，不必再手动加 --registry；本机默认的 npmmirror 是只读镜像，不能发布。
+
+1. **登录 npmjs.org（只需一次）**
+
+   ```bash
+   npm login --registry=https://registry.npmjs.org
+   ```
+
+2. **发布**（在仓库根目录；发布前可先 `npm pack --dry-run` 预检，约 56 个文件）
+
+   ```bash
+   npm publish
+   ```
+
+3. **校验线上版本**
+
+   ```bash
+   npm view dsh-wealth version --registry=https://registry.npmjs.org
+   ```
+
+4. **推送 git（推送前需确认）**：main 与 tag `v1.0.0` 尚未推送到 origin
+
+   ```bash
+   git push origin main && git push origin v1.0.0
+   ```
+
+5. **PH 物料**：演示视频按上文分镜录制；截图用真实账本按清单补齐（浅色 + 深色）。
 ## 已知限制（发布时如实说明）
 
 - 同花顺流水的单笔记录不含银行侧转账；累计转入/转出来自同花顺「资金流动」口径，并可一键「回扫银证转账明细」把总额二分定位到具体某天（写入账本后现金时间线用真实转账）。回扫前的现金时点仍为估算。
