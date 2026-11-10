@@ -53,9 +53,52 @@ test('read Q&A streams JSON, grounds all ledger rows and summary, and never muta
   assert.equal(captured.request.temperature, 0)
   assert.equal(captured.request.messages[0].source.kind, 'dsh-wealth')
   const prompt = captured.request.messages[0].content[0].text
-  assert.ok(prompt.includes(JSON.stringify(db)))
+  const context = JSON.parse(prompt)
+  assert.deepEqual(context.ledger.holdings, db.holdings)
+  assert.deepEqual(context.ledger.historyStats, { total: 0, byKind: {}, first: null, last: null })
   assert.ok(prompt.includes('summary'))
   assert.ok(prompt.includes('Earlier question'))
+})
+
+test('large history archives are windowed into recent rows plus stats instead of shipping the whole ledger', async () => {
+  const db = ledger()
+  // 1200 条归档流水（日期单调递增）；真实账本曾因 5999 条全量进入请求而触发网关 1M token 拒发。
+  db.historyEvents = Array.from({ length: 1200 }, (_, i) => ({
+    id: 'HE_' + String(i + 1).padStart(4, '0'), accountId: 'ACC_1',
+    kind: i % 3 ? 'dividend' : 'deposit', date: new Date(Date.UTC(2019, 0, 1 + i)).toISOString().slice(0, 10),
+    cashAmount: 1, currency: 'CNY', archiveOnly: true,
+  }))
+  db.snapshots = Array.from({ length: 100 }, (_, i) => ({
+    date: new Date(Date.UTC(2026, 0, 1 + i)).toISOString().slice(0, 10),
+    baseCurrency: 'CNY', totalValueBase: i,
+  }))
+  const wholeLedger = JSON.stringify(db)
+  const { ctx, captured } = mockModel({ reply: '好', ops: [] })
+  await chatTurn(ctx, { message: '我最近有过分红吗' }, db)
+  const prompt = captured.request.messages[0].content[0].text
+  const context = JSON.parse(prompt)
+  assert.equal(context.ledger.historyEvents.length, 200)
+  assert.equal(context.ledger.historyStats.total, 1200)
+  assert.equal(context.ledger.historyStats.byKind.dividend, 800)
+  assert.equal(context.ledger.historyStats.first, '2019-01-01')
+  assert.equal(context.ledger.historyStats.last, context.ledger.historyEvents.at(-1).date)
+  // 窗口内是日期最近的一批，最早一条不进入请求；其余账本字段仍然完整在场。
+  assert.ok(!prompt.includes(JSON.stringify(db.historyEvents[0])))
+  assert.ok(prompt.includes(JSON.stringify(context.ledger.historyEvents.at(-1))))
+  // 估值快照同样窗口化：只带最近 60 个点，总量另行说明。
+  assert.equal(context.ledger.snapshots.length, 60)
+  assert.equal(context.ledger.snapshotStats.total, 100)
+  assert.ok(!context.ledger.snapshots.some((s) => s.date === '2026-01-01'))
+  assert.equal(context.ledger.snapshots.at(-1).date, '2026-04-10')
+  assert.deepEqual(context.ledger.holdings, db.holdings)
+  assert.ok(prompt.length < wholeLedger.length / 2)
+})
+
+test('an oversized request fails with a clear message before any model call', async () => {
+  const db = ledger()
+  const { ctx, captured } = mockModel({ reply: '好', ops: [] })
+  await assert.rejects(chatTurn(ctx, { message: 'x'.repeat(900_000) }, db), /过大/)
+  assert.equal(captured.request, undefined)
 })
 
 test('natural language edit proposals are validated without writes and apply returns a separate clone', async () => {
