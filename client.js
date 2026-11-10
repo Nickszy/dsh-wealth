@@ -109,7 +109,7 @@ window.__ModuleLoader__.load({
       '最近同步': 'Last sync', '流水已同步至': 'Flows synced to', '同步到最新': 'Sync now',
       '编辑': 'Edit', '全部账户': 'All accounts', '个股': 'By symbol', '返回': 'Back',
       '持仓成本': 'Position cost', '持有盈亏（券商）': 'Holding P&L (broker)', '手动维护': 'Maintained manually',
-      '涨跌幅': 'Change', '今日盈亏': "Today's P&L",
+      '涨跌幅': 'Change', '今日盈亏': "Today's P&L", '净值': 'NAV',
       '按行业分布': 'By sector', '按风格分布': 'By style', '分布维度': 'Dimension',
       '月度预算': 'Monthly budget', '今日': 'Today', '提醒': 'Reminder', '设置币种': 'Set currency',
     }
@@ -1523,7 +1523,7 @@ window.__ModuleLoader__.load({
                 const { hand, price } = usedPrice(ho)
                 const rate = ho.currency === db.baseCurrency ? 1 : db.fx[ho.currency]
                 const mv = Number.isFinite(rate) && rate > 0 && price != null ? ho.qty * price * rate : null
-                const quoteTag = hand == null && ho.quotePrice != null ? h('small', { style: { display: 'block', color: t.sub, fontSize: 10 } }, '行情' + (ho.quoteAt ? ' ' + String(ho.quoteAt).slice(5, 10) : '')) : null
+                const quoteTag = hand == null && ho.quotePrice != null ? h('small', { style: { display: 'block', color: t.sub, fontSize: 10 } }, (ho.quoteSource === 'tencent-fund' ? '净值' : '行情') + (ho.quoteAt ? ' ' + String(ho.quoteAt).slice(5, 10) : '')) : null
                 const sourceTag = hand == null && ho.quotePrice == null && ho.sourcePrice != null ? h('small', { style: { display: 'block', color: t.sub, fontSize: 10 } }, '券商价') : null
                 const handTag = hand != null ? h('small', { style: { display: 'block', color: t.sub, fontSize: 10 } }, '手填') : null
                 const pct = typeof ho.quoteChangePct === 'number' && Number.isFinite(ho.quoteChangePct) ? ho.quoteChangePct : null

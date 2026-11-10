@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { quoteKey, parseTencentQuotes, fetchQuotes, refreshQuotes, valuationPrice, dayChange } from './quotes.mjs'
+import { quoteKey, fundQuoteKey, parseTencentQuotes, parseTencentFundQuotes, fetchQuotes, refreshQuotes, valuationPrice, dayChange } from './quotes.mjs'
 
 const line = (key, name, price, date = '20261107', time = '15:00:03') => {
   const f = []
@@ -83,8 +83,8 @@ test('refreshQuotes fills quotePrice below manual overrides and reports changes'
   assert.equal(db.holdings[1].quotePrice, 410)
   assert.ok(db.holdings[1].quoteAt.startsWith('2026-11-07T'))
   assert.equal(db.holdings[1].quoteSource, 'tencent')
-  // 场外基金不在行情范围：不请求、无告警、quotePrice 保持 null。
-  assert.deepEqual(result.warnings, [])
+  // 场外基金会去要净值；这个假响应里没有它，所以只告警、不写价格。
+  assert.deepEqual(result.warnings, ['QUOTE_MISSING:jj000001'])
   assert.equal(db.holdings[2].quotePrice, null)
 })
 
@@ -151,4 +151,45 @@ test('dayChange is the move from the previous close, not the full price', () => 
   assert.equal(dayChange({ qty: 10, quotePrice: 57.65, quoteChangePct: null }), null)
   assert.equal(dayChange({ qty: 10, quotePrice: 57.65 }), null)
   assert.equal(dayChange({ qty: 10, quoteChangePct: 10 }), null)
+})
+
+test('fund NAV refresh writes the published unit value and drops a broker snapshot', async () => {
+  assert.equal(fundQuoteKey({ symbol: '012709', market: 'FUND', assetClass: 'fund' }), 'jj012709')
+  assert.equal(fundQuoteKey({ symbol: '012709', market: 'CN', assetClass: 'fund' }), 'jj012709')
+  assert.equal(fundQuoteKey({ symbol: 'HK0000910940.HKD', market: 'FUND', assetClass: 'fund' }), null)
+  assert.equal(quoteKey({ symbol: '012709', market: 'FUND', assetClass: 'fund' }), null)
+  const parsed = parseTencentFundQuotes([
+    'v_jj012709="012709~fund~0~0~~1.3845~1.4775~-0.2018~2026-11-10~"',
+    'v_jj003474="003474~cash~0~0~~0~0~0~~"',
+  ].join(';'))
+  assert.deepEqual([parsed.quotes.get('jj012709').price, parsed.quotes.get('jj012709').changePct, parsed.quotes.get('jj012709').quotedAt], [1.3845, -0.2018, '2026-11-10T00:00:00'])
+  assert.deepEqual(parsed.warnings, ['QUOTE_UNAVAILABLE:jj003474'])
+  const db = {
+    fx: { CNY: 1 },
+    instruments: [
+      { id: 'I1', symbol: '012709', market: 'FUND', assetClass: 'fund' },
+      { id: 'I2', symbol: '001257', market: 'CN', assetClass: 'fund' },
+      { id: 'I3', symbol: '008173', market: 'CN', assetClass: 'fund' },
+    ],
+    holdings: [
+      { id: 'H1', instrumentId: 'I1', qty: 100, manualPrice: 1.3914780292942743, sourcePrice: 1.3846834882691457, quotePrice: null },
+      { id: 'H2', instrumentId: 'I2', qty: 10, manualPrice: 2, sourcePrice: 1.617, quotePrice: null },
+      { id: 'H3', instrumentId: 'I3', qty: 10, manualPrice: 1.2319, sourcePrice: 1.2319, quotePrice: null },
+    ],
+  }
+  const payload = [
+    'v_jj012709="012709~fund~0~0~~1.3845~1.4775~-0.2018~2026-11-10~"',
+    'v_jj001257="001257~fund~0~0~~1.6200~1.8000~0.12~2026-11-10~"',
+    'v_jj008173="008173~fund~0~0~~1.2400~1.5000~0.66~2026-11-10~"',
+  ].join(';')
+  await refreshQuotes(db, { fetch: async () => ({ ok: true, status: 200, arrayBuffer: async () => new TextEncoder().encode(payload).buffer }) })
+  assert.equal(db.holdings[0].manualPrice, null)
+  assert.equal(db.holdings[0].quotePrice, 1.3845)
+  assert.equal(db.holdings[0].quoteChangePct, -0.2018)
+  assert.equal(db.holdings[0].quoteSource, 'tencent-fund')
+  assert.equal(valuationPrice(db.holdings[0]), 1.3845)
+  assert.equal(db.holdings[1].manualPrice, 2)
+  assert.equal(valuationPrice(db.holdings[1]), 2)
+  assert.equal(db.holdings[2].quotePrice, 1.24)
+  assert.equal(valuationPrice(db.holdings[2]), 1.24)
 })

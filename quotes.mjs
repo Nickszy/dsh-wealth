@@ -80,6 +80,35 @@ export function quoteKey(instrument = {}) {
   }
   return null
 }
+/** 场外基金 6 位代码。货币基金经常没有单位净值，调用方会当成无行情而保留原值。 */
+export function fundQuoteKey(instrument = {}) {
+  const normalized = normalizeSymbol(instrument.symbol, instrument.market)
+  const assetClass = String(instrument.assetClass || '').toLowerCase()
+  if (assetClass !== 'fund' || !/^\d{6}$/.test(normalized.symbol)) return null
+  return 'jj' + normalized.symbol
+}
+/**
+ * 基金行与股票行字段不同：v_jj012709="代码~名称~估~估~~单位净值~累计净值~涨跌幅~日期".
+ * 单位净值为 0（常见于货币基金）不当成价格。
+ */
+export function parseTencentFundQuotes(text) {
+  const quotes = new Map(), warnings = []
+  for (const line of String(text || '').split(';')) {
+    const match = /^\s*v_jj(\d{6})="([^"]*)"\s*$/i.exec(line)
+    if (!match) continue
+    const [, code, payload] = match
+    const fields = payload.split('~')
+    const price = number(fields[5])
+    if (price === null) { warnings.push(`QUOTE_UNAVAILABLE:jj${code}`); continue }
+    const date = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(fields[8] || '').trim())
+    quotes.set('jj' + code, {
+      symbol: code, market: 'jj', name: String(fields[1] || '').trim(), currency: 'CNY',
+      price, quotedAt: date ? `${date[1]}-${date[2]}-${date[3]}T00:00:00` : null,
+      changePct: signed(fields[7]),
+    })
+  }
+  return { quotes, warnings }
+}
 /** Parse a qt.gtimg.cn payload; unknown/failed lines are skipped and reported. */
 export function parseTencentQuotes(text) {
   const quotes = new Map(), warnings = []
@@ -129,6 +158,34 @@ export async function fetchQuotes(keys, { fetch = globalThis.fetch, timeoutMs = 
   for (const key of list) if (!quotes.has(key)) warnings.push('QUOTE_MISSING:' + key)
   return { quotes, warnings }
 }
+/** 场外基金净值，与股票行情同一个批量接口，字段布局不同。 */
+export async function fetchFundQuotes(keys, { fetch = globalThis.fetch, timeoutMs = 20000 } = {}) {
+  const list = [...new Set((keys || []).map(k => String(k || '').toLowerCase()).filter(k => /^jj\d{6}$/.test(k)))]
+  const quotes = new Map(), warnings = []
+  if (!list.length) return { quotes, warnings }
+  let response
+  try {
+    response = await fetch(QUOTES_URL + list.join(','), {
+      method: 'GET', redirect: 'error',
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: { accept: 'text/plain,*/*' },
+    })
+  } catch (error) {
+    warnings.push('QUOTES_NETWORK:' + (error?.name === 'TimeoutError' ? 'timeout' : 'unavailable'))
+    return { quotes, warnings }
+  }
+  if (!response.ok) { warnings.push('QUOTES_HTTP:' + response.status); return { quotes, warnings } }
+  const bytes = await response.arrayBuffer()
+  let text
+  try { text = new TextDecoder('gbk').decode(bytes) } catch { text = new TextDecoder('latin1').decode(bytes) }
+  const parsed = parseTencentFundQuotes(text)
+  warnings.push(...parsed.warnings)
+  for (const [key, quote] of parsed.quotes) quotes.set(key, quote)
+  for (const key of list) if (!quotes.has(key)) warnings.push('QUOTE_MISSING:' + key)
+  return { quotes, warnings }
+}
+const nearPrice = (left, right) => Number.isFinite(left) && Number.isFinite(right) && right !== 0 && Math.abs(left - right) / Math.abs(right) <= 0.05
+const longDecimal = (value) => (String(value).split('.')[1] || '').replace(/0+$/, '').length >= 5
 /**
  * Refresh quotePrice for all holdings whose instrument has a public quote.
  * A real hand price still wins; a broker snapshot copied into manualPrice does not.
@@ -138,15 +195,18 @@ export function refreshQuotes(db, { fetch, timeoutMs } = {}) {
   const insMap = new Map((db.instruments || []).map(i => [i.id, i]))
   const byKey = new Map()
   for (const holding of db.holdings || []) {
-    const instrument = insMap.get(holding.instrumentId)
-    const key = quoteKey(instrument || {})
+    const instrument = insMap.get(holding.instrumentId) || {}
+    const key = quoteKey(instrument) || fundQuoteKey(instrument)
     if (!key) continue
     // quoteKey keeps US tickers uppercase; the fetch map is lowercase.
     const id = key.toLowerCase()
     if (!byKey.has(id)) byKey.set(id, [])
     byKey.get(id).push(holding)
   }
-  return fetchQuotes([...byKey.keys()], { fetch, timeoutMs }).then(({ quotes, warnings }) => {
+  const keys = [...byKey.keys()]
+  return Promise.all([fetchQuotes(keys, { fetch, timeoutMs }), fetchFundQuotes(keys, { fetch, timeoutMs })]).then(([stocks, funds]) => {
+    const quotes = new Map([...stocks.quotes, ...funds.quotes])
+    const warnings = [...stocks.warnings, ...funds.warnings]
     let updated = 0
     const applied = []
     for (const [key, quote] of quotes) {
@@ -154,10 +214,12 @@ export function refreshQuotes(db, { fetch, timeoutMs } = {}) {
         const previous = holding.quotePrice
         holding.quotePrice = quote.price
         holding.quoteAt = quote.quotedAt ? new Date(quote.quotedAt + 'Z').toISOString().replace(/\.\d{3}Z$/, 'Z') : null
-        holding.quoteSource = 'tencent'
+        holding.quoteSource = quote.market === 'jj' ? 'tencent-fund' : 'tencent'
         holding.quoteChangePct = quote.changePct
-        // 同步曾经把券商价写进 manualPrice。它和 sourcePrice 相同就不是手填，留下会永远挡住今日行情。
-        if (brokerCopiedManual(holding)) holding.manualPrice = null
+        // 同步曾经把券商价写进 manualPrice。基金净值还常带着长小数，或与快照相差几个交易日。
+        const manual = Number(holding.manualPrice)
+        const fundSnapshot = quote.market === 'jj' && (longDecimal(holding.manualPrice) || nearPrice(manual, Number(holding.sourcePrice)) || nearPrice(manual, quote.price))
+        if (brokerCopiedManual(holding) || fundSnapshot) holding.manualPrice = null
         updated++
         applied.push({ holdingId: holding.id, symbol: quote.symbol, market: quote.market, name: quote.name, currency: quote.currency, price: quote.price, changePct: quote.changePct, changed: previous !== quote.price })
       }
