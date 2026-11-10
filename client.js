@@ -1437,7 +1437,7 @@ window.__ModuleLoader__.load({
         editing ? h(EditAccountModal, { t, state, call, busy, reload, account, source, authorization: authorizations.find(x => x.id === (source?.authId || source?.id)), onClose: () => { setEditing(false); refreshSources() } }) : null)
     }
 
-    function Holdings({ t, state, call, busy, accountId }) {
+    function Holdings({ t, state, call, busy, accountId, reload }) {
       const db = state.ledger
       const accMap = new Map(db.accounts.map((a) => [a.id, a]))
       const insMap = new Map(db.instruments.map((i) => [i.id, i]))
