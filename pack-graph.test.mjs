@@ -62,3 +62,13 @@ test('every entry in package.json files exists on disk', () => {
   const missing = files.filter((f) => !fs.existsSync(path.join(root, f)));
   assert.deepEqual(missing, []);
 });
+
+// client.js never gets imported by any test — it is a browser module the host bundles.
+// A stray paren there ships as "import failed" with no failing test, so parse it here.
+test('client.js parses as a module', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const src = path.join(root, 'client.js');
+  const copy = path.join(fs.mkdtempSync(path.join((await import('node:os')).tmpdir(), 'wealth-check-')), 'client.mjs');
+  fs.copyFileSync(src, copy);
+  execFileSync(process.execPath, ['--check', copy], { stdio: 'pipe' });
+});

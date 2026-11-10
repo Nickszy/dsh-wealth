@@ -358,7 +358,7 @@ window.__ModuleLoader__.load({
 
       const call = async (op, payload) => {
         setBusy(true)
-        try { const r = await runOp(op, payload); if (r.ok) { setState(prev => ({ ok: true, ledger: r.ledger, summary: r.summary, analysis: r.analysis, dataSource: prev?.dataSource })); setErr('') } else setErr(r.error?.message || '操作失败'); return r }
+        try { const r = await runOp(op, payload); if (r.ok) { setState(prev => ({ ok: true, version: prev?.version, ledger: r.ledger, summary: r.summary, analysis: r.analysis, dataSource: prev?.dataSource })); setErr('') } else setErr(r.error?.message || '操作失败'); return r }
         catch (e) { setErr('操作失败：' + e.message); return { ok: false } }
         finally { setBusy(false) }
       }
@@ -387,7 +387,7 @@ window.__ModuleLoader__.load({
             h('div', { className: 'wealth-rail-foot' },
               h('button', { className: 'wealth-nav', onClick: reload, disabled: busy, title: '刷新账本' }, h(NavIcon, { id: 'refresh' }), h('span', { className: 'wealth-nav-label' }, '刷新账本')),
               h('button', { className: 'wealth-nav', 'aria-pressed': chatOpen, onClick: () => setChatOpen(!chatOpen), title: '资产助手' }, h(NavIcon, { id: 'chat' }), h('span', { className: 'wealth-nav-label' }, chatOpen ? '收起助手' : '资产助手')),
-              h('div', { style: { textAlign: 'center', fontSize: 9.5, color: t.sub, padding: '8px 0 2px', letterSpacing: .3 } }, 'dsh-wealth v1.0.0'))),
+              h('div', { style: { textAlign: 'center', fontSize: 9.5, color: t.sub, padding: '8px 0 2px', letterSpacing: .3 } }, 'dsh-wealth' + (state?.version ? ' v' + state.version : '')))),
           h('div', { className: 'wealth-body' },
             h('main', { className: 'wealth-main' },
               h('header', { className: 'wealth-page-head' },

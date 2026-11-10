@@ -1,12 +1,17 @@
 # dsh-wealth · 资产账本
 
-DSH 多账户、多资产、多币种账本。正式版 **1.0.0**：独立接入同花顺投资账本、富途（官方 MCP / 本机 OpenD）、长桥（官方 MCP / OpenAPI）、且慢（盈米官方 MCP）、老虎证券（官方远程 MCP）与复星证券 / 星财富（官方 OpenAPI）和 IB，提供总资产看板、历史快照、账户分布、手工维护、文件导入与 AI 账本助手；新增**分析页**（TWR/XIRR 双口径收益、最大回撤、资金流、集中度、数据健康）与标准数据模型（`model.mjs` / `DATA-MODEL.md`）。
+DSH 多账户、多资产、多币种账本。当前 **0.9.2**（仍在 0.x 迭代，暂不跳 1.0）：独立接入同花顺投资账本、富途（官方 MCP / 本机 OpenD）、长桥（官方 MCP / OpenAPI）、且慢（盈米官方 MCP）、老虎证券（官方远程 MCP）与复星证券 / 星财富（官方 OpenAPI）和 IB，提供总资产看板、历史快照、账户分布、手工维护、文件导入与 AI 账本助手；新增**分析页**（TWR/XIRR 双口径收益、最大回撤、资金流、集中度、数据健康）与标准数据模型（`model.mjs` / `DATA-MODEL.md`）。
 
 内置来源均不依赖其他 DSH 插件。富途 OpenD、IB Client Portal Gateway 是券商官方连接服务，需要用户安装、启动并完成账号授权。
 
 ## 安装与加载
 
-发布版可在 DSH 插件页按 npm 包名 `dsh-wealth` 安装。当前本地 0.5.0 尚未发布 npm；本机 desktop profile 使用源码目录 link/junction。代码更新后须重新加载插件后端（通常完全退出并重启 DSH），再打开左侧「资产」。只刷新页面不会重载后端 ESM 模块。
+发布版可在 DSH 插件页按 npm 包名 `dsh-wealth` 安装（registry 上最新为 0.9.2）。本机 desktop profile 目前使用源码目录 link/junction，源码改动后须完全退出并重启 DSH 才生效；只刷新页面不会重载后端 ESM 模块。
+
+从 npm 安装时有两个已知提示，都属正常：
+
+- **`ERR_PNPM_IGNORED_BUILDS`（protobufjs）**：富途 OpenD 传输依赖 `protobufjs@7.6.6`，它的 `postinstall` 只打印版本方案提示、不编译任何东西。pnpm 默认拦截依赖的构建脚本，安装会以 exit 126 中断。在插件页按提示允许该构建脚本即可；CLI 安装时把 profile 里 `pnpm-workspace.yaml` 的 `allowBuilds.protobufjs` 从占位文字改成 `true` 再重跑 `dsh plugin --profile <profile> add dsh-wealth`。装完若插件页找不到入口，确认该 profile `package.json` 的 `dsh.profile.bundles` 里已包含 `"dsh-wealth"`。
+- **下载耗时**：长桥官方 `longport` 带各平台原生二进制，pnpm 首次安装会逐个拉取，冷启动可能 3–5 分钟、解包后约 64 MB；重复安装走本地 store 会快很多。
 
 源码部署先运行 `npm install`。长桥使用官方 `longport@4.3.7`，包含平台原生二进制；本机 Node 24、Windows x64 已通过真实模块加载检查。富途传输取自 `futu-api@10.12.7208` 并随包维护，保留上游 ISC 声明；为修正旧依赖，固定使用 `protobufjs@7.6.6`、`ws@8.22.1` 等运行库，不再安装上游旧的依赖链。已验证协议编码和大整数账户 ID 往返。
 

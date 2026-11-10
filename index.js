@@ -10,6 +10,10 @@ import { execFile } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { load, save, applyOp, summarize, OpError, DATA_DIR } from './store.mjs'
+
+const VERSION = (() => {
+  try { return JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')).version } catch { return '0.0.0' }
+})()
 import { refreshQuotes } from './quotes.mjs'
 import { forecast } from './forecast.mjs'
 import { billSummary } from './bills.mjs'
@@ -326,7 +330,7 @@ export function apply(ctx, config = {}) {
         if (path === 'api/state' || path === 'api/summary') {
           if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
           const db = load()
-          send(res, 200, { ok: true, ledger: db, summary: summarize(db), analysis: analyze(db), dataSource: dataSourceStatus() })
+          send(res, 200, { ok: true, version: VERSION, ledger: db, summary: summarize(db), analysis: analyze(db), dataSource: dataSourceStatus() })
           return
         }
         if (path === 'api/settings/data-source') {
