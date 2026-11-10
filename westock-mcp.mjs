@@ -1,6 +1,6 @@
 // 腾讯自选股 westock-mcp（stockbuddy.qq.com）——可选行情数据源，微信/QQ 授权。
-// OAuth 契约：动态注册只接受 workbuddy:// 回调（平台白名单），因此插件流程是
-// 「浏览器完成登录 → 授权页跳 workbuddy://...?code=... → 用户把回调地址粘回来换 token」。
+// OAuth：动态注册的回调是本机 http://127.0.0.1:端口/callback。浏览器授权后直接跳回，
+// 不使用 workbuddy://，也不改系统协议处理。
 // 行情：data_kline 日线（fq=qfq 前复权，与东方财富 fqt=1 口径一致）；场外基金净值不在覆盖范围。
 import { randomBytes, createHash } from 'node:crypto'
 import { createMcpHttpClient } from './mcp-http.mjs'
@@ -10,8 +10,8 @@ export const WESTOCK_OAUTH_BASE = 'https://stockbuddy.qq.com/cgi/cgi-bin/openai/
 export const WESTOCK_OAUTH_REGISTER = WESTOCK_OAUTH_BASE + '/register'
 export const WESTOCK_OAUTH_AUTHORIZE = WESTOCK_OAUTH_BASE + '/authorize'
 export const WESTOCK_OAUTH_TOKEN = WESTOCK_OAUTH_BASE + '/token'
-export const WESTOCK_REDIRECT_URI = 'workbuddy://workbuddy/mcp/connector:dsh-wealth/oauth/callback'
 export const WESTOCK_SCOPE = 'read write'
+const LOOPBACK_REDIRECT = /^http:\/\/127\.0\.0\.1:\d+\/callback$/
 
 const fail = (message) => { throw new Error(message) }
 
@@ -35,10 +35,12 @@ async function oauthPost(url, body, { fetch: fetchImpl = globalThis.fetch, timeo
 }
 
 /** 动态客户端注册（RFC 7591）。平台只接受 workbuddy:// 回调 scheme。 */
-export async function registerWestockClient({ fetch: fetchImpl, timeoutMs } = {}) {
+export async function registerWestockClient({ redirectUri, fetch: fetchImpl, timeoutMs } = {}) {
+  const redirect = String(redirectUri || '')
+  if (!LOOPBACK_REDIRECT.test(redirect)) fail('westock 授权失败：回调必须是本机 http://127.0.0.1:端口/callback')
   const payload = await oauthPost(WESTOCK_OAUTH_REGISTER, {
     client_name: 'dsh-wealth',
-    redirect_uris: [WESTOCK_REDIRECT_URI],
+    redirect_uris: [redirect],
     grant_types: ['authorization_code', 'refresh_token'],
     response_types: ['code'],
     token_endpoint_auth_method: 'none',
@@ -55,11 +57,13 @@ export function createWestockPkce() {
 }
 
 /** 授权页地址：浏览器打开后用 QQ / 手机号 / 微信扫码登录。 */
-export function buildWestockAuthorizeUrl({ clientId, state, codeChallenge }) {
+export function buildWestockAuthorizeUrl({ clientId, redirectUri, state, codeChallenge }) {
+  const redirect = String(redirectUri || '')
+  if (!LOOPBACK_REDIRECT.test(redirect)) fail('westock 授权失败：回调必须是本机 http://127.0.0.1:端口/callback')
   const url = new URL(WESTOCK_OAUTH_AUTHORIZE)
   url.searchParams.set('response_type', 'code')
   url.searchParams.set('client_id', clientId)
-  url.searchParams.set('redirect_uri', WESTOCK_REDIRECT_URI)
+  url.searchParams.set('redirect_uri', redirect)
   url.searchParams.set('scope', WESTOCK_SCOPE)
   url.searchParams.set('state', state)
   url.searchParams.set('code_challenge', codeChallenge)
@@ -68,7 +72,7 @@ export function buildWestockAuthorizeUrl({ clientId, state, codeChallenge }) {
   url.searchParams.set('resource', WESTOCK_MCP_ENDPOINT)
   // 登录页的「微信回跳」分支（网址里带 code 时）只从该参数取回调地址，
   // 缺了它点「同意授权」后不会跳回 workbuddy://，用户就拿不到授权码。
-  url.searchParams.set('connector_authorize_url', WESTOCK_REDIRECT_URI)
+  url.searchParams.set('connector_authorize_url', redirect)
   return url.toString()
 }
 
@@ -81,10 +85,12 @@ const mapToken = (payload, fallbackRefresh) => {
   }
 }
 
-export async function exchangeWestockCode({ code, clientId, codeVerifier }, deps = {}) {
+export async function exchangeWestockCode({ code, clientId, redirectUri, codeVerifier }, deps = {}) {
+  const redirect = String(redirectUri || '')
+  if (!LOOPBACK_REDIRECT.test(redirect)) fail('westock 授权失败：回调必须是本机 http://127.0.0.1:端口/callback')
   return mapToken(await oauthPost(WESTOCK_OAUTH_TOKEN, {
     grant_type: 'authorization_code', code, client_id: clientId,
-    redirect_uri: WESTOCK_REDIRECT_URI, code_verifier: codeVerifier, resource: WESTOCK_MCP_ENDPOINT,
+    redirect_uri: redirect, code_verifier: codeVerifier, resource: WESTOCK_MCP_ENDPOINT,
   }, deps))
 }
 
