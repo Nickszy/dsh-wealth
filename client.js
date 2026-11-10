@@ -92,6 +92,10 @@ window.__ModuleLoader__.load({
       '曲线包含出入金、交易与汇率影响，不代表投资收益率。': 'The curve includes deposits, trades and FX moves — it is not an investment return.',
       '导入持仓后显示分布': 'Import positions to see the breakdown',
       '资产轨迹历史快照': 'Net worth trail snapshots', '资产占比环形图': 'Allocation donut chart',
+      '银行 / 现金': 'Bank / cash', '信用卡 / 借款': 'Credit card / loan',
+      '券商与交易账户': 'Brokerage & trading', '基金与理财': 'Funds & wealth products',
+      '活期、储蓄与现金': 'Current, savings and cash', '负债账户': 'Liability accounts', '手工维护的资产': 'Manually tracked assets',
+      '未分类账户': 'Unclassified accounts',
       '推定入金（下限估算）': 'Inferred deposits (lower bound)', '分红 / 利息': 'Dividends / interest',
       '费用 / 税费': 'Fees / taxes', '配置与集中度': 'Allocation & concentration', '行业': 'Sector', '风格': 'Style',
       '暂无持仓分类': 'No classifications yet', '按年份汇总': 'Yearly summary', '资产构成': 'Composition',
@@ -433,8 +437,11 @@ window.__ModuleLoader__.load({
       const prevV = histValues.length > 7 ? histValues[histValues.length - 8] : (histValues.length > 1 ? histValues[0] : null)
       const trend = prevV != null ? lastV - prevV : null
       const trendPct = prevV ? trend / prevV : null
-      const groupCount = { cash: 0, credit: 0, invest: 0 }
-      s.accounts.forEach(a => { const acc = db.accounts.find(x => x.id === a.accountId); groupCount[accountGroup(acc && acc.type)] += 1 })
+      // 类型计数只统计实际存在的类型（与账户页分组一致，空分类不展示）。
+      const typeCounts = ACCOUNT_GROUP_DEFS.map((def) => ({
+        label: def.label,
+        count: s.accounts.filter((a) => { const acc = db.accounts.find((x) => x.id === a.accountId); return accountGroup(acc && acc.type) === def.id }).length,
+      })).filter((x) => x.count > 0)
       const [digest, setDigest] = React.useState(null)
       const todayKey = new Date().toISOString().slice(0, 10)
       // 每日提醒：当天首次打开时显示一次，点「知道了」后当天不再出现，次日自动恢复。
@@ -475,7 +482,7 @@ window.__ModuleLoader__.load({
           kpi({ label: '浮动盈亏', icon: 'overview', value: fmtMoney(s.totalPnlBase), color: s.totalPnlBase >= 0 ? t.green : t.red, valueColor: s.totalPnlBase >= 0 ? t.green : t.red,
             sub: h('span', null, '成本回报 ' + fmtPct(pnlPct) + (s.holdingsWithoutCost ? ' · ' + s.holdingsWithoutCost + ' 条成本未知' : '')) }),
           kpi({ label: '账户 / 持仓', icon: 'accounts', value: db.accounts.length + ' / ' + db.holdings.length, color: t.accent2 || t.accent,
-            sub: h('span', null, groupCount.cash + ' 现金 · ' + groupCount.invest + ' 投资 · ' + groupCount.credit + ' 信用') })),
+            sub: h('span', null, typeCounts.map((x) => x.count + ' ' + x.label).join(' · ')) })),
         h(DashboardCharts, { t, state, call, busy }),
         digest && !digestHidden ? h('div', { role: 'status', style: { display: 'flex', alignItems: 'flex-start', gap: 10, background: t.accentSoft || t.soft, border: '1px solid ' + t.accent + '30', borderRadius: 16, padding: '11px 15px', marginBottom: 16 } },
           h('span', { style: { color: t.accent, flex: 'none', marginTop: 1 } }, h(NavIcon, { id: 'spark', size: 17 })),
@@ -1164,17 +1171,19 @@ window.__ModuleLoader__.load({
     }
 
     // ---------- accounts (grouped) ----------
+    // 按账户类型分组：只展示实际存在的类型，空分组不再占位。
     const ACCOUNT_GROUP_DEFS = [
-      { id: 'cash', label: '现金', hint: '银行、活期与现金' },
-      { id: 'credit', label: '信用', hint: '信用卡与借款' },
-      { id: 'invest', label: '投资', hint: '证券、基金与其他' },
+      { id: 'broker', label: '证券账户', hint: '券商与交易账户' },
+      { id: 'fund', label: '基金账户', hint: '基金与理财' },
+      { id: 'bank', label: '银行 / 现金', hint: '活期、储蓄与现金' },
+      { id: 'credit', label: '信用卡 / 借款', hint: '负债账户' },
+      { id: 'hand', label: '其他手工', hint: '手工维护的资产' },
+      { id: 'other', label: '其他', hint: '未分类账户' },
     ]
     function accountGroup(type) {
-      if (type === 'credit') return 'credit'
-      if (type === 'bank') return 'cash'
-      return 'invest'
+      return ACCOUNT_GROUP_DEFS.some((g) => g.id === type) ? type : 'other'
     }
-    const groupColor = (t, id) => (id === 'credit' ? t.terra : id === 'cash' ? t.green : t.accent)
+    const groupColor = (t, id) => (id === 'credit' ? t.terra : id === 'bank' ? t.green : id === 'fund' ? (t.accent2 || t.accent) : id === 'hand' || id === 'other' ? t.sub : t.accent)
 
     function Chevron({ open, color }) {
       return h('svg', {
@@ -1227,7 +1236,9 @@ window.__ModuleLoader__.load({
         sa: summaryRows.find((x) => x.accountId === a.id) || { valueBase: 0, costBase: 0, pnlBase: 0, holdings: 0 },
         group: accountGroup(a.type),
       }))
-      const groups = ACCOUNT_GROUP_DEFS.map((g) => ({ ...g, items: accounts.filter((a) => a.group === g.id) }))
+      const groups = ACCOUNT_GROUP_DEFS
+        .map((g) => ({ ...g, items: accounts.filter((a) => a.group === g.id) }))
+        .filter((g) => g.items.length)
       const assets = accounts.filter((a) => a.group !== 'credit').reduce((sum, a) => sum + Math.max(0, a.sa.valueBase || 0), 0)
       const liabilities = accounts.filter((a) => a.group === 'credit').reduce((sum, a) => sum + Math.abs(a.sa.valueBase || 0), 0)
       const total = state.summary.totalValueBase || 0
@@ -1315,10 +1326,7 @@ window.__ModuleLoader__.load({
                   h('div', { style: { textAlign: 'right' } },
                     h('div', { style: { fontSize: 16, fontWeight: 780, fontVariantNumeric: 'tabular-nums', color: g.id === 'credit' ? t.terra : t.text } }, fmtMoney(gShow, cur)),
                     h('div', { style: { fontSize: 11, color: gPnl >= 0 ? t.green : t.red } }, fmtMoney(gPnl, cur)))),
-                !open ? null
-                  : g.items.length === 0
-                    ? h('div', { style: { padding: '16px 6px', fontSize: 12.5, color: t.sub } }, '这一组还没有账户')
-                    : h('div', { style: { marginTop: 4 } }, g.items.map(renderAccount)),
+                !open ? null : h('div', { style: { marginTop: 4 } }, g.items.map(renderAccount)),
               )
             }),
           ),
@@ -1342,7 +1350,7 @@ window.__ModuleLoader__.load({
               row('资产合计', fmtMoney(assets, cur)),
               row('负债合计', fmtMoney(liabilities, cur)),
               row('净资产', fmtMoney(total, cur))),
-            h('div', { style: { marginTop: 14, fontSize: 11, color: t.sub, lineHeight: 1.7 } }, '信用类账户按绝对值计入负债；现金 / 投资类计入资产。同步连接与授权在「新增账户」中管理。'))
+            h('div', { style: { marginTop: 14, fontSize: 11, color: t.sub, lineHeight: 1.7 } }, '信用类账户按绝对值计入负债，其余类型计入资产；没有账户的类型不会显示。同步连接与授权在「新增账户」中管理。'))
         ),
         modal?.kind === 'add' ? h(AddAccountModal, { t, state, call, busy, reload, authorizations, onClose: closeModal, onCreated: (id) => { closeModal(); if (id) openAccount(id) } }) : null,
         modal?.kind === 'reauth' ? h(AddAccountModal, { t, state, call, busy, reload, authorizations, reauthAuth: modal.auth, onClose: closeModal, onCreated: (id) => { closeModal(); if (id) openAccount(id) } }) : null,
