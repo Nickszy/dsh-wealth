@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { quoteKey, parseTencentQuotes, fetchQuotes, refreshQuotes, valuationPrice } from './quotes.mjs'
+import { quoteKey, parseTencentQuotes, fetchQuotes, refreshQuotes, valuationPrice, dayChange } from './quotes.mjs'
 
 const line = (key, name, price, date = '20261107', time = '15:00:03') => {
   const f = []
@@ -139,4 +139,16 @@ test('a broker price copied into manualPrice does not hide today quote; a real h
   assert.equal(db.holdings[1].manualPrice, 30)
   assert.equal(db.holdings[1].quoteChangePct, 1.92)
   assert.equal(valuationPrice(db.holdings[1]), 30)
+})
+
+test('dayChange is the move from the previous close, not the full price', () => {
+  // 57.65 相对昨收涨了 10%：今日盈亏只计涨出来的部分，不是整段现价。
+  const up = dayChange({ qty: 1900, quotePrice: 57.65, quoteChangePct: 10 })
+  assert.ok(Math.abs(up - 1900 * 57.65 * 10 / 110) < 1e-6)
+  assert.ok(up < 1900 * 6)
+  const down = dayChange({ qty: 100, quotePrice: 17.03, quoteChangePct: -3.68 })
+  assert.ok(down < 0)
+  assert.equal(dayChange({ qty: 10, quotePrice: 57.65, quoteChangePct: null }), null)
+  assert.equal(dayChange({ qty: 10, quotePrice: 57.65 }), null)
+  assert.equal(dayChange({ qty: 10, quoteChangePct: 10 }), null)
 })

@@ -48,6 +48,19 @@ export function valuationPrice(holding = {}) {
   const hand = holding.manualPrice != null && !brokerCopiedManual(holding) ? holding.manualPrice : null
   return hand ?? holding.quotePrice ?? holding.sourcePrice ?? holding.avgCost
 }
+/**
+ * Today's move in the holding currency. changePct is (price-prev)/prev*100,
+ * so the move is qty * quotePrice * pct/(100+pct). Null when the quote has no change.
+ */
+export function dayChange(holding = {}) {
+  const pct = holding.quoteChangePct
+  const price = holding.quotePrice
+  const qty = holding.qty
+  if (typeof pct !== 'number' || !Number.isFinite(pct) || pct <= -100) return null
+  if (typeof price !== 'number' || !(price > 0)) return null
+  if (typeof qty !== 'number' || !Number.isFinite(qty)) return null
+  return qty * price * (pct / (100 + pct))
+}
 /** Exchange prefix for an instrument, or null when no public quote is expected. */
 export function quoteKey(instrument = {}) {
   // 统一代码：各来源写法（2549.HK / HK.02549）都映射到同一个行情键。
