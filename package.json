@@ -1,6 +1,6 @@
 {
   "name": "dsh-wealth",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "description": "一个本机账本，聚合券商、基金与生活账单：自动同步同花顺/富途/长桥/IB，历史净值回补，AI 直接读改写账本 | One local-first ledger for brokers, funds and life bills, with an AI that reads and edits it.",
   "type": "module",
   "main": "index.js",
@@ -23,6 +23,7 @@
     "digest.mjs",
     "symbols.mjs",
     "klines.mjs",
+    "quotes.mjs",
     "ths-data.mjs",
     "westock-mcp.mjs",
     "westock-login.mjs",
@@ -74,7 +75,7 @@
     "ws": "8.22.1"
   },
   "scripts": {
-    "test": "node --test analytics.test.mjs model.test.mjs lb-mcp.test.mjs futu-mcp.test.mjs mcp-http.test.mjs qieman-mcp.test.mjs tiger-mcp.test.mjs fosun-client.test.mjs history-file.test.mjs history.test.mjs history-sync.test.mjs history-provider.test.mjs store.test.mjs importer.test.mjs chat.test.mjs host.test.mjs connectors.test.mjs connector-registry.test.mjs sync.test.mjs account-import.test.mjs authorization.test.mjs credentials.test.mjs ths-client.test.mjs ths-login.test.mjs brokers-sdk.test.mjs ib-client.test.mjs futu-transport.test.mjs quotes.test.mjs forecast.test.mjs klines.test.mjs ths-data.test.mjs westock-mcp.test.mjs timeline.test.mjs performance.test.mjs bills.test.mjs bills-import.test.mjs digest.test.mjs symbols.test.mjs client.test.mjs",
+    "test": "node --test analytics.test.mjs model.test.mjs lb-mcp.test.mjs futu-mcp.test.mjs mcp-http.test.mjs qieman-mcp.test.mjs tiger-mcp.test.mjs fosun-client.test.mjs history-file.test.mjs history.test.mjs history-sync.test.mjs history-provider.test.mjs store.test.mjs importer.test.mjs chat.test.mjs host.test.mjs connectors.test.mjs connector-registry.test.mjs sync.test.mjs account-import.test.mjs authorization.test.mjs credentials.test.mjs ths-client.test.mjs ths-login.test.mjs brokers-sdk.test.mjs ib-client.test.mjs futu-transport.test.mjs quotes.test.mjs forecast.test.mjs klines.test.mjs ths-data.test.mjs westock-mcp.test.mjs timeline.test.mjs performance.test.mjs bills.test.mjs bills-import.test.mjs digest.test.mjs symbols.test.mjs client.test.mjs pack-graph.test.mjs",
     "release:dry": "npm pack --dry-run"
   },
   "keywords": [
