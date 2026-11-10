@@ -109,7 +109,7 @@ window.__ModuleLoader__.load({
       '最近同步': 'Last sync', '流水已同步至': 'Flows synced to', '同步到最新': 'Sync now',
       '编辑': 'Edit', '全部账户': 'All accounts', '个股': 'By symbol', '返回': 'Back',
       '持仓成本': 'Position cost', '持有盈亏（券商）': 'Holding P&L (broker)', '手动维护': 'Maintained manually',
-      '涨跌幅': 'Change',
+      '涨跌幅': 'Change', '今日盈亏': "Today's P&L",
       '按行业分布': 'By sector', '按风格分布': 'By style', '分布维度': 'Dimension',
       '月度预算': 'Monthly budget', '今日': 'Today', '提醒': 'Reminder', '设置币种': 'Set currency',
     }
@@ -387,7 +387,7 @@ window.__ModuleLoader__.load({
             h('div', { className: 'wealth-rail-foot' },
               h('button', { className: 'wealth-nav', onClick: reload, disabled: busy, title: '刷新账本' }, h(NavIcon, { id: 'refresh' }), h('span', { className: 'wealth-nav-label' }, '刷新账本')),
               h('button', { className: 'wealth-nav', 'aria-pressed': chatOpen, onClick: () => setChatOpen(!chatOpen), title: '资产助手' }, h(NavIcon, { id: 'chat' }), h('span', { className: 'wealth-nav-label' }, chatOpen ? '收起助手' : '资产助手')),
-              h('div', { style: { textAlign: 'center', fontSize: 9.5, color: t.sub, padding: '8px 0 2px', letterSpacing: .3 } }, 'dsh-wealth v0.9.0'))),
+              h('div', { style: { textAlign: 'center', fontSize: 9.5, color: t.sub, padding: '8px 0 2px', letterSpacing: .3 } }, 'dsh-wealth v1.0.0'))),
           h('div', { className: 'wealth-body' },
             h('main', { className: 'wealth-main' },
               h('header', { className: 'wealth-page-head' },
@@ -1385,6 +1385,25 @@ window.__ModuleLoader__.load({
       // 成本未知的持仓不计入成本与盈亏；在盈亏卡片上注明条数，避免把缺失当成 0。
       const accountHoldingIds = new Set(db.holdings.filter(h => h.accountId === accountId).map(h => h.id))
       const unknownCostRows = (state.summary.warnings || []).filter(w => w && w.code === 'unknown-cost' && accountHoldingIds.has(w.holdingId)).length
+      // 与 quotes.mjs dayChange 一致：涨跌幅是 (现价-昨收)/昨收，今日盈亏 = 数量 × 现价 × 涨跌幅/(100+涨跌幅)。
+      let dayPnl = 0, dayKnown = 0, dayMissing = 0
+      for (const h of db.holdings) {
+        if (h.accountId !== accountId || !(h.qty > 0)) continue
+        const ins = db.instruments.find(i => i.id === h.instrumentId)
+        const pct = h.quoteChangePct, price = h.quotePrice
+        const move = typeof pct === 'number' && Number.isFinite(pct) && pct > -100 && typeof price === 'number' && price > 0
+          ? h.qty * price * (pct / (100 + pct)) : null
+        if (move == null) { if (ins && (ins.assetClass === 'stock' || ins.assetClass === 'etf')) dayMissing++; continue }
+        const rate = h.currency === cur ? 1 : state.summary.fx[h.currency]
+        if (typeof rate !== 'number' || !(rate > 0)) { dayMissing++; continue }
+        dayPnl += move * rate
+        dayKnown++
+      }
+      const dayBase = dayKnown && typeof sa.valueBase === 'number' ? sa.valueBase - dayPnl : null
+      const dayPct = dayKnown && !dayMissing && dayBase > 0 ? dayPnl / dayBase * 100 : null
+      const dayValue = !dayKnown ? '—' : h('span', null,
+        (dayPnl > 0 ? '+' : '') + fmtMoney(dayPnl, cur),
+        dayPct != null ? h('small', { style: { display: 'block', fontSize: 12, fontWeight: 650 } }, (dayPct > 0 ? '+' : '') + dayPct.toFixed(2) + '%') : null)
       const subs = [['holdings', '持仓'], ['trades', '流水'], ['symbols', '个股'], ['analysis', '分析'], ['backfill', '补录账单']]
       const metric = (label, value, color) => h('div', null, h('span', { style: T.label(t) }, label), h('strong', { style: { color, fontSize: typeof value === 'string' && value.length > 12 ? 12 : undefined } }, value))
       return h('div', null,
@@ -1400,6 +1419,7 @@ window.__ModuleLoader__.load({
               h('button', { style: { ...T.btn(t, false), color: t.red }, disabled: busy, onClick: removeAccount }, '删除'))),
           h('div', { className: 'wealth-metrics', style: { paddingBottom: 12 } },
             metric('持仓成本', fmtMoney(sa.costBase, cur)),
+            metric('今日盈亏' + (dayKnown && dayMissing ? ' · ' + dayMissing + ' 只未计入' : ''), dayValue, !dayKnown ? t.sub : dayPnl > 0 ? t.green : dayPnl < 0 ? t.red : undefined),
             metric('浮动盈亏' + (unknownCostRows ? ' · ' + unknownCostRows + ' 条成本未知' : ''), fmtMoney(sa.pnlBase, cur), (sa.pnlBase || 0) >= 0 ? t.green : t.red),
             brokerPnl != null ? metric('持有盈亏（券商）', fmtMoney(brokerPnl, cur), brokerPnl >= 0 ? t.green : t.red) : null,
             metric('最近同步', source ? (source.lastSuccessAt ? dateTimeText(source.lastSuccessAt) : '尚未同步') : '手动维护'),

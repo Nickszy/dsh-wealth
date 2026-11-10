@@ -1,6 +1,6 @@
 {
   "name": "dsh-wealth",
-  "version": "0.9.0",
+  "version": "1.0.0",
   "description": "资产账本：多账户、多资产、多币种持仓与交易流水管理，支持对话维护与本机持久化 | Multi-account, multi-asset, multi-currency portfolio & trade ledger for DeepSeek Harness, with chat-based maintenance.",
   "type": "module",
   "main": "index.js",
