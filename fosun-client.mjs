@@ -507,6 +507,11 @@ export function generateFosunClientKey() {
 /** 从已保存的私钥推导配对公钥：网关登记的客户端公钥必须与私钥同源。 */
 export function fosunClientKeyFromPrivate(privatePem) {
   const key = createPrivateKey({ key: String(privatePem || ''), format: 'pem' })
+  // 只认 P-384：RSA/Ed25519 等私钥也能 createPrivateKey 成功，但网关握手只支持 EC P-384，
+  // 早失败并给出明确原因，避免错配拖到握手阶段才报「签名校验失败」。
+  if (key.asymmetricKeyType !== 'ec' || key.export({ format: 'jwk' }).crv !== 'P-384') {
+    throw new Error('复星客户端私钥必须是 P-384 (secp384r1) EC 私钥')
+  }
   return {
     privatePem: String(privatePem).trim(),
     publicPem: createPublicKey(key).export({ type: 'spki', format: 'pem' }).toString().trim(),

@@ -106,4 +106,70 @@ test('history API previews XLSX-compatible event columns, commits archives only 
   assert.equal((await request('history/preview')).status,405)
   assert.equal((await request('history/commit',{token:'forged'})).status,400)
 })
+test('fosun onboard reuses the pending client key and survives junk bodies (regression: fosunClientKeyFromPrivate)',async()=>{
+  const realFetch=globalThis.fetch
+  const tickets=[]
+  globalThis.fetch=async(url,init)=>{
+    if(!String(url).includes('/api/v1/auth/TicketCreate'))throw new Error('unexpected '+url)
+    tickets.push(JSON.parse(init.body))
+    return {ok:true,status:200,headers:{get:()=>'application/json'},text:async()=>JSON.stringify({code:0,message:'ok',data:{ticket:'TK'+tickets.length,url:'https://h5.fosunxcz.com/open',expireTime:Math.floor(Date.now()/1000)+600}})}
+  }
+  try{
+    let r=await request('sources/fosun/onboard/start',{gatewayUrl:'https://gateway.example.com'})
+    assert.equal(r.status,200);assert.equal(r.data.status,'waiting')
+    assert.match(tickets[0].clientPubKey,/BEGIN PUBLIC KEY/)
+    // pending-fosun 里已留私钥：重试必须复用同一把派生同一公钥（网关按首绑公钥校验）
+    r=await request('sources/fosun/onboard/start',{gatewayUrl:'https://gateway.example.com'})
+    assert.equal(r.status,200)
+    assert.equal(tickets[1].clientPubKey,tickets[0].clientPubKey)
+    // 坏 JSON 体兜底为空对象，处理器不抛未捕获异常
+    r=await request('sources/fosun/onboard/start','{broken json')
+    assert.equal(r.status,200)
+    assert.equal(tickets[2].clientPubKey,tickets[0].clientPubKey)
+  }finally{globalThis.fetch=realFetch}
+})
+test('fosun onboard refuses a corrupt bound key with a clear 400',async()=>{
+  let r=await request('sources/auth/create',{auth:{connector:'fosun',transport:'native',label:'复星坏钥授权',config:{gatewayUrl:'https://gateway.example.com'}},credentials:{apiKey:'ak_test',privateKey:'not a pem at all',serverPublicKey:'-----BEGIN PUBLIC KEY-----\nX\n-----END PUBLIC KEY-----'}})
+  assert.equal(r.status,200)
+  r=await request('sources/fosun/onboard/start',{authId:r.data.auth.id,gatewayUrl:'https://gateway.example.com'})
+  assert.equal(r.status,400);assert.equal(r.data.error.code,'client-key-invalid')
+  assert.match(r.data.error.message,/私钥已损坏/)
+})
+test('fosun onboard self-heals a corrupt pending key and keeps the healed key for retries',async()=>{
+  const slots=new Map([['pending-fosun',{privateKey:'definitely not a pem'}]])
+  const memVault={get:id=>structuredClone(slots.get(id)||{}),set:(id,connector,input)=>slots.set(id,{...(slots.get(id)||{}),...input}),remove:id=>slots.delete(id),configured:()=>false}
+  let handler2
+  const disposers2=[]
+  apply({effect:fn=>{const dispose=fn();if(typeof dispose==='function')disposers2.push(dispose)},get:()=>null,webServer:{register:route=>{handler2=route.handler;return ()=>{}}}},{syncOptions:{credentials:memVault,listAccounts:async()=>({accounts:[],warnings:[]}),fetchSnapshot:async()=>({holdings:[],complete:true,warnings:[],queriedAt:'2026-11-11T00:00:00Z',uploadedAt:null,quoteDate:null})}})
+  const realFetch=globalThis.fetch
+  const tickets=[]
+  globalThis.fetch=async(url,init)=>{
+    if(!String(url).includes('/api/v1/auth/TicketCreate'))throw new Error('unexpected '+url)
+    tickets.push(JSON.parse(init.body))
+    return {ok:true,status:200,headers:{get:()=>'application/json'},text:async()=>JSON.stringify({code:0,message:'ok',data:{ticket:'TK',url:'https://h5.fosunxcz.com/open',expireTime:Math.floor(Date.now()/1000)+600}})}
+  }
+  try{
+    const req2=async(path,body)=>{
+      const req=new EventEmitter();req.headers={host:'127.0.0.1:58938'};req.url='/portfolio/api/'+path;req.method='POST'
+      let status,text=''
+      const res={writeHead:s=>{status=s},end:s=>{text+=s||''},destroy:()=>{}}
+      const p=handler2(req,res)
+      req.emit('data',Buffer.from(JSON.stringify(body)));req.emit('end')
+      await p
+      return {status,data:JSON.parse(text)}
+    }
+    // 坏钥 pending：当作空自愈换新钥，端点不再 500
+    let r=await req2('sources/fosun/onboard/start',{gatewayUrl:'https://gateway.example.com'})
+    assert.equal(r.status,200);assert.equal(r.data.status,'waiting')
+    assert.match(tickets[0].clientPubKey,/BEGIN PUBLIC KEY/)
+    assert.notEqual(slots.get('pending-fosun').privateKey,'definitely not a pem')
+    // 自愈后的新钥被保留：重试复用同一把
+    r=await req2('sources/fosun/onboard/start',{gatewayUrl:'https://gateway.example.com'})
+    assert.equal(r.status,200)
+    assert.equal(tickets[1].clientPubKey,tickets[0].clientPubKey)
+  }finally{
+    globalThis.fetch=realFetch
+    for(const dispose of disposers2)dispose()
+  }
+})
 test.after(()=>{for(const dispose of disposers)dispose();rmSync(dir,{recursive:true,force:true})})
