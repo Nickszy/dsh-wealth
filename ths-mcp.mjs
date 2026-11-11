@@ -53,6 +53,8 @@ async function oauthJson(url, { method = 'POST', headers = {}, body, signal, dep
 
 export async function registerTzzbClient({ redirectUri, signal, deps = {} } = {}) {
   if (!redirectUri) fail('同花顺授权缺少回调地址')
+  // 注意：这台 Spring 授权服务不接受注册元数据里的 scope 字段
+  //（"Invalid Client Registration: scope"）；scope 只在 authorize 请求里带。
   const data = await oauthJson(TZZB_OAUTH_ORIGIN + '/oauth2/register', {
     headers: { 'content-type': 'application/json', accept: 'application/json' },
     body: JSON.stringify({
@@ -61,7 +63,6 @@ export async function registerTzzbClient({ redirectUri, signal, deps = {} } = {}
       grant_types: ['authorization_code', 'refresh_token'],
       response_types: ['code'],
       token_endpoint_auth_method: 'none',
-      scope: TZZB_SCOPE,
     }),
     signal,
     deps,

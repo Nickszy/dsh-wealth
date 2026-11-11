@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { buildTzzbAuthorizeUrl, bookArgs, listThsMcpAccounts, fetchThsMcpSnapshot, fetchThsMcpHistory, TZZB_MCP_ENDPOINT } from './ths-mcp.mjs'
+import { buildTzzbAuthorizeUrl, bookArgs, listThsMcpAccounts, fetchThsMcpSnapshot, fetchThsMcpHistory, registerTzzbClient, TZZB_MCP_ENDPOINT } from './ths-mcp.mjs'
 
 function mcpFetch(tools) {
   return async (_url, options) => {
@@ -14,6 +14,19 @@ function mcpFetch(tools) {
     return { ok: true, status: 200, headers: { get: () => null }, text: async () => JSON.stringify(payload) }
   }
 }
+
+test('client registration omits scope — the THS server rejects it ("Invalid Client Registration: scope")', async () => {
+  let sent = null
+  const fetch = async (_url, options) => {
+    sent = JSON.parse(options.body)
+    return { ok: true, status: 201, headers: { get: () => null }, text: async () => JSON.stringify({ client_id: 'reg-cid' }) }
+  }
+  const result = await registerTzzbClient({ redirectUri: 'http://127.0.0.1:9/callback', deps: { fetch } })
+  assert.equal(result.clientId, 'reg-cid')
+  assert.equal('scope' in sent, false)
+  assert.deepEqual(sent.redirect_uris, ['http://127.0.0.1:9/callback'])
+  assert.equal(sent.token_endpoint_auth_method, 'none')
+})
 
 test('authorize URL is the investment-ledger OAuth endpoint with PKCE', () => {
   const url = new URL(buildTzzbAuthorizeUrl({ clientId: 'cid', redirectUri: 'http://127.0.0.1:9/callback', challenge: 'abc', state: 'st' }))
