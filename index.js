@@ -27,7 +27,7 @@ import { createSyncService } from './sync.mjs'
 import { startTigerDeviceAuth, pollTigerDeviceToken } from './tiger-mcp.mjs'
 import { createTigerLogin } from './tiger-login.mjs'
 import { createQiemanLogin } from './qieman-login.mjs'
-import { generateFosunClientKey, fosunTicketCreate, checkFosunApiKey, verifyFosunCredentials } from './fosun-client.mjs'
+import { generateFosunClientKey, fosunClientKeyFromPrivate, fosunTicketCreate, checkFosunApiKey, verifyFosunCredentials } from './fosun-client.mjs'
 import { checkThsToken, THS_ADMIN_URL } from './ths-data.mjs'
 import { refreshWestockToken } from './westock-mcp.mjs'
 import { createWestockLogin } from './westock-login.mjs'
@@ -490,24 +490,39 @@ export function apply(ctx, config = {}) {
         }
         if (path === 'api/sources/fosun/onboard/start') {
           if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
-          const body = JSON.parse(await readBody(req).catch(() => '{}') || '{}')
+          // 读体与 JSON 解析都兜底：坏请求回落空对象，避免异常请求把宿主进程带崩（unhandledRejection）。
+          const body = await readBody(req).then(text => JSON.parse(text)).catch(() => ({})) || {}
           const target = body.authId ? sync.list().authorizations.find(a => a.id === body.authId && a.connector === 'fosun') : null
           // 客户端密钥对按授权隔离：已有授权重新绑定时复用它保存的私钥；
           // 新开通在「pending-fosun」里保留未完成会话的私钥（重试/扫码超时后
           // 再发起仍是同一把，避免绑定与私钥错配——网关按第一次绑定的公钥校验），
           // 一旦完成开通（pending 里已有 apiKey）下一次新开生成全新密钥对，
           // 因此多账户各持各的私钥，删除授权时私钥随保险库一并删除。
+          // 私钥损坏（截断/手改）不能把端点打死：pending 会话自愈换新钥；
+          // 已绑定授权的私钥坏了换不得（网关登记的还是旧公钥），返回 400 引导重开通。
           let clientPrivatePem = ''
+          let key = null
           if (target) clientPrivatePem = vault.get(target.id).privateKey || ''
           if (!clientPrivatePem) {
             const pending = vault.get('pending-fosun')
             if (!pending.apiKey && pending.privateKey) clientPrivatePem = pending.privateKey
           }
-          if (!clientPrivatePem) {
+          if (clientPrivatePem) {
+            try {
+              key = fosunClientKeyFromPrivate(clientPrivatePem)
+            } catch (error) {
+              if (target) {
+                send(res, 400, { ok: false, error: { code: 'client-key-invalid', message: '该授权保存的客户端私钥已损坏（' + String(error?.message || error) + '）。网关校验要求与绑定相同的私钥，请删除该授权后重新扫码开通' } })
+                return
+              }
+              clientPrivatePem = '' // pending 会话的私钥还没在网关登记过，坏了直接换新
+            }
+          }
+          if (!key) {
             clientPrivatePem = generateFosunClientKey().privatePem
             vault.set('pending-fosun', 'fosun', { privateKey: clientPrivatePem })
+            key = fosunClientKeyFromPrivate(clientPrivatePem)
           }
-          const key = fosunClientKeyFromPrivate(clientPrivatePem)
           const macId = randomUUID().replace(/-/g, '')
           const gatewayUrl = String(body.gatewayUrl || '').trim() || undefined
           const ticket = await fosunTicketCreate({ gatewayUrl, clientPubKey: key.publicPem, macId })

@@ -6,7 +6,7 @@ import {
   createCipheriv, createDecipheriv, createHash, createHmac, createPublicKey,
   diffieHellman, generateKeyPairSync, hkdfSync, randomBytes, sign,
 } from 'node:crypto'
-import { listFosunAccounts, fetchFosunSnapshot, fetchFosunHistory, generateFosunClientKey, fosunTicketCreate, checkFosunApiKey } from './fosun-client.mjs'
+import { listFosunAccounts, fetchFosunSnapshot, fetchFosunHistory, generateFosunClientKey, fosunClientKeyFromPrivate, fosunTicketCreate, checkFosunApiKey } from './fosun-client.mjs'
 import { assertSnapshotContract } from './snapshot-contract.mjs'
 
 const GATEWAY = 'https://gateway.example.com'
@@ -190,6 +190,23 @@ test('复星 TicketCreate onboarding: pending then bound, plus key generation', 
   assert.equal(check.status, 'valid')
 
   await assert.rejects(() => fosunTicketCreate({ gatewayUrl: GATEWAY, clientPubKey: key.publicPem, macId: 'm', deps: { fetch: async () => ({ ok: true, status: 200, headers: { get: () => 'application/json' }, text: async () => JSON.stringify({ code: 500, message: 'boom', data: {} }) }) } }), /boom/)
+})
+
+test('复星 resumes onboarding from the saved private key and re-derives the same public key', () => {
+  const generated = generateFosunClientKey()
+  const derived = fosunClientKeyFromPrivate(generated.privatePem)
+  // The gateway validates against the public key registered on first bind, so a
+  // resumed or re-bound session must produce the identical public key.
+  assert.equal(derived.publicPem, generated.publicPem)
+  assert.match(derived.privatePem, /BEGIN PRIVATE KEY/)
+})
+
+test('复星 fosunClientKeyFromPrivate rejects non-P-384 private keys with a clear reason', () => {
+  const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
+  const rsaPem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString()
+  // RSA 私钥也能 createPrivateKey 成功，但网关握手只支持 EC P-384——必须在派生时早失败
+  assert.throws(() => fosunClientKeyFromPrivate(rsaPem), /P-384/)
+  assert.throws(() => fosunClientKeyFromPrivate('not a pem at all'), /PEM|asn|P-384|error/i)
 })
 
 test('APIKeyCheck maps numeric status: 0 invalid, 1 valid, others unknown', async () => {
