@@ -52,6 +52,9 @@ export function createQiemanLogin(options = {}) {
       const srv = (options.http ?? http).createServer()
       let callbackResolve, callbackReject
       const callback = new Promise((res, rej) => { callbackResolve = res; callbackReject = rej })
+      // callback 要等注册完成后才被 await；abort 早于那一刻时监听器里的 callbackReject
+      // 无人消费，会以 unhandledRejection 杀掉 dsh 宿主。空 catch 只兜崩溃，不影响取值。
+      callback.catch(() => {})
       const cleanup = () => { try { srv.close() } catch {} }
       signal?.addEventListener('abort', () => { cleanup(); reject(new Error('cancelled')); callbackReject(new Error('cancelled')) }, { once: true })
       srv.on('error', err => reject(err))

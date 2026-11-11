@@ -50,6 +50,11 @@ export function createThsMcpLogin(options = {}) {
       let callbackResolve
       let callbackReject
       const callback = new Promise((res, rej) => { callbackResolve = res; callbackReject = rej })
+      // callback 要等到注册完成后才被 await；abort 若早于那一刻（注册失败后总超时定时器仍在跑、
+      // dispose、宿主卸载），监听器里的 callbackReject 就没人消费——Node 24 会按
+      // unhandledRejection 直接杀掉 dsh 宿主。空 catch 只兜住"无人消费"，bounded(loop.callback)
+      // 之后照常拿到同一 promise 的拒绝。
+      callback.catch(() => {})
       const cleanup = () => { try { srv.close() } catch { /* already closed */ } }
       signal?.addEventListener('abort', () => { cleanup(); reject(new Error('cancelled')); callbackReject(new Error('cancelled')) }, { once: true })
       srv.on('error', (err) => reject(err))
