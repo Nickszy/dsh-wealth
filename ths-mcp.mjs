@@ -27,6 +27,16 @@ const pick = (row, fields) => {
   }
   return null
 }
+// 基金接口返回的是表格 {columns, rows}（不是对象数组）；也兼容直接给对象数组的形态。
+function tableRows(value) {
+  if (!value) return []
+  if (Array.isArray(value)) return value.filter((row) => row && typeof row === 'object' && !Array.isArray(row))
+  const columns = Array.isArray(value.columns) ? value.columns : null
+  const rows = Array.isArray(value.rows) ? value.rows : null
+  if (!columns || !rows) return []
+  return rows.filter((row) => Array.isArray(row)).map((row) => Object.fromEntries(columns.map((column, index) => [column, row[index]])))
+}
+const isFundTable = (value) => Array.isArray(value) || (value && typeof value === 'object' && Array.isArray(value.columns) && Array.isArray(value.rows))
 
 function base64url(buffer) {
   return Buffer.from(buffer).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
@@ -158,14 +168,16 @@ export async function listThsMcpAccounts(source, secrets, signal, deps = {}) {
   const warnings = []
   const accounts = []
   const seen = new Set()
-  for (const [group, thsType] of BOOK_GROUPS) {
+  // 同一个 id 会同时出现在多组里（实测：爱基金 id 既在 fund_id 也在 cust_id），
+  // 按「爱基金 > 手工基金 > 手工股票 > 普通股票」保留一次，避免同一账本重复导入。
+  const TYPE_PRIORITY = { ijj: 4, manFund: 3, manual: 2, common: 1 }
+  const groups = [...BOOK_GROUPS].sort((a, b) => TYPE_PRIORITY[b[1]] - TYPE_PRIORITY[a[1]])
+  for (const [group, thsType] of groups) {
     const rows = Array.isArray(data[group]) ? data[group] : []
     for (const row of rows) {
       const id = text(row?.id)
-      if (!id) continue
-      const key = thsType + ':' + id
-      if (seen.has(key)) continue
-      seen.add(key)
+      if (!id || seen.has(id)) continue
+      seen.add(id)
       accounts.push({
         id,
         name: text(row.name) || (thsType === 'ijj' ? '爱基金' : thsType === 'manFund' ? '基金账本' : '未命名账本'),
@@ -195,37 +207,47 @@ export async function fetchThsMcpSnapshot(source, secrets, signal, deps = {}) {
   if (type === 'manFund' || type === 'ijj') {
     const data = await client.call('queryFundAccount', { fundId: args.fundId, custId: args.custId })
     const account = data?.account && typeof data.account === 'object' ? data.account : {}
-    const rows = Array.isArray(data?.funds) ? data.funds : []
-    const holdings = []
-    for (const row of rows) {
-      const symbol = text(pick(row, ['fundCode', 'fundcode', 'code', 'symbol']))
-      const qty = num(pick(row, ['holdShare', 'share', 'fundcount', 'holdQuantity', 'amount']))
-      if (!/^\d{6}$/.test(symbol) || qty === null || qty <= 0) continue
+    // 基金持仓是表格 {columns, rows}：fundcount 份额、fundcost 总成本、fundvalue 市值。
+    const parsed = isFundTable(data?.funds)
+    if (!parsed) warnings.push('基金持仓格式异常，已按部分覆盖处理')
+    const holdings = [], seen = new Set()
+    for (const row of tableRows(data?.funds)) {
+      const symbol = text(pick(row, ['fundcode', 'fundCode', 'code', 'symbol']))
+      const qty = num(pick(row, ['fundcount', 'holdShare', 'share', 'holdQuantity']))
+      if (!/^\d{6}$/.test(symbol) || qty === null || qty <= 0 || seen.has(symbol)) continue
+      seen.add(symbol)
+      const costTotal = num(pick(row, ['fundcost', 'costTotal']))
+      const value = num(pick(row, ['fundvalue', 'marketValue', 'value']))
+      const round6 = (n) => n === null ? null : Math.round(n * 1e6) / 1e6
       holdings.push({
         symbol,
-        name: text(pick(row, ['fundName', 'fundname', 'name'])) || symbol,
+        name: text(pick(row, ['fundname', 'fundName', 'name'])) || symbol,
         market: 'CN',
         assetClass: 'fund',
         currency: 'CNY',
         qty,
-        avgCost: num(pick(row, ['costPrice', 'percost', 'cost'])),
-        manualPrice: num(pick(row, ['nav', 'fundnav', 'currentPrice', 'netValue'])),
+        avgCost: round6(costTotal === null ? null : costTotal / qty),
+        manualPrice: round6(value === null ? null : value / qty),
         externalId: symbol,
       })
     }
+    // 净值日期：旧接口取每行 date 的最大值，MCP 只有账户级 transDate（实测同一天）。
+    const quoteDate = dayOf(account.transDate)
     const sourceTotals = {
       totalAsset: num(account.totalAsset),
       totalCost: num(account.totalCost),
       holdingProfit: num(account.nowProfit),
-      quoteDate: null,
+      // 账户级当日盈亏在基金账户里有现成字段（preProfit）；股票账本没有等价口径。
+      ...(num(account.preProfit) !== null ? { dayProfit: num(account.preProfit) } : {}),
+      quoteDate,
     }
     return normalizeSnapshot({
       holdings,
-      coverage: { fund: 'full' },
+      coverage: { fund: parsed ? 'full' : 'partial' },
       warnings,
       queriedAt: now,
       uploadedAt: null,
-      quoteDate: null,
+      quoteDate,
       sourceTotals,
     })
   }
@@ -264,12 +286,21 @@ export async function fetchThsMcpSnapshot(source, secrets, signal, deps = {}) {
   if (cash !== null) {
     holdings.push({ symbol: 'CASH:CNY', name: '人民币现金', market: 'CASH', assetClass: 'cash', currency: 'CNY', qty: cash, avgCost: 1, manualPrice: 1, externalId: 'cash:CNY' })
   }
+  // 持仓接口不带上传时间；账户列表里的 lastSyncTime（北京时间）与旧接口 upload_time 同源。
+  let uploadedAt = null
+  try {
+    const listed = await client.call('promptAccountSelection', { scope: 'all' })
+    const group = type === 'manual' ? 'manual_id' : 'fund_key'
+    const row = (Array.isArray(listed?.[group]) ? listed[group] : []).find((item) => text(item?.id) === id)
+    const match = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/.exec(text(row?.lastSyncTime))
+    if (match) uploadedAt = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), Number(match[4]) - 8, Number(match[5]), Number(match[6]))).toISOString()
+  } catch { /* 上传时间只是展示用，取不到不影响快照 */ }
   return normalizeSnapshot({
     holdings,
     coverage: { stock: 'full', ...(cash !== null ? { cash: 'full' } : {}) },
     warnings,
     queriedAt: now,
-    uploadedAt: null,
+    uploadedAt,
     quoteDate: null,
     sourceTotals,
   })
@@ -309,20 +340,26 @@ function monthsBetween(from, to) {
 function historyRows(list) {
   const rows = []
   const warnings = []
-  list.forEach((row, index) => {
-    if (!row || typeof row !== 'object') return
+  // queryMoneyHistory 偶尔会把同一条成交按完全相同的字段返回多次（实测 2026-11-11
+  // 002242 多出两条 400@26.5）；旧接口按流水号去重，这里按经济字段折叠，与旧口径一致。
+  const byKey = new Map()
+  let collapsed = 0
+  for (const row of list) {
+    if (!row || typeof row !== 'object') continue
     const date = dayOf(pick(row, ['entryDate', 'entry_date', 'date', 'confirmDate']))
-    if (!date) return
+    if (!date) continue
     const label = text(pick(row, ['opName', 'op_name', 'type', 'businessName']))
     const mapped = kindOf(label)
-    const money = num(pick(row, ['entryMoney', 'entry_money', 'amount', 'money']))
-    const qty = num(pick(row, ['entryCount', 'entry_count', 'share', 'quantity']))
+    const money = num(pick(row, ['entryMoney', 'entry_money', 'amount', 'money', 'transAmount']))
+    const qty = num(pick(row, ['entryCount', 'entry_count', 'share', 'quantity', 'transCount']))
     const price = num(pick(row, ['entryPrice', 'entry_price', 'price', 'nav']))
     const fee = num(pick(row, ['feeTotal', 'fee_total', 'fee']))
     const symbol = text(pick(row, ['stockCode', 'code', 'fundCode', 'symbol']))
     const sign = mapped.sign === null ? cashSignOf(mapped.kind) : mapped.sign
-    const externalId = 'ths-mcp:' + [date, label, symbol, money ?? '', qty ?? '', index].join('|')
-    rows.push({
+    // 稳定键（不含页内序号）：同一笔流水跨同步、跨窗口去重都靠它。
+    const key = 'ths-mcp:' + [date, label, symbol, money ?? '', qty ?? '', price ?? '', fee ?? ''].join('|')
+    if (byKey.has(key)) { collapsed += 1; continue }
+    byKey.set(key, {
       date,
       time: null,
       kind: mapped.kind,
@@ -336,12 +373,13 @@ function historyRows(list) {
       grossAmount: null,
       cashAmount: sign === 0 ? 0 : typeof sign === 'number' && money !== null ? sign * money : null,
       fee: fee !== null && fee >= 0 ? fee : null,
-      externalId,
+      externalId: key,
       note: text(row.remark) || null,
     })
     if (mapped.kind === 'other') warnings.push('同花顺返回了未识别的流水类型，已按其他类型保留')
-  })
-  return { rows, warnings }
+  }
+  if (collapsed > 0) warnings.push('同花顺返回了 ' + collapsed + ' 条完全重复的流水，已合并（与旧接口去重口径一致）')
+  return { rows: [...byKey.values()], warnings }
 }
 
 export async function fetchThsMcpHistory(source, secrets, range, signal, deps = {}) {
@@ -360,7 +398,12 @@ export async function fetchThsMcpHistory(source, secrets, range, signal, deps = 
       fundId: args.fundId,
       custId: args.custId,
     })
-    list = Array.isArray(data?.data) ? data.data : Array.isArray(data?.list) ? data.list : Array.isArray(data) ? data : []
+    // 基金流水是「每月一个 {month, list:{columns, rows}}」，展开成行。
+    const months = Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : []
+    for (const month of months) {
+      if (!month || typeof month !== 'object') continue
+      list = list.concat(tableRows(month.list || month.data || month))
+    }
   } else {
     for (let page = 1; page <= 200; page++) {
       const data = await client.call('queryMoneyHistory', {
