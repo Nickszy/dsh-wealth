@@ -126,7 +126,9 @@ export function createThsMcpLogin(options = {}) {
           ? AbortSignal.any([control.signal, options.signal, AbortSignal.timeout(options.timeoutMs ?? 300000)])
           : AbortSignal.any([control.signal, AbortSignal.timeout(options.timeoutMs ?? 300000)])
         running = run(signal).catch((error) => {
-          if (!disposed) current = { status: signal.aborted ? 'timeout' : 'error', message: signal.aborted ? '等待授权超时，请重试' : '同花顺授权失败：' + (error?.message || 'unknown') }
+          // 适配器抛出的错误已经带了「同花顺授权失败：」前缀，别再叠一层。
+          const detail = String(error?.message || 'unknown')
+          if (!disposed) current = { status: signal.aborted ? 'timeout' : 'error', message: signal.aborted ? '等待授权超时，请重试' : detail.startsWith('同花顺授权') ? detail : '同花顺授权失败：' + detail }
         }).finally(() => { running = undefined; savePending = false; try { server?.close() } catch { /* ignore */ } })
         for (let i = 0; i < 200 && !current.authorizeUrl && running && !['error', 'timeout'].includes(current.status); i++) await (options.sleep ?? sleep)(50, control.signal).catch(() => {})
         return status()
