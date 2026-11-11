@@ -33,8 +33,7 @@ import { refreshWestockToken } from './westock-mcp.mjs'
 import { createWestockLogin } from './westock-login.mjs'
 import qrcode from 'qrcode-generator'
 import { createCredentialStore } from './credentials.mjs'
-import { createThsMcpLogin } from './ths-mcp-login.mjs'
-import { createThsLogin } from './ths-login.mjs'
+import { createThsMcpLogin, openBrowser } from './ths-mcp-login.mjs'
 import { createFutuLogin } from './futu-login.mjs'
 import { createHistoryService } from './history.mjs'
 import { analyze, scopeLedger } from './analytics.mjs'
@@ -142,15 +141,12 @@ export function apply(ctx, config = {}) {
     const status = current.status === 'ready' ? 'ready' : ['error','timeout','disposed'].includes(current.status) ? 'error' : ['starting','waiting'].includes(current.status) ? 'waiting' : 'idle'
     return { status, message: current.message, ...(current.authorizeUrl ? { authorizeUrl: current.authorizeUrl } : {}) }
   }
-  // 旧会话（浏览器抓 Cookie）保留为备用入口；主路径是上面的 MCP 一键授权。
-  const sessionLogin = createThsLogin({ onCookie: cookie => sync.acceptThsLogin(loginTarget, cookie) })
-  const sessionLoginStatus = () => {
-    const current = sessionLogin.status()
-    const status = current.status === 'saved' ? 'ready' : ['failed','timeout','cleanup_pending','disposed'].includes(current.status) ? 'error' : ['starting','acquiring'].includes(current.status) ? 'waiting' : 'idle'
-    return { status, message: current.message }
-  }
-  const thsLoginBusy = () => ['starting','waiting'].includes(login.status().status) || ['starting','acquiring'].includes(sessionLogin.status().status)
-  ctx.effect(() => () => { login.dispose(); sessionLogin.dispose() }, 'dsh-wealth: own THS login lifecycle')
+  // 旧会话（Cookie）备用入口：不开独立浏览器窗口——独立临时指纹会触发同花顺风控
+  //（封号 / 一直提示登录未完成）。改为在系统默认浏览器打开投资账本页，由收藏栏书签
+  // 一键回传或手动粘贴 Cookie 完成；回传沿用 acceptThsLogin 的域名白名单与校验。
+  let cookieAssistState = { status: 'idle', message: '' }
+  const thsLoginBusy = () => ['starting','waiting'].includes(login.status().status)
+  ctx.effect(() => () => login.dispose(), 'dsh-wealth: own THS login lifecycle')
   // Futu official MCP uses browser OAuth (no auth-code). The loopback listener
   // captures the callback and stores the token set under `pending-futu-mcp`.
   let futuLoginSlot = null, futuLoginTarget = null
@@ -469,7 +465,7 @@ export function apply(ctx, config = {}) {
         }
         if (path === 'api/sources/login/cookie/status') {
           if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
-          send(res,200,{ok:true,...sessionLoginStatus()}); return
+          send(res,200,{ok:true,...cookieAssistState}); return
         }
         if (path === 'api/sources/login/cookie/start') {
           if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
@@ -477,9 +473,25 @@ export function apply(ctx, config = {}) {
           const target = body.authId || body.sourceId || null
           if (body.authId && !sync.list().authorizations.some(a=>a.id === body.authId && a.connector === 'ths')) throw new OpError('bad-request','同花顺授权不存在')
           if (!body.authId && target && !sync.list().sources.some(s=>s.id === target && s.connector === 'ths')) throw new OpError('bad-request','同花顺连接不存在')
-          if (thsLoginBusy()) throw new OpError('bad-request','登录正在进行，请先完成当前登录')
           loginTarget = target
-          await sessionLogin.start(); send(res,200,{ok:true,...sessionLoginStatus()}); return
+          cookieAssistState = { status: 'waiting', message: '已在你的默认浏览器打开投资账本页，登录后点收藏栏书签回传，或手动粘贴 Cookie' }
+          openBrowser('https://tzzb.10jqka.com.cn/pc/index.html')
+          send(res,200,{ok:true,...cookieAssistState}); return
+        }
+        // 收藏栏书签跨源回传：浏览器读不到响应（CORS），204 即可；内容仍要过
+        // acceptThsLogin 的域名白名单 + 登录校验，垃圾 Cookie 会在校验时被拒，不入库。
+        if (path === 'api/sources/login/cookie/capture') {
+          if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
+          const raw = await readBody(req)
+          let cookie = String(raw || '')
+          try { const parsed = JSON.parse(cookie); if (parsed && typeof parsed === 'object' && typeof parsed.cookie === 'string') cookie = parsed.cookie } catch { /* plain-text body from the bookmarklet */ }
+          try {
+            await sync.acceptThsLogin(loginTarget, cookie)
+            cookieAssistState = { status: 'ready', message: '登录已保存，可以读取账本' }
+          } catch (error) {
+            cookieAssistState = { status: 'error', message: String(error?.message || error) }
+          }
+          res.writeHead(204); res.end(); return
         }
         if (path === 'api/sources/login/start' || path === 'api/sources/accounts') {
           if (req.method !== 'POST') { res.writeHead(405); res.end(); return }

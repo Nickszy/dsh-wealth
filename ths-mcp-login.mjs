@@ -20,7 +20,9 @@ function bounded(promise, ms, signal) {
     Promise.resolve(promise).then((value) => finish(resolve, value), (error) => finish(reject, error))
   })
 }
-function openBrowser(url, deps = {}) {
+/** Open the user's default browser — the OAuth flow and the cookie fallback both rely on
+ *  the trusted daily profile; a separate scraper window trips 同花顺 risk control. */
+export function openBrowser(url, deps = {}) {
   const spawnImpl = deps.spawn ?? spawn
   try {
     if (process.platform === 'win32') spawnImpl('rundll32', ['url.dll,FileProtocolHandler', url], { stdio: 'ignore', shell: false, windowsHide: true }).unref?.()
