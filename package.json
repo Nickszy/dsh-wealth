@@ -1,6 +1,6 @@
 {
   "name": "dsh-wealth",
-  "version": "0.9.6",
+  "version": "0.9.7",
   "description": "一个本机账本，聚合券商、基金与生活账单：自动同步同花顺/富途/长桥/IB，历史净值回补，AI 直接读改写账本 | One local-first ledger for brokers, funds and life bills, with an AI that reads and edits it.",
   "type": "module",
   "main": "index.js",
