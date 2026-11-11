@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, chmodSy
 import { join } from 'node:path'
 import { DATA_DIR, OpError } from './store.mjs'
 const FIELDS = {
-  ths:['cookie'],
+  ths:['cookie','accessToken','refreshToken','clientId'],
   futu:['websocketKey','mcpToken','refreshToken','clientId'],
   longbridge:['appKey','appSecret','accessToken','mcpToken'],
   qieman:['apiKey','bearerToken','refreshToken','clientId'],
@@ -58,7 +58,7 @@ export function createCredentialStore(dir = DATA_DIR) {
     remove(id){const all=read();if(Object.hasOwn(all,id)){delete all[id];write(all)}},
     configured(id,connector){
       const value=read()[id]||{}
-      if(connector==='ths')return !!value.cookie
+      if(connector==='ths')return !!value.cookie || !!value.accessToken
       if(connector==='longbridge')return ['appKey','appSecret','accessToken'].every(k=>!!value[k])||!!value.mcpToken
       if(connector==='futu')return !!value.websocketKey||!!value.mcpToken
       if(connector==='qieman')return !!value.apiKey||!!value.bearerToken

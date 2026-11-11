@@ -520,6 +520,8 @@ export function createSyncService(ctx, options = {}) {
         updateRecord(source.id,{configRevision:randomUUID(),lastStatus:'never',lastError:null,lastAttemptAt:null,needsReauth:false,failCount:0})
       } else throw bad('待重新登录的同花顺连接不存在')
     }
+    // 覆盖而非合并：新登录不能把旧 MCP 令牌混进 Cookie 暂存（反之亦然）。
+    vault.remove('pending-ths')
     vault.set('pending-ths','ths',secrets)
   }
   async function createAuthorization(input = {}, credentials = {}) {
@@ -533,7 +535,9 @@ export function createSyncService(ctx, options = {}) {
     const existing = input.authId ? all.find(a => a.id === input.authId) : null
     if (input.authId && !existing) throw bad('授权不存在')
     if (existing && existing.connector !== connector) throw bad('授权与来源不匹配')
-    if (existing && existing.transport !== transport) {
+    const savedForUpgrade = existing ? vault.get(existing.id) : {}
+    const upgradingThsMcp = !!(existing && connector === 'ths' && existing.transport === 'native' && transport === 'mcp')
+    if (existing && existing.transport !== transport && !upgradingThsMcp) {
       const bound = config.read().filter(s => (s.authId || s.id) === existing.id)
       if (bound.length) throw bad('该授权下已有导入账户，不能切换接入方式；请新建授权')
     }
@@ -550,7 +554,7 @@ export function createSyncService(ctx, options = {}) {
     const saved = existing ? vault.get(id) : {}
     // A fresh browser token must win over the stored one, otherwise "重新授权"
     // keeps using a possibly revoked credential.
-    const secrets = { ...saved, ...pending, ...typed }
+    const secrets = { ...savedForUpgrade, ...saved, ...pending, ...typed }
     // Connection settings decide where the stored token is sent. They may only
     // change together with fresh credentials, which are verified against the
     // bound sub-accounts below.
@@ -563,9 +567,9 @@ export function createSyncService(ctx, options = {}) {
     if (existing && connector === 'ths') {
       const bound = config.read().filter(s => (s.authId || s.id) === id && s.connector === 'ths')
       if (bound.length) {
-        const probe = { ...(existing.config || {}), connector:'ths', transport:'native', authId:id }
-        const signal = AbortSignal.timeout(45000)
-        const result = options.listAccounts ? await options.listAccounts(probe,secrets,signal) : await listThsAccounts(probe,secrets,signal)
+        const probe = { ...(existing.config || {}), connector:'ths', transport, authId:id }
+        const signal = AbortSignal.timeout(transport === 'mcp' ? 180000 : 45000)
+        const result = options.listAccounts ? await options.listAccounts(probe,secrets,signal) : await entry.transports[transport].listAccounts(probe,secrets,signal)
         const missing = bound.find(s => !result.accounts.some(a => String(a.id) === String(s.portfolioId) && String(a.thsType || 'common') === String(s.thsBookType || 'common')))
         if (missing) throw bad('新登录账号不包含已绑定账本，请为新账号创建授权')
       }
@@ -605,6 +609,18 @@ export function createSyncService(ctx, options = {}) {
     // rename/remove may have landed meanwhile.
     persistAuths(authList().filter(a => a.id !== id).concat(auth))
     if (existing) syncSourceConfigFromAuth(id, authSettings)
+    if (upgradingThsMcp) {
+      const rows = config.read()
+      let changed = false
+      for (const source of rows) {
+        if ((source.authId || source.id) === id && source.connector === 'ths' && source.transport !== 'mcp') {
+          source.transport = 'mcp'
+          source.configRevision = randomUUID()
+          changed = true
+        }
+      }
+      if (changed) config.write(rows)
+    }
     clearReauthForAuth(id, connector)
     return { auth, ...list() }
   }

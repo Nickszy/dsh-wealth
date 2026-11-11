@@ -80,7 +80,7 @@ window.__ModuleLoader__.load({
       '已写入账本': 'Written to ledger', '正在处理…': 'Processing…', '保存账户信息': 'Save account',
       '← 全部账户': '← All accounts', '连接已保存。': 'Connection saved.', '✓ 授权成功': '✓ Authorized',
       '尚未读取账户': 'Accounts not fetched yet', '✓ 已获得 MCP Token': '✓ MCP token obtained',
-      '✓ 授权成功，正在读取账户…': '✓ Authorized, fetching accounts…', '登录并读取账本': 'Sign in & read ledger',
+      '✓ 授权成功，正在读取账户…': '✓ Authorized, fetching accounts…', '登录并读取账本': 'Sign in & read ledger', '一键授权': 'Authorize once', '浏览器登录（Cookie 备用）': 'Browser sign-in (Cookie)',
       '授权并读取账户': 'Authorize & read account', '读取/更新账户': 'Fetch / refresh accounts',
       '保存预算': 'Save budget', '预算进度': 'Budget progress',
       '预计支出': 'Projected spending', '预计收入': 'Projected income', '未来 30 天': 'Next 30 days',
@@ -1823,7 +1823,7 @@ window.__ModuleLoader__.load({
       const embedded = !!mode, reauth = reauthAuth || null
       const options = [
         ['manual', '文件导入', 'CSV / TSV 或粘贴表格', '↥'],
-        ['ths', '同花顺', '独立登录 · 人民币投资账本', '同'],
+        ['ths', '同花顺', '官方 MCP · 一键授权', '同'],
         ['futu', '富途', '官方 MCP 浏览器授权 · 支持本机 OpenD', '富'],
         ['longbridge', '长桥', '官方 MCP 授权码连接', '长'],
         ['qieman', '且慢', '盈米官方 MCP · 长期 API Key', '且'],
@@ -1865,7 +1865,7 @@ window.__ModuleLoader__.load({
           if (inflight || !current()) return
           if (Date.now() - loginStart.current > 600000) { clearInterval(timer); setLogin({ status: 'error', message: '登录等待已超时，请重新发起。' }); return }
           inflight = true
-          try { const r = await get('sources/login/status'); if (current()) setLogin({ status: r.status, message: r.message }) }
+          try { const r = await get(loginMode.current === 'cookie' ? 'sources/login/cookie/status' : 'sources/login/status'); if (current()) setLogin({ status: r.status, message: r.message, authorizeUrl: r.authorizeUrl }) }
           catch (e) { if (current()) setLogin({ status: 'error', message: e.message }) }
           finally { inflight = false }
         }, 2000)
@@ -1924,7 +1924,16 @@ window.__ModuleLoader__.load({
         return source
       }
       const payload = source => { const creds = cleanCredentials(); return { source, ...(Object.keys(creds).length ? { credentials: creds } : {}) } }
-      const transportOf = () => choice === 'custom' ? form.transport : (choice === 'qieman' || choice === 'tiger' || ((choice === 'longbridge' && form.lbInterface === 'mcp') || (choice === 'futu' && form.futuInterface === 'mcp')) ? 'mcp' : 'native')
+      const transportOf = () => {
+        if (choice === 'custom') return form.transport
+        if (choice === 'ths') {
+          if (login?.status === 'ready') return loginMode.current === 'cookie' ? 'native' : 'mcp'
+          if (credentials.cookie) return 'native'
+          if (form.id && form.transport) return form.transport
+          return 'mcp'
+        }
+        return (choice === 'qieman' || choice === 'tiger' || ((choice === 'longbridge' && form.lbInterface === 'mcp') || (choice === 'futu' && form.futuInterface === 'mcp')) ? 'mcp' : 'native')
+      }
       const authSettings = () => {
         const out = {}
         if (choice === 'futu' && form.futuInterface === 'mcp') { if (form.currency) out.currency = form.currency }
@@ -1959,7 +1968,7 @@ window.__ModuleLoader__.load({
       const adopt = () => act('adopt', async current => { const out = await requestAuth(); if (current()) applyAuth(out) })
       const discover = () => act('accounts', async current => {
         if (!auth && ['ths','futu'].includes(choice)) {
-          if (choice === 'ths' && login?.status !== 'ready') throw new Error('请先完成同花顺浏览器登录')
+          if (choice === 'ths' && !credentials.cookie && login?.status !== 'ready') throw new Error('请先点击一键授权，在浏览器中同意访问投资账本')
           if (choice === 'futu' && form.futuInterface === 'mcp' && login?.status !== 'ready') throw new Error('请先完成富途浏览器授权')
         }
         if (!auth && choice === 'longbridge' && form.lbInterface === 'mcp' && !credentials.mcpToken) throw new Error('请先在 open.longbridge.com/connect 生成授权码并点击兑换')
@@ -1971,7 +1980,9 @@ window.__ModuleLoader__.load({
         applyAuth(out)
         if (!out.accounts.length) setMessage('授权已保存，但没有读到账户，请检查登录、凭据和连接设置。')
       })
-      const startLogin = () => { if (disabled || lock.current) return; invalidate(); setForm(old => ({ ...old, portfolioId: '', brokerAccountId: '' })); loginAttempt.current++; const attempt = loginAttempt.current; return act('login', async current => { const r = await post('sources/login/start', { authId: auth?.id || reauth?.id || undefined, sourceId: form.id || undefined }); if (!current() || attempt !== loginAttempt.current) return; loginStart.current = Date.now(); setLogin({ status: r.status || 'opening', message: r.message }); }) }
+      const loginMode = React.useRef('mcp')
+      const startLogin = () => { if (disabled || lock.current) return; invalidate(); setForm(old => ({ ...old, portfolioId: '', brokerAccountId: '' })); loginAttempt.current++; const attempt = loginAttempt.current; loginMode.current = 'mcp'; return act('login', async current => { const r = await post('sources/login/start', { authId: auth?.id || reauth?.id || undefined, sourceId: form.id || undefined }); if (!current() || attempt !== loginAttempt.current) return; loginStart.current = Date.now(); setLogin({ status: r.status || 'opening', message: r.message, authorizeUrl: r.authorizeUrl }); }) }
+      const startSessionLogin = () => { if (disabled || lock.current) return; invalidate(); setForm(old => ({ ...old, portfolioId: '', brokerAccountId: '' })); loginAttempt.current++; const attempt = loginAttempt.current; loginMode.current = 'cookie'; return act('session-login', async current => { const r = await post('sources/login/cookie/start', { authId: auth?.id || reauth?.id || undefined, sourceId: form.id || undefined }); if (!current() || attempt !== loginAttempt.current) return; loginStart.current = Date.now(); setLogin({ status: r.status || 'opening', message: r.message, authorizeUrl: undefined }); }) }
       React.useEffect(() => {
         if (!['ths','futu','tiger','qieman','fosun'].includes(choice) || login?.status !== 'ready' || !loginAttempt.current || adopted.current === loginAttempt.current || working || loading || busy || lock.current) return
         if (choice === 'futu' && form.futuInterface !== 'mcp') return
@@ -2167,7 +2178,7 @@ window.__ModuleLoader__.load({
       const accountKey = choice === 'ths' ? 'portfolioId' : 'brokerAccountId'
       const thsBookLabel = a => a.thsType === 'ijj' ? '爱基金' : a.thsType === 'manFund' ? '基金账本' : null
       const descriptions = {
-        ths: '独立于其他 DSH 插件。浏览器登录后，由本机服务保存登录状态；支持人民币沪深股票 / ETF 投资账本，以及爱基金等基金账本。',
+        ths: '同花顺投资账本官方 MCP。点「一键授权」会打开系统浏览器，登录同花顺并同意后，本机保存授权并读取股票、ETF 与爱基金 / 基金账本。授权会记住，过期自动续期。',
         futu: '两种接入：官方 MCP（推荐）在浏览器完成富途授权，插件自动读取持仓、余额与流水，无需安装 OpenD；或本机 OpenD 直连（需启用 WebSocket，核对交易环境、市场和资金币种）。不需要其他 DSH 插件。',
         longbridge: '官方 MCP 接入：在 open.longbridge.com/connect 生成一次性授权码，兑换后自动读取持仓、余额与流水；也可改用 OpenAPI 凭据（App Key / Secret / Access Token）。不需要其他 DSH 插件。',
         qieman: '盈米 / 且慢官方 MCP。点「浏览器授权」用且慢账号登录，插件通过官方 OAuth（动态注册 + PKCE + 本机回环）获取长期凭据并自动续期，读取总账户 / 子账户的基金持仓、资产与收益。且慢不提供逐笔流水，历史记录可用账单文件补录。',
@@ -2214,8 +2225,10 @@ window.__ModuleLoader__.load({
             scheduleControl()) : null,
           choice === 'custom' && !form.id ? h('div', { style: { marginTop: 12, color: t.sub, fontSize: 11 } }, '高级接口使用专用空账户。', h('button', { disabled, onClick: openAccounts, style: { ...T.btn(t, false), marginLeft: 8 } }, '创建本地账户 ↗')) : null,
           choice === 'ths' ? h('div', { style: { marginTop: 18 } },
-            h('div', { className: 'wealth-source-actions', style: { alignItems: 'center' } }, h('button', { style: T.btn(t, false), disabled: disabled || ['opening','waiting'].includes(login?.status), onClick: startLogin }, ['opening','waiting'].includes(login?.status) ? '等待浏览器登录…' : login?.status === 'ready' || auth ? '重新登录' : '浏览器登录'), h('span', { style: { color: login?.status === 'error' ? t.red : t.sub, fontSize: 11 }, role: 'status' }, login ? loginText(login.status, login.message, { opening: '正在打开登录窗口', waiting: '请在登录窗口完成登录', ready: '登录已就绪，可读取账本', error: '登录未完成' }) : '登录状态由本机服务保存')),
-            h('details', { style: { marginTop: 12, fontSize: 12, color: t.sub } }, h('summary', { style: { cursor: 'pointer' } }, '手动 Cookie（可选备用方式）'), h('div', { style: { marginTop: 10 } }, secret('同花顺 Cookie', 'cookie')))) : null,
+            h('div', { className: 'wealth-source-actions', style: { alignItems: 'center' } }, h('button', { style: T.btn(t, true), disabled: disabled || ['opening','waiting'].includes(login?.status), onClick: startLogin }, ['opening','waiting'].includes(login?.status) && loginMode.current === 'mcp' ? '等待浏览器授权…' : login?.status === 'ready' && loginMode.current === 'mcp' ? '重新授权' : '一键授权'), h('span', { style: { color: login?.status === 'error' && loginMode.current === 'mcp' ? t.red : login?.status === 'ready' && loginMode.current === 'mcp' ? t.accent : t.sub, fontSize: 11 }, role: 'status' }, loginMode.current === 'mcp' && login ? loginText(login.status, login.message, { opening: '正在打开授权页面', waiting: '请在浏览器完成同花顺授权', ready: '投资账本已连接，可读取账本', error: '授权未完成' }) : '推荐：点一次即可，浏览器里登录并同意')),
+            loginMode.current === 'mcp' && login?.authorizeUrl && ['opening','waiting'].includes(login.status) ? h('p', { style: { marginTop: 8, fontSize: 11 } }, h('a', { href: login.authorizeUrl, target: '_blank', rel: 'noreferrer', style: { color: t.accent } }, '如果没有自动打开，点这里完成同花顺授权 ↗')) : null,
+            h('div', { className: 'wealth-source-actions', style: { alignItems: 'center', marginTop: 10 } }, h('button', { style: T.btn(t, false), disabled: disabled || ['opening','waiting'].includes(login?.status), onClick: startSessionLogin }, ['opening','waiting'].includes(login?.status) && loginMode.current === 'cookie' ? '等待浏览器登录…' : login?.status === 'ready' && loginMode.current === 'cookie' ? '重新登录' : '浏览器登录（Cookie 备用）'), h('span', { style: { color: login?.status === 'error' && loginMode.current === 'cookie' ? t.red : t.sub, fontSize: 11 }, role: 'status' }, loginMode.current === 'cookie' && login ? loginText(login.status, login.message, { opening: '正在打开登录窗口', waiting: '请在登录窗口完成登录', ready: '登录已就绪，可读取账本', error: '登录未完成' }) : '备用：打开同花顺窗口抓取 Cookie（session）')),
+            h('details', { style: { marginTop: 12, fontSize: 12, color: t.sub } }, h('summary', { style: { cursor: 'pointer' } }, '手动 Cookie（旧方式，可选）'), h('div', { style: { marginTop: 10 } }, secret('同花顺 Cookie', 'cookie')))) : null,
           choice === 'futu' ? h('div', { style: { marginTop: 18 } },
             selectField('接入方式', 'futuInterface', [['mcp','官方 MCP（浏览器授权，推荐）'],['sdk','本机 OpenD（WebSocket）']]),
             form.futuInterface === 'mcp' ? h('div', { style: { marginTop: 12 } },

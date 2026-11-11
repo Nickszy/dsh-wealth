@@ -3,6 +3,7 @@
 // 新增一家券商 = 新增一个适配器模块 + 在 CONNECTORS 里加一个条目。
 import { OpError } from './store.mjs'
 import { listThsAccounts, fetchStandaloneThsSnapshot, fetchThsHistory } from './ths-client.mjs'
+import { listThsMcpAccounts, fetchThsMcpSnapshot, fetchThsMcpHistory, refreshTzzbToken } from './ths-mcp.mjs'
 import { listFutuAccounts, fetchFutuSnapshot, listLongbridgeAccounts, fetchLongbridgeSnapshot } from './brokers-sdk.mjs'
 import { listLongbridgeMcpAccounts, fetchLongbridgeMcpSnapshot, fetchLongbridgeMcpHistory, longbridgeHistory } from './lb-mcp.mjs'
 import { listFutuMcpAccounts, fetchFutuMcpSnapshot, refreshFutuToken, fetchFutuMcpHistory, futuHistory } from './futu-mcp.mjs'
@@ -57,7 +58,10 @@ export function resolveSaveTransport(id, raw) {
   if (!entry) return raw
   const keys = Object.keys(entry.transports)
   if (keys.length === 1) return keys[0]
-  return raw || entry.defaultTransport
+  if (entry.transports[raw]) return raw
+  // 富途/长桥沿用旧行为：未识别的值原样留下，交给后续分支报错。
+  if (id === 'futu' || id === 'longbridge') return raw || entry.defaultTransport
+  return entry.defaultTransport
 }
 /** 注册表之外（custom）的通用指纹：与旧实现的缺省拼接一致。 */
 export function defaultFingerprintParts(source) {
@@ -82,7 +86,7 @@ export const CONNECTORS = {
     id: 'ths',
     label: '同花顺投资账本',
     name: '同花顺',
-    description: '插件独立登录并读取人民币股票、ETF 和现金，无需安装其他插件。',
+    description: '官方投资账本 MCP。点一次授权，在浏览器登录同花顺并同意后自动读取账本。',
     defaultTransport: 'native',
     accountIdField: 'portfolioId',
     bookTypeFromList: true,
@@ -93,7 +97,8 @@ export const CONNECTORS = {
       return parts
     },
     connectCurrency: fixedCurrency('CNY'),
-    auth: { pendingSlot: 'pending-ths', pendingFields: ['cookie'], pendingTransports: ['native'], pendingScope: 'new-only', captureOnSave: true },
+    resolveTransport: (source, secrets = {}) => (secrets.accessToken ? 'mcp' : (source.transport === 'mcp' ? 'mcp' : 'native')),
+    auth: { pendingSlot: 'pending-ths', pendingFields: ['cookie'], pendingTransports: ['native', 'mcp'], pendingScope: 'new-only', captureOnSave: true },
     transports: {
       native: {
         listAccounts: listThsAccounts,
@@ -112,6 +117,25 @@ export const CONNECTORS = {
         },
         auth: {
           validate: secrets => secrets.cookie ? null : '请先完成同花顺浏览器登录',
+        },
+      },
+      mcp: {
+        listAccounts: listThsMcpAccounts,
+        fetchSnapshot: fetchThsMcpSnapshot,
+        fetchHistory: fetchThsMcpHistory,
+        timeoutMs: TRANSPORT_TIMEOUT_MS.mcp,
+        authConfig: () => ({}),
+        sourceFields(input, { account }) {
+          if (!input.portfolioId || typeof input.portfolioId !== 'string') throw bad('请明确选择同花顺账本')
+          if (account.currency !== 'CNY') throw bad('同花顺账本须绑定 CNY 账户')
+          const bookType = input.thsBookType === undefined || input.thsBookType === null || input.thsBookType === '' ? 'common' : String(input.thsBookType)
+          if (!['common', 'manual', 'manFund', 'ijj'].includes(bookType)) throw bad('同花顺账本类型无效')
+          return { portfolioId: input.portfolioId, thsBookType: bookType }
+        },
+        auth: {
+          validate: secrets => secrets.accessToken ? null : '请先点击一键授权',
+          refresh: ({ refreshToken, clientId, signal }) => refreshTzzbToken({ refreshToken, clientId, signal }),
+          tokenFields: token => ({ accessToken: token.accessToken, ...(token.refreshToken ? { refreshToken: token.refreshToken } : {}), ...(token.clientId ? { clientId: token.clientId } : {}) }),
         },
       },
     },

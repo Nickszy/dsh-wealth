@@ -33,6 +33,7 @@ import { refreshWestockToken } from './westock-mcp.mjs'
 import { createWestockLogin } from './westock-login.mjs'
 import qrcode from 'qrcode-generator'
 import { createCredentialStore } from './credentials.mjs'
+import { createThsMcpLogin } from './ths-mcp-login.mjs'
 import { createThsLogin } from './ths-login.mjs'
 import { createFutuLogin } from './futu-login.mjs'
 import { createHistoryService } from './history.mjs'
@@ -127,13 +128,29 @@ export function apply(ctx, config = {}) {
   }
   const dataSourceStatus = () => ({ westock: { configured: vault.configured(WESTOCK_ID, 'westock'), protocol: !!westockProtocolStatus() }, thsData: { configured: vault.configured(DATA_TOKEN_ID, 'finapi'), adminUrl: THS_ADMIN_URL } })
   let loginTarget = null
-  const login = createThsLogin({ onCookie:cookie=>sync.acceptThsLogin(loginTarget,cookie) })
+  const login = createThsMcpLogin({ onToken: token => {
+    const fields = { accessToken: token.accessToken }
+    if (token.refreshToken) fields.refreshToken = token.refreshToken
+    if (token.clientId) fields.clientId = token.clientId
+    if (loginTarget && sync.list().authorizations.some(a => a.id === loginTarget && a.connector === 'ths')) vault.set(loginTarget, 'ths', fields)
+    // 覆盖而非合并：MCP 令牌不能混进旧的 Cookie 暂存。
+    vault.remove('pending-ths')
+    vault.set('pending-ths', 'ths', fields)
+  } })
   const loginStatus = () => {
     const current = login.status()
-    const status = current.status === 'saved' ? 'ready' : ['failed','timeout','cleanup_pending','disposed'].includes(current.status) ? 'error' : ['starting','acquiring'].includes(current.status) ? 'waiting' : 'idle'
-    return { status, message:current.message }
+    const status = current.status === 'ready' ? 'ready' : ['error','timeout','disposed'].includes(current.status) ? 'error' : ['starting','waiting'].includes(current.status) ? 'waiting' : 'idle'
+    return { status, message: current.message, ...(current.authorizeUrl ? { authorizeUrl: current.authorizeUrl } : {}) }
   }
-  ctx.effect(() => () => login.dispose(), 'dsh-wealth: own THS login lifecycle')
+  // 旧会话（浏览器抓 Cookie）保留为备用入口；主路径是上面的 MCP 一键授权。
+  const sessionLogin = createThsLogin({ onCookie: cookie => sync.acceptThsLogin(loginTarget, cookie) })
+  const sessionLoginStatus = () => {
+    const current = sessionLogin.status()
+    const status = current.status === 'saved' ? 'ready' : ['failed','timeout','cleanup_pending','disposed'].includes(current.status) ? 'error' : ['starting','acquiring'].includes(current.status) ? 'waiting' : 'idle'
+    return { status, message: current.message }
+  }
+  const thsLoginBusy = () => ['starting','waiting'].includes(login.status().status) || ['starting','acquiring'].includes(sessionLogin.status().status)
+  ctx.effect(() => () => { login.dispose(); sessionLogin.dispose() }, 'dsh-wealth: own THS login lifecycle')
   // Futu official MCP uses browser OAuth (no auth-code). The loopback listener
   // captures the callback and stores the token set under `pending-futu-mcp`.
   let futuLoginSlot = null, futuLoginTarget = null
@@ -450,6 +467,20 @@ export function apply(ctx, config = {}) {
           if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
           send(res,200,{ok:true,...loginStatus()}); return
         }
+        if (path === 'api/sources/login/cookie/status') {
+          if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
+          send(res,200,{ok:true,...sessionLoginStatus()}); return
+        }
+        if (path === 'api/sources/login/cookie/start') {
+          if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
+          const body = JSON.parse(await readBody(req))
+          const target = body.authId || body.sourceId || null
+          if (body.authId && !sync.list().authorizations.some(a=>a.id === body.authId && a.connector === 'ths')) throw new OpError('bad-request','同花顺授权不存在')
+          if (!body.authId && target && !sync.list().sources.some(s=>s.id === target && s.connector === 'ths')) throw new OpError('bad-request','同花顺连接不存在')
+          if (thsLoginBusy()) throw new OpError('bad-request','登录正在进行，请先完成当前登录')
+          loginTarget = target
+          await sessionLogin.start(); send(res,200,{ok:true,...sessionLoginStatus()}); return
+        }
         if (path === 'api/sources/login/start' || path === 'api/sources/accounts') {
           if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
           const body = JSON.parse(await readBody(req))
@@ -457,7 +488,7 @@ export function apply(ctx, config = {}) {
             const target = body.authId || body.sourceId || null
             if (body.authId && !sync.list().authorizations.some(a=>a.id === body.authId && a.connector === 'ths')) throw new OpError('bad-request','同花顺授权不存在')
             if (!body.authId && target && !sync.list().sources.some(s=>s.id === target && s.connector === 'ths')) throw new OpError('bad-request','同花顺连接不存在')
-            if (['starting','acquiring'].includes(login.status().status)) throw new OpError('bad-request','登录正在进行，请先完成当前登录')
+            if (thsLoginBusy()) throw new OpError('bad-request','登录正在进行，请先完成当前登录')
             loginTarget = target
             await login.start(); send(res,200,{ok:true,...loginStatus()}); return
           }

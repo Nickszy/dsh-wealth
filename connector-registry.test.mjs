@@ -78,14 +78,18 @@ test('per-transport timeouts keep the historical literal values', () => {
 })
 
 test('transport inference matches the pre-refactor rules', () => {
-  for (const id of ['ths', 'fosun', 'ib']) assert.equal(resolveAuthTransport(id, 'mcp'), 'native', id)
+  assert.equal(resolveAuthTransport('ths', 'mcp'), 'mcp')
+  assert.equal(resolveAuthTransport('ths', undefined), 'native')
+  for (const id of ['fosun', 'ib']) assert.equal(resolveAuthTransport(id, 'mcp'), 'native', id)
   assert.equal(resolveAuthTransport('qieman', 'native'), 'mcp')
   assert.equal(resolveAuthTransport('tiger', undefined), 'mcp')
   assert.equal(resolveAuthTransport('futu', 'mcp'), 'mcp')
   assert.equal(resolveAuthTransport('futu', 'native'), 'native')
   assert.equal(resolveAuthTransport('futu', 'banana'), 'native')
   assert.equal(resolveAuthTransport('longbridge', undefined), 'native')
-  for (const id of ['ths', 'fosun', 'ib']) assert.equal(resolveSaveTransport(id, 'mcp'), 'native', id)
+  assert.equal(resolveSaveTransport('ths', 'mcp'), 'mcp')
+  assert.equal(resolveSaveTransport('ths', undefined), 'native')
+  for (const id of ['fosun', 'ib']) assert.equal(resolveSaveTransport(id, 'mcp'), 'native', id)
   assert.equal(resolveSaveTransport('qieman', 'native'), 'mcp')
   assert.equal(resolveSaveTransport('tiger', undefined), 'mcp')
   assert.equal(resolveSaveTransport('futu', 'mcp'), 'mcp')
@@ -98,7 +102,7 @@ test('transport inference matches the pre-refactor rules', () => {
 
 test('getConnectorStatus output is byte-identical to the pre-refactor catalogue', () => {
   assert.deepEqual(getConnectorStatus({ get() { throw Error('must not access plugins') } }), [
-    { id:'ths',label:'同花顺投资账本',available:true,transport:'native',description:'插件独立登录并读取人民币股票、ETF 和现金，无需安装其他插件。' },
+    { id:'ths',label:'同花顺投资账本',available:true,transport:'native',description:'官方投资账本 MCP。点一次授权，在浏览器登录同花顺并同意后自动读取账本。' },
     { id:'futu',label:'富途',available:true,transport:'native',description:'官方 OpenD JavaScript 只读连接；请运行并登录 OpenD，启用 WebSocket。' },
     { id:'longbridge',label:'长桥',available:true,transport:'native',description:'官方 Longport SDK，使用自己的 App Key、Secret 和 Access Token。' },
     { id:'qieman',label:'且慢',available:true,transport:'mcp',description:'盈米 / 且慢官方 MCP；用长期 API Key 读取基金持仓与收益，无需浏览器授权。' },
@@ -110,7 +114,7 @@ test('getConnectorStatus output is byte-identical to the pre-refactor catalogue'
 })
 
 test('adapter modules never import the registry (dependency is one-way)', () => {
-  for (const file of ['ths-client.mjs', 'brokers-sdk.mjs', 'lb-mcp.mjs', 'futu-mcp.mjs', 'qieman-mcp.mjs', 'tiger-mcp.mjs', 'fosun-client.mjs', 'ib-client.mjs', 'credentials.mjs']) {
+  for (const file of ['ths-client.mjs', 'ths-mcp.mjs', 'brokers-sdk.mjs', 'lb-mcp.mjs', 'futu-mcp.mjs', 'qieman-mcp.mjs', 'tiger-mcp.mjs', 'fosun-client.mjs', 'ib-client.mjs', 'credentials.mjs']) {
     assert.doesNotMatch(readFileSync(new URL('./' + file, import.meta.url), 'utf8'), /connector-registry/, file)
   }
 })
