@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" role="img" aria-label="dsh-wealth">
+  <title>dsh-wealth</title>
+  <rect x="10" y="13.5" width="22" height="9" rx="4.5" fill="currentColor" color="#17233a"/>
+  <rect x="10" y="27.5" width="36" height="9" rx="4.5" fill="#17233a"/>
+  <rect x="10" y="41.5" width="46" height="9" rx="4.5" fill="#17233a"/>
+  <circle cx="51.5" cy="18" r="4.5" fill="#17233a"/>
+</svg>

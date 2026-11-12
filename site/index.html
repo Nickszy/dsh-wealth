@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dsh-wealth · 券商、基金、生活账单，装进一个本机账本</title>
+<meta name="description" content="dsh-wealth 是 DeepSeek Harness 的本机优先资产账本插件：一次授权同步同花顺、富途、长桥、且慢、老虎、复星与 IB，导入微信 / 支付宝账单，让 AI 直接读改同一份账本。">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<meta property="og:type" content="website">
+<meta property="og:title" content="dsh-wealth · 一个本机账本，装下你的全部家底">
+<meta property="og:description" content="一次授权同步 7 家券商与账本，AI 直接读、改、核对同一份账本；数据留在你的电脑上。">
+<meta property="og:image" content="https://wealth.nickszy.com/assets/og.jpg">
+<meta property="og:url" content="https://wealth.nickszy.com/">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="nav" id="top">
+  <div class="wrap nav-inner">
+    <a class="brand" href="#top" aria-label="dsh-wealth 首页">
+      <img src="assets/logo-mark.svg" alt="" width="34" height="34">
+      <span class="brand-text"><strong>dsh-wealth</strong><small>WEALTH LEDGER · 资产账本</small></span>
+    </a>
+    <nav class="links" aria-label="页面导航">
+      <a href="#why">为什么</a>
+      <a href="#features">功能</a>
+      <a href="#sources">数据源</a>
+      <a href="#privacy">隐私</a>
+      <a href="#start">开始</a>
+    </nav>
+    <div class="nav-cta">
+      <a class="btn btn-ghost" href="https://github.com/Nickszy/dsh-wealth" rel="noopener">GitHub ↗</a>
+      <a class="btn btn-solid" href="#start">安装</a>
+    </div>
+  </div>
+</header>
+
+<main>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="wrap hero-grid">
+    <div class="hero-copy">
+      <p class="kicker reveal">DEEPSEEK HARNESS PLUGIN · LOCAL-FIRST</p>
+      <h1 class="reveal">钱在哪里，<br><em>一眼看清。</em></h1>
+      <p class="lede reveal">一次授权，连上同花顺、富途、长桥、且慢、老虎、复星与 IB。
+      持仓、流水、生活账单收进同一份本机账本，再让 AI 帮你核对它。</p>
+      <div class="hero-actions reveal">
+        <a class="btn btn-solid btn-lg" href="#start">30 秒开始 <span aria-hidden="true">↗</span></a>
+        <a class="btn btn-outline btn-lg" href="https://github.com/Nickszy/dsh-wealth" rel="noopener">看源码</a>
+      </div>
+      <ul class="hero-meta reveal">
+        <li>7 家券商与账本</li>
+        <li>TWR / XIRR 双口径</li>
+        <li>0 云端存储</li>
+        <li>MIT 开源</li>
+      </ul>
+    </div>
+    <figure class="hero-shot reveal">
+      <div class="frame">
+        <div class="chrome"><i></i><i></i><i></i><span>dsh-wealth · 总览</span></div>
+        <img src="assets/shots/hero.jpg" alt="dsh-wealth 总览界面：总资产、资产轨迹、资产配置和右侧资产助手" width="1600" height="1000">
+      </div>
+      <figcaption>真实界面 · 演示数据</figcaption>
+    </figure>
+  </div>
+  <div class="wrap source-strip reveal" aria-label="支持的数据源">
+    <span class="strip-label">已连接</span>
+    <span>同花顺</span><span>富途</span><span>长桥</span><span>且慢</span><span>老虎</span><span>复星·星财富</span><span>IB</span>
+  </div>
+</section>
+
+<!-- WHY -->
+<section class="section" id="why">
+  <div class="wrap">
+    <header class="section-head">
+      <p class="kicker">01 · WHY</p>
+      <h2>你的钱，散在七个 App 里。</h2>
+      <p class="section-sub">券商一个、基金一个、支付软件又一个。每个 App 都想当你的「主页」，但没有一个真的算得清你。</p>
+    </header>
+    <ol class="why-list">
+      <li class="reveal">
+        <span class="num">01</span>
+        <div><h3>账户是散落的</h3><p>同花顺、富途、长桥、基金平台、微信零钱、信用卡——总资产要靠手工加。dsh-wealth 用一次授权把它们接进同一本账。</p></div>
+      </li>
+      <li class="reveal">
+        <span class="num">02</span>
+        <div><h3>收益是模糊的</h3><p>App 只告诉你「持仓涨了多少」，不告诉你出入金之后的真实回报。这里给出 TWR 与 XIRR 双口径，以及最大回撤。</p></div>
+      </li>
+      <li class="reveal">
+        <span class="num">03</span>
+        <div><h3>AI 碰不到真实数据</h3><p>大多数 AI 只能听你口述。这个助手直接读你的账本，改动先出草案，你点头才写入。</p></div>
+      </li>
+    </ol>
+  </div>
+</section>
+
+<!-- FEATURES -->
+<section class="section section-tint" id="features">
+  <div class="wrap">
+    <header class="section-head">
+      <p class="kicker">02 · WHAT YOU GET</p>
+      <h2>一本记得清楚的账。</h2>
+      <p class="section-sub">不是行情终端，也不是记账玩具。它回答三个问题：我有多少钱、钱从哪来、最近花到哪去。</p>
+    </header>
+
+    <article class="feature">
+      <div class="feature-copy reveal">
+        <p class="kicker">CONNECT</p>
+        <h3>一次登录，就是一条授权。</h3>
+        <p>同一个券商登录一次，下面所有子账户都列在同一张卡上：想导哪个导哪个，可重命名、重新授权、随时移除。
+        富途、长桥、且慢、老虎、复星都走官方 OAuth / MCP，插件不接触密码。</p>
+        <ul class="ticks">
+          <li>同花顺官方 MCP：股票账本 + 爱基金 + 基金账本</li>
+          <li>富途官方 MCP 或本机 OpenD，二选一</li>
+          <li>导入后每天 21:00 自动同步，也可设为仅手动</li>
+        </ul>
+      </div>
+      <div class="feature-media reveal">
+        <div class="frame"><div class="chrome"><i></i><i></i><i></i><span>新增账户</span></div>
+          <img src="assets/shots/connectors.jpg" alt="新增账户弹窗：同花顺、富途、长桥、且慢、老虎、复星、IB 与手工导入" width="1280" height="800" loading="lazy">
+        </div>
+        <div class="frame frame-offset"><div class="chrome"><i></i><i></i><i></i><span>授权账号</span></div>
+          <img src="assets/shots/authorizations.jpg" alt="授权账号弹窗：一次授权下列出全部子账户" width="1280" height="800" loading="lazy">
+        </div>
+      </div>
+    </article>
+
+    <article class="feature feature-flip">
+      <div class="feature-copy reveal">
+        <p class="kicker">MEASURE</p>
+        <h3>真实收益，不是「涨了多少」。</h3>
+        <p><strong>时间加权收益 TWR</strong> 剔除入金出金的影响，让不同账户可以公平比较；
+        <strong>资金加权年化 XIRR</strong> 才是你自己的真实年化。再配上最大回撤、资金流总览与资产负债表。</p>
+        <ul class="ticks">
+          <li>按资产类别 / 行业 / 风格看集中度与 HHI</li>
+          <li>历史净值由「流水 × 历史行情」回补，能看到买入以来</li>
+          <li>数据不全时明确标注下限与置信度，不硬算</li>
+        </ul>
+      </div>
+      <div class="feature-media reveal">
+        <div class="frame"><div class="chrome"><i></i><i></i><i></i><span>分析</span></div>
+          <img src="assets/shots/analysis.jpg" alt="分析页：TWR、XIRR、最大回撤、历史净值与资产负债表" width="1280" height="800" loading="lazy">
+        </div>
+      </div>
+    </article>
+
+    <article class="feature">
+      <div class="feature-copy reveal">
+        <p class="kicker">LIVE WITH IT</p>
+        <h3>投资和生活，记在同一本账上。</h3>
+        <p>导入微信 / 支付宝账单，自动按餐饮、交通、居住、购物分类。月度预算、超支提醒、年度现金流——
+        和投资收益共用一份归档，不再「投资账本很漂亮，但不知道钱花哪了」。</p>
+        <ul class="ticks">
+          <li>CSV 导入自动识别、去重、分类</li>
+          <li>每笔流水都能在行内改分类</li>
+          <li>每日摘要把净值、预算与到期支出讲成一句话</li>
+        </ul>
+      </div>
+      <div class="feature-media reveal">
+        <div class="frame"><div class="chrome"><i></i><i></i><i></i><span>生活账单</span></div>
+          <img src="assets/shots/bills.jpg" alt="生活账单：分类汇总、月度预算与数据健康" width="1280" height="800" loading="lazy">
+        </div>
+      </div>
+    </article>
+
+    <article class="feature feature-flip">
+      <div class="feature-copy reveal">
+        <p class="kicker">ASK IT</p>
+        <h3>一个真的能动手的 AI 助手。</h3>
+        <p>「帮我核对最近的账目」——它会翻你的持仓、流水和汇率，指出不一致的地方，
+        然后把修改列成待写入的变更。你点「应用」，它才落盘；落盘前还会校验账本版本。</p>
+        <ul class="ticks">
+          <li>改价格、补流水、建预算、整理粘贴的交易记录</li>
+          <li>每一次写入都有草案与二次确认</li>
+          <li>其他本机会话也能用 <code>cli.mjs</code> 读写同一账本</li>
+        </ul>
+      </div>
+      <div class="feature-media reveal">
+        <div class="frame"><div class="chrome"><i></i><i></i><i></i><span>资产助手</span></div>
+          <img src="assets/shots/assistant.jpg" alt="资产助手：AI 核对账目，生成待确认的 3 项变更" width="1280" height="800" loading="lazy">
+        </div>
+      </div>
+    </article>
+
+    <div class="duo">
+      <figure class="reveal">
+        <div class="frame"><div class="chrome"><i></i><i></i><i></i><span>持仓</span></div>
+          <img src="assets/shots/holdings.jpg" alt="持仓页：按资产类别分组，标注行业与风格" width="1280" height="800" loading="lazy">
+        </div>
+        <figcaption>按资产类别分组，逐行标出行业与风格。</figcaption>
+      </figure>
+      <figure class="reveal">
+        <div class="frame"><div class="chrome"><i></i><i></i><i></i><span>暗色模式</span></div>
+          <img src="assets/shots/overview-dark.jpg" alt="暗色模式下的总览" width="1280" height="800" loading="lazy">
+        </div>
+        <figcaption>跟随系统的暗色模式，夜里看账不刺眼。</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<!-- SOURCES -->
+<section class="section" id="sources">
+  <div class="wrap">
+    <header class="section-head">
+      <p class="kicker">03 · SOURCES</p>
+      <h2>接上你已经在用的券商。</h2>
+      <p class="section-sub">优先走官方授权，不抓 Cookie、不存密码。没有官方接口的来源，也可以用文件和手工补齐。</p>
+    </header>
+    <div class="source-table" role="table" aria-label="支持的数据源">
+      <div class="source-row head" role="row"><span role="columnheader">来源</span><span role="columnheader">接入方式</span><span role="columnheader">能读到</span></div>
+      <div class="source-row" role="row"><span role="cell"><b>同花顺投资账本</b></span><span role="cell">官方远程 MCP · 一键 OAuth</span><span role="cell">股票账本、爱基金、持仓、流水、银证转账</span></div>
+      <div class="source-row" role="row"><span role="cell"><b>富途</b></span><span role="cell">官方 MCP 授权 / 本机 OpenD</span><span role="cell">账户、持仓、现金、成交与资金流水</span></div>
+      <div class="source-row" role="row"><span role="cell"><b>长桥</b></span><span role="cell">官方 MCP 授权码 / OpenAPI</span><span role="cell">股票与基金持仓、余额、成交</span></div>
+      <div class="source-row" role="row"><span role="cell"><b>且慢（盈米）</b></span><span role="cell">官方 MCP · 用户级 OAuth</span><span role="cell">总账户、四笔钱子账户、市值与收益</span></div>
+      <div class="source-row" role="row"><span role="cell"><b>老虎证券</b></span><span role="cell">官方远程 MCP · 浏览器授权</span><span role="cell">账户、资产、持仓、历史订单</span></div>
+      <div class="source-row" role="row"><span role="cell"><b>复星证券 · 星财富</b></span><span role="cell">官方 OpenAPI · 扫码开通</span><span role="cell">交易账户、现金、持仓、资金流水</span></div>
+      <div class="source-row" role="row"><span role="cell"><b>Interactive Brokers</b></span><span role="cell">本机 Client Portal Gateway</span><span role="cell">账户、持仓、原币现金</span></div>
+      <div class="source-row" role="row"><span role="cell"><b>手工 / 文件 / 高级 API</b></span><span role="cell">内置</span><span role="cell">CSV / XLSX、标准快照接口，兜底任何来源</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- PRIVACY -->
+<section class="section section-dark" id="privacy">
+  <div class="wrap privacy-grid">
+    <div>
+      <p class="kicker">04 · LOCAL-FIRST</p>
+      <h2>默认，数据不出你的电脑。</h2>
+      <p class="section-sub">账本是一个本地 JSON 文件，凭据用 AES-256-GCM 加密。同步只走你自己配置的券商官方接口，没有中转服务器，也没有账号体系。</p>
+      <a class="btn btn-light" href="https://github.com/Nickszy/dsh-wealth#隐私与本地优先" rel="noopener">看看它把文件放在哪 ↗</a>
+    </div>
+    <dl class="facts">
+      <div><dt>AES-256-GCM</dt><dd>凭据加密，界面与 API 永不返回原值</dd></div>
+      <div><dt>0</dt><dd>云端账户、中转服务或遥测</dd></div>
+      <div><dt>1 份</dt><dd>账本 = 一个可备份、可迁移的 JSON 文件</dd></div>
+      <div><dt>MIT</dt><dd>开源可审计，第三方声明随包保留</dd></div>
+    </dl>
+  </div>
+</section>
+
+<!-- START -->
+<section class="section" id="start">
+  <div class="wrap">
+    <header class="section-head">
+      <p class="kicker">05 · GET STARTED</p>
+      <h2>三步，拥有一个完整的资产管家。</h2>
+    </header>
+    <ol class="steps">
+      <li class="reveal"><span class="step-n">01</span><h3>安装插件</h3><p>在 DeepSeek Harness 的插件页搜索 <code>dsh-wealth</code> 安装并重启。</p></li>
+      <li class="reveal"><span class="step-n">02</span><h3>连接一个来源</h3><p>「账户 → ＋ 新增账户」，选券商，完成一次登录或扫码授权。</p></li>
+      <li class="reveal"><span class="step-n">03</span><h3>导入并提问</h3><p>勾选子账户导入，然后问右侧助手：「我的资产分布如何？」</p></li>
+    </ol>
+    <div class="install reveal">
+      <div class="install-copy">
+        <p class="kicker">COMMAND LINE</p>
+        <p>已经用 DSH CLI 管理 profile？一条命令安装：</p>
+      </div>
+      <pre><code>dsh plugin --profile &lt;profile&gt; add dsh-wealth</code></pre>
+      <p class="install-note">首次安装长桥原生依赖可能需要 3–5 分钟；若被 pnpm 拦截 <code>protobufjs</code> 构建脚本，按插件页提示允许即可。</p>
+    </div>
+  </div>
+</section>
+
+<!-- COMPARE -->
+<section class="section section-tint" id="compare">
+  <div class="wrap">
+    <header class="section-head">
+      <p class="kicker">06 · COMPARE</p>
+      <h2>它补的是别人空着的那一格。</h2>
+    </header>
+    <div class="compare-wrap">
+      <table class="compare">
+        <thead><tr><th></th><th>dsh-wealth</th><th>Ghostfolio</th><th>Portfolio Performance</th><th>随手记 / MoneyWiz</th></tr></thead>
+        <tbody>
+          <tr><th>中国市场券商直连</th><td class="yes">✓</td><td>—</td><td>—</td><td>—</td></tr>
+          <tr><th>微信 / 支付宝账单</th><td class="yes">✓</td><td>—</td><td>—</td><td class="yes">✓</td></tr>
+          <tr><th>投资 + 记账同一份账本</th><td class="yes">✓</td><td>—</td><td>—</td><td>部分</td></tr>
+          <tr><th>历史净值回补</th><td class="yes">✓</td><td>需自部署</td><td class="yes">✓</td><td>—</td></tr>
+          <tr><th>AI 直接读改写账本</th><td class="yes">✓</td><td>—</td><td>—</td><td>—</td></tr>
+          <tr><th>数据留在本机</th><td class="yes">✓</td><td>自部署可实现</td><td class="yes">✓</td><td>部分</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="compare-note">没有全能选手。dsh-wealth 的选择是：把投资与生活放进同一份账本，再让 AI 直接操作它。</p>
+  </div>
+</section>
+
+<!-- LIMITS -->
+<section class="section" id="limits">
+  <div class="wrap limits">
+    <div>
+      <p class="kicker">07 · HONEST LIMITS</p>
+      <h2>它不假装什么都能做。</h2>
+      <p class="section-sub">把边界写在前面，比事后解释更省时间。</p>
+    </div>
+    <ul class="limit-list">
+      <li>同花顺流水不含银行侧银证转账；插件会回扫资产变动给出下限估计，更早记录可用文件补录。</li>
+      <li>且慢只提供快照与收益分析，没有逐笔流水。</li>
+      <li>收益指标依赖完整出入金记录；覆盖不全时标注置信度，不给假精确。</li>
+      <li>期权、期货等衍生品持仓会跳过，并在同步警告里逐条列出。</li>
+      <li>英文界面覆盖核心流程，动态长句仍为中文。</li>
+    </ul>
+  </div>
+</section>
+
+</main>
+
+<footer class="footer">
+  <div class="wrap footer-grid">
+    <div>
+      <img src="assets/logo-lockup.svg" alt="dsh-wealth · 资产账本" width="260" height="47">
+      <p class="footer-tag">让每一笔钱都有出处。</p>
+    </div>
+    <div class="footer-cols">
+      <div><h4>产品</h4><a href="#features">功能</a><a href="#sources">数据源</a><a href="#start">安装</a><a href="#limits">已知边界</a></div>
+      <div><h4>资源</h4><a href="https://github.com/Nickszy/dsh-wealth" rel="noopener">GitHub ↗</a><a href="https://github.com/Nickszy/dsh-wealth#readme" rel="noopener">README ↗</a><a href="https://www.npmjs.com/package/dsh-wealth" rel="noopener">npm ↗</a></div>
+      <div><h4>关于</h4><a href="https://github.com/Nickszy/dsh-wealth/blob/main/LICENSE" rel="noopener">MIT License ↗</a><span>DeepSeek Harness 插件</span><span>© 2026 Nickszy</span></div>
+    </div>
+  </div>
+  <div class="wrap footer-fine">截图由真实界面与虚构演示数据生成，不含任何真实账户信息。所有数据仅保存在使用者本机。</div>
+</footer>
+
+<script>
+(() => {
+  if (new URLSearchParams(location.search).has('noanim')) return
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches
+  if (reduced || !('IntersectionObserver' in window)) return
+  const io = new IntersectionObserver((entries) => {
+    for (const e of entries) if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target) }
+  }, { rootMargin: '0px 0px -8% 0px', threshold: 0.08 })
+  document.querySelectorAll('.reveal').forEach((el) => { el.classList.add('wait'); io.observe(el) })
+})()
+</script>
+</body>
+</html>

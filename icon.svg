@@ -1,5 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
-  <path d="M4 19V5 M4 19h16" stroke="#5b8cff" stroke-width="1.8" stroke-linecap="round"/>
-  <path d="M7 15l3-4 3 2 4-6" stroke="#3ddc84" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="17" cy="7" r="1.5" fill="#3ddc84"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="24" height="24" fill="none" role="img" aria-label="dsh-wealth">
+  <title>dsh-wealth</title>
+  <rect width="64" height="64" rx="15" fill="#17233a"/>
+  <rect x="12" y="16.5" width="19" height="8" rx="4" fill="#e2a089"/>
+  <rect x="12" y="28" width="31" height="8" rx="4" fill="#9fb9ff"/>
+  <rect x="12" y="39.5" width="40" height="8" rx="4" fill="#f5f3ee"/>
+  <circle cx="46" cy="20.5" r="4" fill="#f5f3ee"/>
 </svg>

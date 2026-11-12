@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" role="img" aria-label="dsh-wealth">
+  <title>dsh-wealth app icon</title>
+  <defs>
+    <linearGradient id="tile" x1="32" y1="0" x2="32" y2="64" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1c2c49"/>
+      <stop offset="1" stop-color="#131c2c"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="15" fill="url(#tile)"/>
+  <rect x="12" y="16.5" width="19" height="8" rx="4" fill="#e2a089"/>
+  <rect x="12" y="28" width="31" height="8" rx="4" fill="#9fb9ff"/>
+  <rect x="12" y="39.5" width="40" height="8" rx="4" fill="#f5f3ee"/>
+  <circle cx="46" cy="20.5" r="4" fill="#f5f3ee"/>
+</svg>

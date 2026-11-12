@@ -197,7 +197,7 @@ window.__ModuleLoader__.load({
 .wealth-shell ::-webkit-scrollbar-track{background:transparent}
 .wealth-shell .wealth-topbar{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:16px;padding:10px 24px;min-height:58px;border-bottom:1px solid var(--wealth-border);background:var(--wealth-panel)}
 .wealth-shell .wealth-wordmark{font-size:17px;font-weight:750;letter-spacing:-.4px;white-space:nowrap;display:flex;align-items:center;gap:9px}
-.wealth-shell .wealth-wordmark:before{content:'';width:30px;height:30px;border-radius:10px;background:linear-gradient(135deg,var(--wealth-accent),var(--wealth-accent2));display:inline-block}
+.wealth-shell .wealth-wordmark:before{content:'';width:30px;height:30px;border-radius:9px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='15' fill='%2317233a'/%3E%3Crect x='12' y='16.5' width='19' height='8' rx='4' fill='%23e2a089'/%3E%3Crect x='12' y='28' width='31' height='8' rx='4' fill='%239fb9ff'/%3E%3Crect x='12' y='39.5' width='40' height='8' rx='4' fill='%23f5f3ee'/%3E%3Ccircle cx='46' cy='20.5' r='4' fill='%23f5f3ee'/%3E%3C/svg%3E");background-size:100% 100%;display:inline-block}
 .wealth-shell .wealth-wordmark small{font-size:9.5px;letter-spacing:1.6px;font-weight:700;color:var(--wealth-sub)}
 .wealth-shell .wealth-tabs{display:flex;gap:4px;overflow-x:auto;flex:1;min-width:0}
 .wealth-shell .wealth-tab{border:1px solid transparent;background:transparent;color:var(--wealth-sub);padding:8px 15px;border-radius:999px;cursor:pointer;white-space:nowrap;font-weight:600;font-size:13px}
@@ -259,8 +259,7 @@ window.__ModuleLoader__.load({
 .wealth-shell .wealth-frame{height:100%;max-width:1480px;margin:0 auto;display:flex;background:var(--wealth-shell);border-radius:24px;overflow:hidden;box-shadow:0 26px 60px rgba(28,40,88,.22)}
 .wealth-shell .wealth-rail{width:212px;flex:none;background:var(--wealth-panel);border-right:1px solid var(--wealth-border);padding:20px 14px;display:flex;flex-direction:column;gap:4px;overflow-y:auto}
 .wealth-shell .wealth-brand{display:flex;align-items:center;gap:10px;padding:2px 8px 14px}
-.wealth-shell .wealth-logo{width:36px;height:36px;border-radius:12px;background:linear-gradient(135deg,var(--wealth-accent),var(--wealth-accent2));display:inline-block;flex:none;position:relative;box-shadow:0 8px 18px rgba(47,111,237,.28)}
-.wealth-shell .wealth-logo:after{content:'';position:absolute;inset:10px;border-radius:3px;border:2px solid rgba(255,255,255,.92)}
+.wealth-shell .wealth-logo{width:36px;height:36px;border-radius:11px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='t' x1='32' y1='0' x2='32' y2='64' gradientUnits='userSpaceOnUse'%3E%3Cstop stop-color='%231c2c49'/%3E%3Cstop offset='1' stop-color='%23131c2c'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='15' fill='url(%23t)'/%3E%3Crect x='12' y='16.5' width='19' height='8' rx='4' fill='%23e2a089'/%3E%3Crect x='12' y='28' width='31' height='8' rx='4' fill='%239fb9ff'/%3E%3Crect x='12' y='39.5' width='40' height='8' rx='4' fill='%23f5f3ee'/%3E%3Ccircle cx='46' cy='20.5' r='4' fill='%23f5f3ee'/%3E%3C/svg%3E");background-size:100% 100%;display:inline-block;flex:none;box-shadow:0 8px 18px rgba(23,35,58,.24)}
 .wealth-shell .wealth-navlist{display:flex;flex-direction:column;gap:4px}
 .wealth-shell .wealth-nav{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:12px;border:1px solid transparent;background:transparent;color:var(--wealth-sub);font-weight:600;cursor:pointer;text-align:left;width:100%}
 .wealth-shell .wealth-nav:hover{background:var(--wealth-hover);color:var(--wealth-text)}
@@ -2502,9 +2501,10 @@ window.__ModuleLoader__.load({
 
     function PortfolioIcon({ size = 20 }) {
       return h('svg', { width: size, height: size, viewBox: '0 0 24 24', fill: 'none', 'aria-hidden': true },
-        h('path', { d: 'M4 19V5 M4 19h16', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round' }),
-        h('path', { d: 'M7 15l3-4 3 2 4-6', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round', strokeLinejoin: 'round' }),
-        h('circle', { cx: 17, cy: 7, r: 1.4, fill: 'currentColor' }),
+        h('rect', { x: 3.5, y: 5, width: 8.5, height: 3.4, rx: 1.7, fill: 'currentColor', opacity: 0.62 }),
+        h('rect', { x: 3.5, y: 10.3, width: 13, height: 3.4, rx: 1.7, fill: 'currentColor', opacity: 0.82 }),
+        h('rect', { x: 3.5, y: 15.6, width: 17, height: 3.4, rx: 1.7, fill: 'currentColor' }),
+        h('circle', { cx: 17.2, cy: 6.7, r: 1.6, fill: 'currentColor' }),
       )
     }
 

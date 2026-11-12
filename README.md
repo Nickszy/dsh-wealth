@@ -1,164 +1,180 @@
-# dsh-wealth · 资产账本
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Nickszy/dsh-wealth/main/brand/logo-lockup.svg" alt="dsh-wealth · 资产账本" width="330">
+</p>
 
-DSH 多账户、多资产、多币种账本（仍在 0.x 迭代，暂不跳 1.0）：同花顺投资账本改用**官方 MCP 一键授权**（股票、ETF、爱基金与各基金账本），另接入富途（官方 MCP / 本机 OpenD）、长桥（官方 MCP / OpenAPI）、且慢（盈米官方 MCP）、老虎证券（官方远程 MCP）、复星证券 / 星财富（官方 OpenAPI）与 IB，提供总资产看板、历史快照、账户分布、手工维护、文件导入与 AI 账本助手；另有**分析页**（TWR/XIRR 双口径收益、最大回撤、资金流、集中度、数据健康）与标准数据模型（`model.mjs` / `DATA-MODEL.md`）。
+<p align="center">
+  <b>券商、基金、生活账单，装进一个本机账本。</b><br>
+  让 AI 直接读它、改它、替你核对它。
+</p>
 
-内置来源均不依赖其他 DSH 插件。富途 OpenD、IB Client Portal Gateway 是券商官方连接服务，需要用户安装、启动并完成账号授权。
+<p align="center">
+  <a href="https://wealth.nickszy.com"><img alt="官网" src="https://img.shields.io/badge/官网-wealth.nickszy.com-2f6fed?style=flat-square"></a>
+  <img alt="License" src="https://img.shields.io/badge/license-MIT-17233a?style=flat-square">
+  <img alt="Node" src="https://img.shields.io/badge/node-%E2%89%A520-3f7f6b?style=flat-square">
+  <img alt="DSH" src="https://img.shields.io/badge/DeepSeek%20Harness-plugin-b06b4f?style=flat-square">
+</p>
 
-## 安装与加载
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Nickszy/dsh-wealth/main/docs/shots/hero.png" alt="dsh-wealth 总览：总资产、资产轨迹、账户分布与右侧资产助手" width="100%">
+</p>
 
-发布版可在 DSH 插件页按 npm 包名 `dsh-wealth` 安装（registry 上最新为 0.9.2）。本机 desktop profile 目前使用源码目录 link/junction，源码改动后须完全退出并重启 DSH 才生效；只刷新页面不会重载后端 ESM 模块。
+---
 
-从 npm 安装时有两个已知提示，都属正常：
+## 一句话
 
-- **`ERR_PNPM_IGNORED_BUILDS`（protobufjs）**：富途 OpenD 传输依赖 `protobufjs@7.6.6`，它的 `postinstall` 只打印版本方案提示、不编译任何东西。pnpm 默认拦截依赖的构建脚本，安装会以 exit 126 中断。在插件页按提示允许该构建脚本即可；CLI 安装时把 profile 里 `pnpm-workspace.yaml` 的 `allowBuilds.protobufjs` 从占位文字改成 `true` 再重跑 `dsh plugin --profile <profile> add dsh-wealth`。装完若插件页找不到入口，确认该 profile `package.json` 的 `dsh.profile.bundles` 里已包含 `"dsh-wealth"`。
-- **下载耗时**：长桥官方 `longport` 带各平台原生二进制，pnpm 首次安装会逐个拉取，冷启动可能 3–5 分钟、解包后约 64 MB；重复安装走本地 store 会快很多。
+**dsh-wealth 是一个跑在 [DeepSeek Harness](https://github.com/deepseek-ai) 里的个人资产账本插件。**
+一次授权，自动同步同花顺、富途、长桥、且慢、老虎、复星与 IB 的账户、持仓和流水；
+导入微信 / 支付宝账单补齐生活支出；然后用同一份本机数据看总资产、算真实收益、让 AI 帮你核对。
 
-源码部署先运行 `npm install`。长桥使用官方 `longport@4.3.7`，包含平台原生二进制；本机 Node 24、Windows x64 已通过真实模块加载检查。富途传输取自 `futu-api@10.12.7208` 并随包维护，保留上游 ISC 声明；为修正旧依赖，固定使用 `protobufjs@7.6.6`、`ws@8.22.1` 等运行库，不再安装上游旧的依赖链。已验证协议编码和大整数账户 ID 往返。
+- **不用 Excel，也不用把券商密码交给云端。** 账本和凭据只在你自己的电脑上。
+- **不是又一个行情软件。** 它回答的是：「我到底有多少钱、这些钱从哪来、最近花到哪去了。」
+- **不是一个只会聊天的机器人。** 助手读的是你真实的账本，改动会先给你看草案，确认后才写入。
 
-## 页面
+## 30 秒开始
 
-- **总览**：总资产、成本、浮动盈亏、真实历史快照趋势；账户、资产类别和币种分布。
-- **分析**：只读分析层——时间加权收益 TWR（按入金出金切段）与资金加权年化 XIRR 双口径、最大回撤、资金流总览（入金/出金/分红/利息/费税）、**资产负债表**（资产分类明细、信用卡 / 借款负债、净资产）、配置集中度（按资产类别 / **行业** / **风格** 切换，HHI/Top1/Top3）、年度现金流、数据健康提示；快照不足或缺金额时明确标注置信度而不硬算。指标口径见 `DATA-MODEL.md`。
-- **顶部导航**（0.9.0）：总览 / 账户 / 持仓 / 流水 / 分析 / 设置横向切换，助手栏可收起；不再有左侧栏。
-- **账户**：「授权账号」弹窗按登录列出每条授权及其全部子账户，可重命名、重新授权、读取账户或移除；下面卡片按现金 / 信用 / 投资分组列出全部本地账户，并标注它来自哪个授权。「＋ 新增账户」弹窗分为「登录券商，自动同步」（同花顺股票与爱基金/基金账本、富途、长桥、且慢、老虎、复星、IB）与「手工添加与导入」（手动、文件、高级 API/MCP）两组；选择券商后可直接「使用此授权」沿用上次登录，无需重新授权，授权后会列出全部子账户并标记已导入，可在同一授权下连续导入多个。账户卡片和详情页的「同步」一键把持仓和**全部历史流水**同步到最新（首次从最早可读日期起，之后增量回看 30 天并按编号去重），无需选择时间段。持仓表可按账户 / **行业** / **风格** / 市场 / 币种分组并显示各组市值占比；新增、编辑账户和持仓、记一笔都在弹窗中完成。
-- **账户详情**：持仓 / 流水 / 个股（单只标的买卖、分红与净现金）/ 分析 / 补录账单（上传券商导出的 Excel/CSV 补充接口没有的记录，如银证转账）。
-- **流水**：全部账户统一流水，可按类型和关键字筛选；单账户流水在账户详情中查看。
-- **设置**：本位币与手工汇率。切换本位币会重新折算全部已知汇率，缺失汇率的持仓会排除并提示。另有**行情数据源**两块可选配置：
-  - **腾讯自选股（westock-mcp）**：点「发起授权」→ 浏览器用 QQ / 手机号 / 微信登录 → 把跳转后的 `workbuddy://…` 回调地址粘回来即完成连接（token 自动续期）。
-  - **同花顺金融数据 API Key**：[fuyao.aicubes.cn](https://fuyao.aicubes.cn/admin) 签发，保存前在线验证。
-  历史净值 / 日线的取数优先级：腾讯自选股（沪深 / 港股）→ 同花顺数据（沪深股票、ETF、场外基金）→ 东方财富兜底，任何一层失败自动降级。历史数据缓存在本机（`cache/klines.json`），首次整段拉取，之后每天只增量同步最后一条之后的尾部，同一天内重复查看不再发请求。
-- **右侧助手**：使用 DSH 默认模型回答账本问题并生成修改草案，应用前检查账本版本。可创建 / 修改账户、标的（含**行业 / 风格**分类）、持仓、手填价格、汇率与本位币，导入持仓与流水，补记出入金、分红、利息、费税以及生活账单收支（`historyEvent.add`，只归档不改持仓）；删除账户 / 持仓 / 流水只在明确要求时提出，删账户需二次确认。发送时会附带账本数据；对话记录暂存页面内存。其他 DSH 会话可用 `node cli.mjs` 读写同一账本（见下方「开发验证」）。
+1. 在 DSH 的插件页搜索 **`dsh-wealth`** 安装（或 `dsh plugin add dsh-wealth`），重启 DSH。
+2. 打开「资产账本」→ 右上角 **资产助手旁的三步引导**，或直接进入 **账户 → ＋ 新增账户**。
+3. 选一家券商 → 完成一次登录 / 扫码授权 → 勾选要导入的子账户。之后每天自动同步。
 
-界面借鉴 Monarch 的资产汇总层级，并适配 BoardUI 免费 MIT 设计变量及基础样式；保留协调的暗色模式与窄屏布局。未使用付费 Pro 模板或 Monarch 品牌图片/源码。许可见 BOARDUI-NOTICE.txt；THS 协议参考来源的 MIT 声明见 THS-NOTICE.txt。
+> 只想先试试？选「手工添加」记一笔，或用「文件导入」传一份 CSV，不用连接任何券商。
 
-## 连接流程
+## 它长什么样
 
-一次登录/授权就是一个**授权账号**，同一个授权下面的多个子账户都列在它下面。授权会持久保存，关掉弹窗或刷新页面后仍可在「账户 → 授权账号」看到；同一授权下可以分批导入多个子账户，不需要重复登录授权。
+### 一个总览，看清全部家底
 
-1. 在「账户 → ＋ 新增账户」的「登录券商，自动同步」组里选择同花顺、富途、长桥、且慢、老虎、复星或 IB，完成登录/授权；这个券商已有授权时可直接「使用此授权」复用上次登录。无需先创建本地账户。
-2. 授权成功后立即显示「✓ 授权成功」卡片（登录身份、授权时间、发现 N 个账户），并列出这个登录能看到的全部子账户；已导入的标记「已导入 → 本地账户名」。
-3. 点某个子账户的「导入」，它直接成为账本里的账户，名称和可取得的币种自动带入，当前持仓同时导入，随后持续同步。弹窗不会关闭，可以继续导入同一授权的其他子账户，最后点「完成」。
-4. 「授权账号」卡片上可以重命名、重新授权、读取账户或移除授权；有已导入账户时不能直接移除授权。账户卡片会显示它来自哪个授权，多个同券商授权不会再混淆。
-5. 富途官方 MCP 的短期 Token 会在授权过期时用本地保存的刷新令牌自动续期一次，不需要重新打开浏览器授权。
+总资产、持仓成本、浮动盈亏、账户和币种分布；资产轨迹来自真实历史快照，
+不是根据当前持仓倒推的示意图。
 
-首次导入失败不会留下空账户；重复点击或重复导入会复用已有记录。手工账户仍可单独维护，原生导入不会合并到手工账户。来源未提供账户显示币种时使用账本本位币，持仓仍保留各自原币。
+<img src="https://raw.githubusercontent.com/Nickszy/dsh-wealth/main/docs/shots/accounts.png" alt="账户页：净资产、历史快照曲线与按类型分组的账户" width="100%">
 
-默认每天 **21:00**（本机时间）同步，也可在连接设置里改成其他时刻，或改成固定间隔 **0（仅手动）到 1440 分钟**。定时检查由 DSH 宿主执行，关闭应用后不运行；重新打开会补上错过的那一次。已导入数据的连接不可切换来源账户/市场，新增来源应重新走导入流程。
+### 一次登录 = 一条授权，而不是一堆散落的账户
 
-### 同花顺投资账本
+同一券商登录一次，就能看到它下面所有子账户，分批导入、随时重命名或重新授权。
+富途、长桥、且慢、老虎、复星都走各自官方的 OAuth / MCP 授权，插件不接触密码。
 
-- **官方 MCP 一键授权（推荐，0.9.5 新增）**：数据源 → 同花顺 → 点「一键授权」，插件打开系统浏览器到投资账本官方远程 MCP（<https://tzzb.10jqka.com.cn/mcp>）的授权页，走 OAuth 2.1 授权码 + PKCE + 本机回环回调，scope 固定 `tools.read`。你在浏览器里登录同花顺并同意后，插件自动换取 Token 并加密保存在本地，随后读取股票账本、爱基金与各基金账本；Token 过期用刷新令牌自动续期，可在同花顺侧随时撤销。不抓 Cookie、不启动第二个浏览器窗口，也不要求另装插件。
-- **备用：手动粘贴 Cookie**：在没有浏览器授权环境时，用你已登录投资账本的浏览器按 F12 → 网络，任选一个请求，把请求头里整段 Cookie 粘贴到表单（留空则保留已保存的值）。这条路径不再启动隔离浏览器窗口——独立窗口会触发同花顺风控。
-- 编辑已有连接重新登录时，只有确认新登录包含已绑定账本后才更新该连接的认证，避免误切账户。
-- 登录后同时列出**股票账本**与**基金账本**（爱基金/理财账户等），在账户列表里以「股票 / 爱基金 · 基金账本」标签区分；选择后一键导入对应账本，无需先建本地账户。
-- 股票账本读取人民币沪深股票、ETF、现金和**港股通持仓**：港股行的最新价/成本价按来源原样以 HKD 导入，人民币折算由账本自己的 HKD 汇率统一计算（不采用来源的折算值，汇率随设置变动）；摊薄成本为负（分红超过投入成本）的持仓照常导入；个别无法识别的品种会**跳过该行并在同步警告里逐条列出**，账本其余持仓照常同步并标记不完整；基金账本读取各基金份额、成本、净值与市值，账户总资产/总成本按来源原始合计保存。依赖投资账本自身的上传/同步，不等同券商实时同步；融资融券（有负债或负总资产的账本）仍会拒绝并说明原因。同步失败时展示上游真实原因（如登录失效、不支持的市场），不再只显示笼统文案。
-- 历史流水可通过官方「资金流水」接口回补：股票账本为买卖、回购、派息、缴税、新股/配债入账；基金账本为申购、定投、赎回、分红与转入/转出。银证转账等银行侧记录不在接口内，仍需文件补充；基金流水没有唯一成交编号时按经济要素+次数做弱去重。
-- OAuth Token 与备用 Cookie 都只在本机服务端使用，不通过状态 API 返回。
+<p>
+  <img src="https://raw.githubusercontent.com/Nickszy/dsh-wealth/main/docs/shots/connectors.png" alt="新增账户：同花顺、富途、长桥、且慢、老虎、复星、IB 与手工导入" width="49%">
+  <img src="https://raw.githubusercontent.com/Nickszy/dsh-wealth/main/docs/shots/authorizations.png" alt="授权账号：一次授权下列出全部子账户" width="49%">
+</p>
 
-### 富途
+### 不只是「持仓值多少钱」，而是「我到底赚了多少」
 
-两种接入方式，二选一：
+分析页同时给出 **时间加权收益 TWR**（剔除出入金影响，可跨账户比较）和
+**资金加权年化 XIRR**（你自己的真实年化），外加最大回撤、资金流总览、
+资产负债表，以及按行业 / 风格的集中度。
 
-- **官方 MCP（推荐，0.8.0 新增）**：在插件「数据源 → 富途 → 接入方式：官方 MCP」点「浏览器授权」，会自动打开富途官方授权页（仅勾选行情与持仓只读权限 `quote:read`、`trade:read`）。插件通过本地回环接收回调、完成 OAuth 2.1（动态注册 + PKCE）换取 Token 并在本地加密保存；随后读取 `account_positions`（含现价）、`account_funds`（余额）与 `account_fills_history`／`account_cash_logs`（历史成交与资金流水）。无需安装 OpenD。Token 约 2 小时过期，刷新令牌与 clientId 一并保存在本地凭据文件，可在富途「App Keys」页撤销授权。多币种账户的资金流水如无标的，请选填「资金币种」用于归属。
-- **本机 OpenD（WebSocket）**：
-  - 安装并登录官方 **OpenD**，在 OpenD 开启 **WebSocket** 服务。
-  - 填写本机地址与 WebSocket 端口；示例 **33333**，请以实际配置为准。常见的 TCP 端口 11111 不能直接作为 JavaScript WebSocket 端口。
-  - 可填写 WebSocket Key，选择真实/模拟环境、HK/US/CN 市场以及资金汇总币种，读取并选择稳定的账户 ID。
-  - 离岸人民币使用 **CNH**；接口枚举 3 表示 CNH，不当作 CNY。
-  - 仅读取账户、持仓与资金，不解锁或下单。只将原币现金明细计为持仓，不把已折算的总资产/购买力再次相加。缺少现金明细时标记不完整并保留旧记录。
+<img src="https://raw.githubusercontent.com/Nickszy/dsh-wealth/main/docs/shots/analysis.png" alt="分析页：TWR、XIRR、最大回撤、历史净值与资金流" width="100%">
 
-官方文档：<https://open.futunn.com/zh-cn/mcp-docs/quick-start>（MCP）与 <https://openapi.futunn.com/futu-api-doc/en/trade/get-position-list.html>（OpenD）。
+单账户还能把流水和历史行情拼回去，看到**买入以来**的净值走势与回撤，
+而不是「从安装那天起」的曲线。
 
-### 长桥
+<img src="https://raw.githubusercontent.com/Nickszy/dsh-wealth/main/docs/shots/account-performance.png" alt="账户分析：历史净值回补、区间涨跌与最大回撤" width="100%">
 
-两种接入方式，二选一：
+### 投资和生活，记在同一本账上
 
-- **官方 MCP（推荐）**：在 [open.longbridge.com/connect](https://open.longbridge.com/connect) 生成一次性授权码（10 分钟内有效），在插件「数据源 → 长桥」粘贴并点「兑换授权码」，插件通过官方 MCP（<https://mcp.longbridge.com>）换取 Token 后本地保存。读取 `stock_positions`、`fund_positions`、`account_balance` 并用 `quote` 补现价；资金流水（出入金、股息等）与历史成交也走 MCP 工具。Token 只存本地加密凭据文件，不经过任何第三方。
-- **OpenAPI 凭据**：申请并填入自己的 **App Key / App Secret / Access Token**，插件使用官方 `longport` SDK。
-- MCP 与 SDK 路径都读取并选择账户通道。当前仅支持可唯一归属的单通道账户；多通道与全账户现金无法可靠拆分时会拒绝同步。
-- MCP 路径支持股票、基金及原币现金，现价由行情接口补充，失败时按成本估值并提示；SDK 路径的股票持仓接口没有现价，保留 `null` 并明确按成本估值；基金有有效净值时使用来源净值，不伪造实时报价。
-- 只计算来源原币现金明细，避免把报告币种的 totalCash/netAssets 与持仓重复相加。
+导入微信 / 支付宝 CSV，自动按餐饮、交通、居住、购物等分类；
+月度预算、超支提醒、年度现金流，和投资收益放在同一套数据里，
+不再出现「投资账本很漂亮，但不知道钱花哪了」。
 
-官方 SDK：<https://github.com/longportapp/openapi/tree/main/nodejs>；MCP 文档：<https://open.longbridge.com/zh-CN/docs/mcp>。
+<img src="https://raw.githubusercontent.com/Nickszy/dsh-wealth/main/docs/shots/bills.png" alt="生活账单：12 个月分类汇总、月度预算与数据健康" width="100%">
 
-### 且慢（盈米）
+### 一个真的能动手的 AI 助手
 
-- 盈米 / 且慢官方 MCP（Streamable HTTP）。**账户与资产工具只对用户级 OAuth 授权开放**：点「浏览器授权」，用且慢账号登录并同意，插件通过动态注册 + PKCE + 本机回环拿到 access token 与 refresh token（长期，自动续期）并加密保存。API Key 只能调用基金研究类工具，读不到账户资产。
-- 读取**总账户与各子账户**（盈米宝 / 四笔钱）：总账户用四笔钱明细（`staticShare` 份额、`staticShareAsset` 市值、`holdingProfit` 收益 → 推导成本与净值），子账户从资产树按账户名汇总基金；子账户视图没有成本，按当前市值暂估并明确警告。官方总资产 / 当日盈亏存为来源总额。
-- 且慢 MCP 只提供快照与收益分析工具，**没有逐笔交易流水**；历史记录请用账单文件补录。
+右侧助手用的是 DSH 默认模型，每次提问都会带上当前账本。
+它可以改价格、补录流水、建预算、整理一段粘贴进来的交易记录——
+所有改动先以「待写入 N 项变更」展示，点确认才落盘，落盘前还会校验账本版本。
 
-官方文档：<https://qieman.com/mcp/mcp-market> 与 <https://yingmi.feishu.cn/docx/PRPRds5SBo2MITxHJL2cMPminEf>。
+<img src="https://raw.githubusercontent.com/Nickszy/dsh-wealth/main/docs/shots/assistant.png" alt="资产助手：自然语言核对账目，生成待确认的变更" width="100%">
 
-### 老虎证券
+### 持仓、流水、设置都在该在的位置
 
-- 老虎官方**远程 MCP**（`https://mcp.tigerfintech.com/mcp`，Streamable HTTP + OAuth 2.1），MCP 地址固定为官方端点、不在插件里开放修改。点「浏览器授权」后自动打开官方授权页：登录后勾选全部 5 项权限（基础数据 / 行情 / 资讯 / 账户信息 / 交易查询）、选择要导入的账户并确认，回调自动返回插件完成换取 Token；无需安装 OpenD 或本地进程。
-- refresh token 在过期时自动续期；凭据只存本机加密凭据文件。读取 `get_accounts`、`get_assets`（净资产 / 现金 / 持仓市值）、`get_positions`（股票 / 基金持仓，含现价与成本）与 `get_orders`（历史成交，分页读取）；融资负债的负现金以警告列出，不作为持仓行。期权、期货等衍生品持仓与成交会跳过并在警告中列出。官方授权有效期约 15 天，到期后重新点一次「浏览器授权」即可。
-- 需先在老虎开通 OpenAPI 并在开发者中心绑定要授权的账户。
+<p>
+  <img src="https://raw.githubusercontent.com/Nickszy/dsh-wealth/main/docs/shots/holdings.png" alt="持仓页：按资产类别分组，标注行业与风格" width="49%">
+  <img src="https://raw.githubusercontent.com/Nickszy/dsh-wealth/main/docs/shots/trades.png" alt="流水页：统一流水，行内调整生活分类" width="49%">
+</p>
 
-官方文档：<https://docs.itigerup.com/docs/remote-mcp>。
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Nickszy/dsh-wealth/main/docs/shots/overview-dark.png" alt="暗色模式" width="72%">
+</p>
 
-### 复星证券（星财富）
+> 以上截图由 `scripts/demo-fixture.mjs` 生成：**真实界面 + 真实计算管线 + 虚构演示数据**，
+> 不含任何真实账户信息。随时可以自己重新生成。
 
-- 复星财富官方 OpenAPI，网关默认 `https://openapi.fosunxcz.com`。点「**扫码开通**」：插件本机生成 P-384 客户端密钥对并调官方 `TicketCreate` 签发开通页（二维码 + 链接），用「星财富」App 扫码（或手机打开链接）完成授权后，插件自动取回 **API Key（ak_ 开头）+ 服务端公钥** 并与本机私钥一起存入加密凭据库；三方必须来自同一次开通/重置。也可手动粘贴三元组（私钥必须是 EC P-384，其他类型会在开通时直接报错提示）。
-- 插件按官方协议工作：ECDH P-384 握手 + ECDSA 服务端签名校验建立会话，之后每个请求 HMAC-SHA256 签名并对请求/响应体做 AES-256-GCM 加解密；会话过期自动重建。协议与官方 `openapi-python-sdk` 1.2.0 的 `crypto.py` 一致。
-- 读取交易账户列表、资金汇总（现金 / 总资产 / 持有盈亏）与分页持仓；历史记录走资金流水接口（入金 / 出金 / 股息 / 买卖等，未知业务保留原文并归为「其他」）。
-- 注意：`fsk_` 等平台型 Key 不是 OpenAPI Key，无法用于此连接；扫码开通会自动取回正确的 `ak_` 凭据。
+## 支持的数据源
 
-官方 SDK：<https://github.com/fosunwealth/openapi-python-sdk>；扫码开通与 `fw-tradings` skill 的 `fosun-env-setup` 流程一致。新增依赖 `qrcode-generator`（MIT，二维码渲染）。
+| 来源 | 接入方式 | 能读到什么 |
+|---|---|---|
+| **同花顺投资账本** | 官方远程 MCP，一键 OAuth 授权 | 股票账本、爱基金 / 基金账本、持仓、成本、资金流水、银证转账 |
+| **富途** | 官方 MCP 浏览器授权，或本机 OpenD | 账户、持仓、现金、历史成交与资金流水 |
+| **长桥** | 官方 MCP 授权码，或 OpenAPI 凭据 | 股票 / 基金持仓、余额、成交与流水 |
+| **且慢（盈米）** | 官方 MCP，用户级 OAuth | 总账户与四笔钱子账户、市值、收益 |
+| **老虎证券** | 官方远程 MCP，浏览器授权 | 账户、资产、持仓、历史订单 |
+| **复星证券 / 星财富** | 官方 OpenAPI，App 扫码开通 | 交易账户、现金汇总、持仓、资金流水 |
+| **Interactive Brokers** | 本机 Client Portal Gateway | 账户、持仓、原币现金 |
+| 手工 / 文件 / 高级 API·MCP | 内置 | CSV / XLSX、标准快照接口，兜底任何来源 |
 
-### Interactive Brokers / IB
+连接一次后每天 **21:00** 自动同步（时间可改，也可设为仅手动）。
+历史流水按需回补，行情数据缓存在本机，只增量更新。
 
-- 启动并在浏览器登录官方 **Client Portal Gateway**，完成必要的双重验证。
-- 填写 API 地址，例如 **https://localhost:5000/v1/api**，读取并选择返回的账户 ID。
-- 本机 Gateway 使用自签名证书时可勾选信任；该选项仅对本机、单次连接生效，不关闭全局 TLS 校验。
-- 读取账户、分页持仓、原币现金 ledger；跳过 BASE 汇总项。当前支持现金现货股票/ETF/基金账户，不支持融资/空头/期权/期货/多级顾问账户。
-- 不代替用户登录、续签 SSO、解锁或下单。Gateway 登录过期时会保留账本并显示失败。
-
-官方 Gateway 设置：<https://www.interactivebrokers.com/campus/trading-lessons/launching-and-authenticating-the-gateway/>。
-
-## 数据、凭据与估值
+## 隐私与本地优先
 
 - 账本：`%USERPROFILE%\.dsh\data\dsh-portfolio\ledger.json`，原子写入并保留 `.bak`。
-- 连接与状态：同目录 `sources.json`，不包含 Cookie、Secret 或 Access Token。
-- 本机认证：`credentials.enc.json` 使用 AES-256-GCM；密钥存于同用户目录 `credentials.key`，文件采用用户私有权限。文件与密钥应一起保护；这不是跨设备硬件保险库。
-- 凭据输入通过单独的 `credentials` 字段提交，编辑留空保留原值；API 只返回 `credentialsConfigured` 状态，不返回原值。
-- 完整快照才删除已消失的托管持仓；partial 不清仓。失败、超时、无效数量/成本、未知币种不会被当作零资产。
-- 上游日期缺失会显示未知，但不会清除已知的时间水位；更旧数据不会覆盖较新记录。
-- 无现价时按成本估值并告警；缺少成本等必要字段时拒绝或保留不完整状态。来源的资产/盈亏原始合计另存，不强制与本地成本口径一致。
-- 快照按 UTC 日期、本位币分别保存。同日同币种更新同一快照；至少两个日期才显示趋势。曲线包含入金、出金、交易与汇率影响，不等同投资收益率。
-- 首次导入与定时同步仍以当前持仓/现金快照为主；从「补充历史流水」按需读取同花顺资金流水、富途/长桥官方历史成交或上传账单，预览确认后单独归档。尚未后台自动增量同步成交，不重复叠加持仓，也不据此重建历史净资产。
+- 凭据：同目录 `credentials.enc.json`，**AES-256-GCM** 加密；API 和界面永不返回原值。
+- 同步只走你自己配置的券商官方接口；没有中转服务器，没有账号体系。
+- 其他 DSH 会话或本机脚本可以用 `node cli.mjs` 读取同一份账本（只读查询 / 显式写入）。
 
-## 文件导入与高级扩展
+## 和别的工具有什么不同
 
-在账户详情的「补录账单」上传 **XLSX / CSV / TSV**，可限定日期或留空读取全部。自动识别同花顺投资账本「交易记录」工作表，忽略「持仓数据」「已清仓」汇总，保留完整成交时间、前导零代码、原始业务名称、净发生金额与费用。无币种列时须明确选择文件金额单位，按原值保存，不猜币种、不换汇。文件最大 5MiB、25000 行；错误或成交编号冲突解决前不能提交。
+|  | dsh-wealth | Ghostfolio | Portfolio Performance | 随手记 / MoneyWiz |
+|---|---|---|---|---|
+| 中国市场券商直连（同花顺 / 富途 / 长桥…） | ✅ | ❌ | ❌ | ❌ |
+| 微信 / 支付宝账单 + 生活分类 | ✅ | ❌ | ❌ | ✅ |
+| 投资与记账共用一份账本 | ✅ | ❌ | ❌ | 部分 |
+| 历史净值回补（流水 × 历史行情） | ✅ | ✅（需自部署） | ✅（桌面） | ❌ |
+| AI 直接读改写账本 | ✅ | ❌ | ❌ | ❌ |
+| 数据留在本机 | ✅ | 自部署可实现 | ✅ | 部分 |
 
-预览后按新增/重复/范围外条数确认，保存到 historyEvents/historyBatches，不改变持仓。相同编号内容变化时拦截冲突；无编号按完整经济字段及相同记录的出现次数匹配，跨格式精度差异仍需人工核对。预览有效期 10 分钟，账本改变后需重新预览。字段缺失保留未知，不用零替代费用，回购报价作为利率展示。不会把文件最早/最晚日期说成完整覆盖。
+**没有全能选手。** 竞品要么懂投资不懂生活，要么懂记账不懂券商；
+dsh-wealth 的选择是：把它们放进同一份本机账本，再让 AI 直接操作它。
 
-富途仅真实账户、长桥仅可明确归属的单账户通道支持官方成交回补；来源没有提供的费用、出入金和分红仍需文件。IB 自动 Flex 和 XML 报告尚未接入，请提供可识别的成交/资金 CSV/TSV（不能把汇总行当逐笔成交）。详情与能力证据见 HISTORY-DESIGN.md。
+## 安装细节
 
-原有持仓 CSV/TSV 工具仍支持 UTF-8/GB18030、BOM、带引号千位数与多行字段。PDF、截图 OCR、旧式 XLS、加密或宏工作簿暂不支持。
+发布版可在 DSH 插件页按 npm 包名 `dsh-wealth` 安装。两个已知提示都属正常：
 
-高级 HTTP/MCP 扩展接收标准快照。HTTP 只 GET，外部 HTTPS、本机可 HTTP，禁止重定向；Bearer Token 仅引用宿主环境变量名称。MCP 必须是可信的只读快照工具，使用宿主公开执行管线并遵守全局可见性、审批和 PTC 限制。四种内置来源不需要此扩展。
+- **`ERR_PNPM_IGNORED_BUILDS`（protobufjs）**：富途 OpenD 传输依赖 `protobufjs@7.6.6`，
+  其 `postinstall` 只打印提示、不编译；按插件页提示允许该构建脚本即可。
+- **首次安装较慢**：长桥官方 `longport` 带各平台原生二进制，冷启动可能 3–5 分钟、解包约 64 MB。
 
-```json
-{
-  "holdings": [{"symbol":"00700","name":"腾讯控股","market":"HK","assetClass":"stock","currency":"HKD","qty":"100","avgCost":"300","manualPrice":null}],
-  "complete": true,
-  "warnings": ["来源未提供现价，按成本估值"],
-  "queriedAt": "2026-11-07T00:00:00Z",
-  "uploadedAt": null,
-  "quoteDate": null
-}
+源码部署：
+
+```bash
+npm install
+npm test          # Node 内置 test runner，无需额外框架
 ```
 
-可选 trades 使用 symbol/name/market/assetClass/currency/side/qty/price/date/fee/externalId；日期 YYYY-MM-DD，稳定成交编号用于去重。可选 sourceTotals 保存原始资产与盈亏合计。complete=true 必须是来源完整清单，不能用来表示超时或未知数据。
+本机 desktop profile 若使用源码目录 link / junction，改动后需**完全退出并重启 DSH**；
+只刷新页面不会重载后端 ESM 模块。
 
-## 开发验证
+## 已知边界（诚实版）
 
-`npm test` 覆盖账本、导入、模型草案、宿主 API、独立认证、同花顺登录、四家读适配器与同步调度。所有自动化账户测试使用隔离临时账本或模拟 SDK/网关；不能替代真实账号、权限与上游协议验收。`npm pack --dry-run` 检查发行文件。
+- 同花顺资金流水接口不含**银行侧**银证转账，插件会用资产变动接口回扫并推估下限；
+  更早的记录可用券商导出文件补录。
+- 且慢只提供快照与收益分析，没有逐笔交易流水；历史请用账单文件补录。
+- 收益指标依赖完整出入金记录；覆盖不全时会明确标注置信度，而不是硬算一个数。
+- 期权、期货等衍生品持仓会跳过并在同步警告中逐条列出。
+- 英文界面覆盖核心流程，动态长句仍有中文。
 
-外部 AI 会话（其他 session / MCP 客户端）可用 `node cli.mjs` 直接读写同一账本：`state` / `summary` 全量读取，`accounts`（资产负债表视图）/ `positions [accountId]`（含行业风格）/ `history [accountId] [N]` / `export [file]` 查询，op JSON（如 `historyEvent.add`、`instrument.upsert sector=… style=…`）写入。架构与失败处理见 SYNC-DESIGN.md。
+更细的口径与协议说明在 [DATA-MODEL.md](DATA-MODEL.md)、[SYNC-DESIGN.md](SYNC-DESIGN.md)、
+[HISTORY-DESIGN.md](HISTORY-DESIGN.md) 和 [CONNECTOR-REFACTOR.md](CONNECTOR-REFACTOR.md)。
+
+## 品牌与素材
+
+标志、配色与截图规范见 [brand/BRAND.md](brand/BRAND.md)。
+宣传截图由 `node scripts/demo-fixture.mjs` 重新生成。
 
 ## License
 
-MIT。第三方声明随包保留。
+MIT。第三方声明随包保留：BoardUI（界面变量）见 [BOARDUI-NOTICE.txt](BOARDUI-NOTICE.txt)，
+同花顺协议参考见 [THS-NOTICE.txt](THS-NOTICE.txt)。
+
+<p align="center"><sub>dsh-wealth · 让每一笔钱都有出处</sub></p>

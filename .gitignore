@@ -5,3 +5,13 @@ node_modules/
 !.env.example
 credentials.key
 credentials.enc.json
+
+# generated marketing fixtures
+brand/preview.html
+brand/demo-db.json
+brand/demo-state.json
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
