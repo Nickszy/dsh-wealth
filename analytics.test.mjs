@@ -83,6 +83,12 @@ test('max drawdown and concentration are bounded and labelled', () => {
   assert.equal(dd.value, -25)
   assert.equal(dd.peakDate, '2026-02-01')
   assert.equal(dd.troughDate, '2026-03-01')
+  // 最深回撤发生在一个更早的峰值之后：peakDate 必须是造成回撤的那个峰值，不是序列最后的峰值。
+  const dd2 = maxDrawdown([mk('2026-01-01', 100), mk('2026-02-01', 120), mk('2026-03-01', 80), mk('2026-04-01', 110), mk('2026-05-01', 105)])
+  assert.equal(dd2.value, -33.33)
+  assert.equal(dd2.peakDate, '2026-02-01')
+  assert.equal(dd2.troughDate, '2026-03-01')
+  assert.ok(Date.parse(dd2.peakDate) <= Date.parse(dd2.troughDate))
   const c = concentration([
     { assetClass: 'stock', weight: 0.5 },
     { assetClass: 'fund', weight: 0.3 },

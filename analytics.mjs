@@ -183,13 +183,14 @@ export function xirr(series, rows, { guess = 0.1 } = {}) {
 
 export function maxDrawdown(series) {
   if (series.length < 2) return { value: null, peakDate: null, troughDate: null, reason: '快照不足两个' }
-  let peak = series[0], worst = 0, peakDate = series[0].date, troughDate = null
+  let peak = series[0], worst = 0, troughDate = null, peakAtTrough = series[0]
   for (const s of series) {
-    if (s.totalValueBase > peak.totalValueBase) { peak = s; peakDate = s.date }
+    if (s.totalValueBase > peak.totalValueBase) peak = s
     const dd = peak.totalValueBase > 0 ? (s.totalValueBase - peak.totalValueBase) / peak.totalValueBase : 0
-    if (dd < worst) { worst = dd; troughDate = s.date }
+    if (dd < worst) { worst = dd; troughDate = s.date; peakAtTrough = peak }
   }
-  return { value: round(worst * 100, 2), peakDate, troughDate, reason: null }
+  // peakDate 是「造成最大回撤的那个峰值」的日期，不是全序列最后的峰值。
+  return { value: round(worst * 100, 2), peakDate: peakAtTrough.date, troughDate, reason: null }
 }
 
 export function concentration(items) {
