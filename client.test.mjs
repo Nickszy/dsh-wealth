@@ -79,8 +79,8 @@ function renderHoldings(reload) {
   }
   const h = (type, props, ...children) => ({ type, props: props || {}, children })
   const T = { th: (c) => c, td: (c) => c, btn: () => ({}), input: () => ({}), card: () => ({}), label: () => ({}) }
-  const Holdings = new Function('React', 'h', 'T', 'assetLabel', 'fmtMoney', 'Modal', 'currencyOptions', `${extractFunction(src, 'Holdings')}\nreturn Holdings`)(
-    React, h, T, (cls) => cls || '', () => '0', () => null, () => [],
+  const Holdings = new Function('React', 'h', 'T', 'assetLabel', 'fmtMoney', 'Modal', 'currencyOptions', 'identityKeyOf', `${extractFunction(src, 'Holdings')}\nreturn Holdings`)(
+    React, h, T, (cls) => cls || '', () => '0', () => null, () => [], (ins) => (ins ? ins.market + '|' + ins.symbol : ''),
   )
   const state = {
     ledger: {
@@ -111,4 +111,51 @@ test('updating quotes reloads the ledger instead of reporting reload is not defi
   assert.equal(sets.includes('reload is not defined'), false)
   assert.ok(sets.includes('已更新 1 条行情现价。手填价格仍然优先。'))
   assert.equal(reloaded, 1)
+})
+
+// 跨账户合并：同一代码只留一行、数量与加权成本合并、整行只读；
+// 选定单个账户后仍逐条可编辑（编辑 / 删除只发生在具体账户里）。
+function makeHoldings() {
+  const src = readFileSync(new URL('./client.js', import.meta.url), 'utf8')
+  const React = {
+    useState(init) {
+      const value = typeof init === 'function' ? init() : init
+      return [value, () => {}]
+    },
+    createElement(type, props, ...children) { return { type, props: props || {}, children } },
+  }
+  const h = (type, props, ...children) => ({ type, props: props || {}, children })
+  const T = { th: (c) => c, td: (c) => c, btn: () => ({}), input: () => ({}), card: () => ({}), label: () => ({}) }
+  return new Function('React', 'h', 'T', 'assetLabel', 'fmtMoney', 'Modal', 'currencyOptions', 'identityKeyOf', `${extractFunction(src, 'Holdings')}\nreturn Holdings`)(
+    React, h, T, (cls) => cls || '', (n) => String(n ?? '—'), () => null, () => [], (ins) => (ins ? ins.market + '|' + ins.symbol : ''),
+  )
+}
+
+const mergedFixture = () => ({
+  ledger: {
+    baseCurrency: 'CNY',
+    fx: { CNY: 1 },
+    accounts: [{ id: 'a1', name: '银河' }, { id: 'a2', name: '银河证券' }],
+    instruments: [{ id: 'i1', symbol: '002432', name: '九安医疗', market: 'CN', assetClass: 'stock' }],
+    holdings: [
+      { id: 'h1', accountId: 'a1', instrumentId: 'i1', qty: 1900, avgCost: 54.06, currency: 'CNY', manualPrice: null, quotePrice: 56.92, quoteChangePct: -4.4 },
+      { id: 'h2', accountId: 'a2', instrumentId: 'i1', qty: 900, avgCost: 66.64, currency: 'CNY', manualPrice: null, quotePrice: 56.92, quoteChangePct: -4.4 },
+    ],
+  },
+})
+
+test('all-accounts view merges same-code holdings into one read-only row', () => {
+  const Holdings = makeHoldings()
+  const tree = Holdings({ t: theme, state: mergedFixture(), call: async () => ({ ok: true }), busy: false })
+  const text = textOf(tree)
+  const rows = []
+  walk(tree, (node) => { if (node.type === 'tr' && textOf(node).includes('九安医疗')) rows.push(node) })
+  assert.equal(rows.length, 1, 'same-code holdings must render as one merged row')
+  assert.ok(text.includes('2800'), 'quantities are summed')
+  assert.ok(text.includes('合并自 2 条'), 'header discloses the merge')
+  assert.ok(text.includes('58.1'), 'unit cost is quantity-weighted: (1900*54.06+900*66.64)/2800 = 58.1036')
+  assert.ok(text.includes('只读 · 到账户中编辑'), 'merged rows expose no edit actions')
+  const actionButtons = []
+  walk(tree, (node) => { if (node.type === 'button' && ['编辑', '删除'].some((t2) => textOf(node).includes(t2))) actionButtons.push(node) })
+  assert.equal(actionButtons.length, 0, 'no edit/delete buttons in merged view (the hint sentence mentions them)')
 })

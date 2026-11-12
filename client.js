@@ -846,6 +846,25 @@ window.__ModuleLoader__.load({
     function assetLabel(cls) {
       return ({ stock: '股票', fund: '基金', etf: 'ETF', cash: '现金', bond: '债券', crypto: '加密资产', other: '其他' })[cls] || cls || '其他'
     }
+    // 与 symbols.mjs identityKey 同规则（客户端无模块导入，就地实现）：跨账户合并持仓按统一代码归并。
+    function identityKeyOf(ins) {
+      if (!ins) return ''
+      const raw = String(ins.symbol || '').trim()
+      const m = String(ins.market || '').trim().toUpperCase()
+      let symbol = raw
+      if (m === 'HK') {
+        const code = raw.replace(/^HK(EX)?[.:]/i, '').replace(/\.HK$/i, '').replace(/^0+/, '')
+        symbol = /^\d{1,5}$/.test(code) ? code.padStart(5, '0') : raw.toUpperCase()
+      } else if (m === 'CN' || m === 'FUND') {
+        const code = raw.replace(/^(SH|SZ)[.:]?/i, '')
+        symbol = /^\d{6}$/.test(code) ? code : raw
+      } else if (m === 'US') {
+        symbol = raw.replace(/^US[.:]/i, '').toUpperCase()
+      } else {
+        symbol = raw.toUpperCase()
+      }
+      return m + '|' + symbol
+    }
     function Settings({ t, state, call, busy, reload }) {
       const db = state.ledger, cur = db.baseCurrency
       const [baseSel, setBaseSel] = React.useState(cur)
@@ -1494,23 +1513,66 @@ window.__ModuleLoader__.load({
         if (group === 'market') return ins?.market || '—'
         return ho.currency || '—'
       }
+      // 全部账户视图按统一代码合并：同一标的一行（数量、成本合并计算），只读；
+      // 选定单个账户或按账户分组时退回逐条展示。修改 / 删除只能在具体账户里做。
+      const single = !!(accountId || acctFilter)
+      const merged = !single && group !== 'account'
+      const readOnly = !single
+      const entries = []
+      if (merged) {
+        const byKey = new Map()
+        for (const ho of list) {
+          const ins = insMap.get(ho.instrumentId)
+          const key = ins ? identityKeyOf(ins) : 'id:' + ho.instrumentId
+          let e = byKey.get(key)
+          if (!e) { e = { key, holdings: [], ins }; byKey.set(key, e); entries.push(e) }
+          e.holdings.push(ho)
+        }
+      } else {
+        for (const ho of list) entries.push({ key: 'h:' + ho.id, holdings: [ho], ins: insMap.get(ho.instrumentId) })
+      }
+      // 合并行取值：数量求和；成本按数量加权（任一条成本未知则整体未知，绝不编造）；
+      // 现价取估值链最高优先级来源（手填 > 行情 > 券商 > 成本），涨跌幅跟行情；市值按条分别估值后求和。
+      const entryView = (e) => {
+        const rows = e.holdings
+        const priced = rows.map(ho => {
+          const u = usedPrice(ho)
+          const rate = ho.currency === db.baseCurrency ? 1 : db.fx[ho.currency]
+          const mv = Number.isFinite(rate) && rate > 0 && u.price != null ? ho.qty * u.price * rate : null
+          return { ho, hand: u.hand, price: u.price, mv }
+        })
+        const qty = rows.reduce((s, x) => s + (Number(x.qty) || 0), 0)
+        const withCost = rows.filter(x => x.avgCost != null && Number.isFinite(Number(x.avgCost)))
+        const costQty = withCost.reduce((s, x) => s + (Number(x.qty) || 0), 0)
+        const avgCost = withCost.length === rows.length && costQty > 0 ? withCost.reduce((s, x) => s + (Number(x.qty) || 0) * Number(x.avgCost), 0) / costQty : null
+        let best = null
+        for (const p of [x => x.hand != null, x => x.ho.quotePrice != null, x => x.ho.sourcePrice != null]) { best = priced.find(p); if (best) break }
+        if (!best) best = priced[0]
+        const pct = rows.map(x => x.quoteChangePct).find(v => typeof v === 'number' && Number.isFinite(v))
+        const mvs = priced.map(x => x.mv).filter(v => v != null)
+        return {
+          ...e, priced, qty,
+          avgCost, best,
+          pct: pct == null ? null : pct,
+          currency: rows[0].currency,
+          mv: mvs.length ? mvs.reduce((s, x) => s + x, 0) : null,
+          accIds: [...new Set(rows.map(x => x.accountId))],
+        }
+      }
+      const views = entries.map(entryView)
       const groups = []
-      for (const ho of list) {
-        const key = groupKey(ho)
+      for (const v of views) {
+        const key = groupKey(v.holdings[0])
         let g = groups.find(x => x.key === key)
         if (!g) { g = { key, rows: [], mv: 0 }; groups.push(g) }
-        const ins = insMap.get(ho.instrumentId)
-        const rate = ho.currency === db.baseCurrency ? 1 : db.fx[ho.currency]
-        // 估值链：手填价 > 行情价 > 券商快照价 > 平均成本；全空时不计入（绝不按 0 计）。
-        const price = usedPrice(ho).price
-        if (Number.isFinite(rate) && rate > 0 && price != null) g.mv += ho.qty * price * rate
-        g.rows.push([ho, ins])
+        if (v.mv != null) g.mv += v.mv
+        g.rows.push(v)
       }
       const totalMv = groups.reduce((s, g) => s + g.mv, 0)
       return h('div', null,
         h('div', { style: T.card(t) },
           h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' } },
-            h('strong', null, (accountId ? '账户持仓' : '全部持仓') + ' · ' + list.length),
+            h('strong', null, (accountId ? '账户持仓' : '全部持仓') + ' · ' + views.length + (merged && views.length !== list.length ? '（合并自 ' + list.length + ' 条）' : '')),
             h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
               accountId ? null : h('select', { value: acctFilter, onChange: (e) => setAcctFilter(e.target.value), 'aria-label': '按账户筛选', style: { ...T.input(t), minHeight: 30, width: 180, fontSize: 12 } },
                 h('option', { value: '' }, '全部账户'),
@@ -1519,35 +1581,37 @@ window.__ModuleLoader__.load({
                 (accountId ? [['class', '按资产类别'], ['sector', '按行业'], ['style', '按风格'], ['market', '按市场'], ['currency', '按币种']] : [['class', '按资产类别'], ['account', '按账户'], ['sector', '按行业'], ['style', '按风格'], ['market', '按市场'], ['currency', '按币种']]).map(([v, n]) => h('option', { key: v, value: v }, n))),
               h('button', { style: T.btn(t, false), disabled: busy || quoting, onClick: refreshQuotes }, quoting ? '正在更新行情…' : '⟳ 更新行情'),
               h('button', { style: T.btn(t, true), disabled: busy || !db.accounts.length, onClick: () => open(blank()) }, '＋ 添加持仓'))),
+          readOnly ? h('div', { style: { fontSize: 11, color: t.sub, margin: '-2px 0 10px' } }, merged ? '同一代码的持仓已合并计算，此视图只读；编辑 / 删除请进入对应账户。' : '此视图只读；编辑 / 删除请进入对应账户。') : null,
           h('table', { style: { width: '100%', borderCollapse: 'collapse' } },
-            h('thead', null, h('tr', null, T.th('标的', t), accountId ? null : T.th('账户', t), T.th('数量', t), T.th('成本', t), T.th('现价', t), T.th('涨跌幅', t), T.th('币种', t), T.th('市值(本位币)', t), T.th('操作', t))),
-            h('tbody', null, list.length ? groups.map((g) => [
-              h('tr', { key: 'g:' + g.key }, T.td(h('span', { style: { fontWeight: 650, fontSize: 12 } }, g.key, h('small', { style: { display: 'block', color: t.sub, fontWeight: 400 } }, g.rows.length + ' 项 · ' + fmtMoney(g.mv, db.baseCurrency) + (totalMv ? ' · ' + (g.mv / totalMv * 100).toFixed(1) + '%' : ''))), t, { colSpan: accountId ? 8 : 9 })),
-              g.rows.map(([ho, ins]) => {
-                const acc = accMap.get(ho.accountId)
+            h('thead', null, h('tr', null, T.th('标的', t), T.th('数量', t), T.th('成本', t), T.th('现价', t), T.th('涨跌幅', t), T.th('币种', t), T.th('市值(本位币)', t), T.th('操作', t))),
+            h('tbody', null, views.length ? groups.map((g) => [
+              h('tr', { key: 'g:' + g.key }, T.td(h('span', { style: { fontWeight: 650, fontSize: 12 } }, g.key, h('small', { style: { display: 'block', color: t.sub, fontWeight: 400 } }, g.rows.length + ' 项 · ' + fmtMoney(g.mv, db.baseCurrency) + (totalMv ? ' · ' + (g.mv / totalMv * 100).toFixed(1) + '%' : ''))), t, { colSpan: 8 })),
+              g.rows.map((v) => {
+                const ho = v.holdings[0], ins = v.ins
                 // 估值链：手填价 > 行情价 > 券商快照价 > 平均成本；全空时市值为「—」，绝不按 0 计。
-                const { hand, price } = usedPrice(ho)
-                const rate = ho.currency === db.baseCurrency ? 1 : db.fx[ho.currency]
-                const mv = Number.isFinite(rate) && rate > 0 && price != null ? ho.qty * price * rate : null
-                const quoteTag = hand == null && ho.quotePrice != null ? h('small', { style: { display: 'block', color: t.sub, fontSize: 10 } }, (ho.quoteSource === 'tencent-fund' ? '净值' : '行情') + (ho.quoteAt ? ' ' + String(ho.quoteAt).slice(5, 10) : '')) : null
-                const sourceTag = hand == null && ho.quotePrice == null && ho.sourcePrice != null ? h('small', { style: { display: 'block', color: t.sub, fontSize: 10 } }, '券商价') : null
+                const { hand, price } = readOnly ? { hand: null, price: v.best.price } : usedPrice(ho)
+                const mv = v.mv
+                const quoteTag = hand == null && v.best.ho.quotePrice != null ? h('small', { style: { display: 'block', color: t.sub, fontSize: 10 } }, (v.best.ho.quoteSource === 'tencent-fund' ? '净值' : '行情') + (v.best.ho.quoteAt ? ' ' + String(v.best.ho.quoteAt).slice(5, 10) : '')) : null
+                const sourceTag = hand == null && v.best.ho.quotePrice == null && v.best.ho.sourcePrice != null ? h('small', { style: { display: 'block', color: t.sub, fontSize: 10 } }, '券商价') : null
                 const handTag = hand != null ? h('small', { style: { display: 'block', color: t.sub, fontSize: 10 } }, '手填') : null
-                const pct = typeof ho.quoteChangePct === 'number' && Number.isFinite(ho.quoteChangePct) ? ho.quoteChangePct : null
+                const pct = v.pct == null ? null : v.pct
                 const pctText = pct == null ? '—' : (pct > 0 ? '+' : '') + pct.toFixed(2) + '%'
-                return h('tr', { key: ho.id },
+                const qtyText = v.accIds.length > 1 ? String(Number(v.qty.toFixed(6))) : String(ho.qty)
+                return h('tr', { key: v.key },
                   T.td(h('span', null, (ins ? ins.name + ' ' + ins.symbol : ho.instrumentId), ins?.sector ? h('small', { style: { display: 'block', color: t.sub } }, ins.sector + (ins.style ? ' · ' + styleLabel(ins.style) : '')) : null), t),
-                  accountId ? null : T.td(acc ? acc.name : ho.accountId, t),
-                  T.td(String(ho.qty), t),
-                  T.td(fmtMoney(ho.avgCost), t),
+                  T.td(qtyText, t),
+                  T.td(readOnly && v.accIds.length > 1 && v.avgCost == null ? h('span', { title: '部分持仓成本未知' }, '—') : readOnly && v.accIds.length > 1 ? fmtMoney(v.avgCost) : fmtMoney(ho.avgCost), t),
                   T.td(h('span', null,
-                    hand != null
-                      ? h('input', { key: ho.id + ':' + hand, defaultValue: String(hand), placeholder: '手填', title: '手填价格（清空则改用行情）', onBlur: (e) => { const v = e.target.value; if (String(hand) !== v) call('price.set', { holdingId: ho.id, price: v === '' ? null : Number(v) }) }, style: { ...T.input(t), width: 78 } })
+                    !readOnly && hand != null
+                      ? h('input', { key: ho.id + ':' + hand, defaultValue: String(hand), placeholder: '手填', title: '手填价格（清空则改用行情）', onBlur: (e) => { const v2 = e.target.value; if (String(hand) !== v2) call('price.set', { holdingId: ho.id, price: v2 === '' ? null : Number(v2) }) }, style: { ...T.input(t), width: 78 } })
                       : h('span', { style: { fontWeight: 650, fontVariantNumeric: 'tabular-nums' } }, price == null ? '—' : String(price)),
                     handTag, quoteTag, sourceTag), t),
                   T.td(pctText, t, { color: pct == null || pct === 0 ? t.sub : pct > 0 ? t.green : t.red, fontWeight: 650, fontVariantNumeric: 'tabular-nums' }),
-                  T.td(ho.currency, t),
+                  T.td(v.currency, t),
                   T.td(fmtMoney(mv, db.baseCurrency), t),
-                  T.td(h('span', null,
+                  readOnly
+                    ? T.td(h('span', { style: { color: t.sub, fontSize: 11 } }, '只读 · 到账户中编辑'), t)
+                    : T.td(h('span', null,
                     h('button', { style: { ...T.btn(t, false), padding: '3px 8px', marginRight: 6 }, disabled: busy, onClick: () => open({ accountId: ho.accountId, symbol: ins?.symbol || '', name: ins?.name || '', market: ins?.market || 'CN', assetClass: ins?.assetClass || 'stock', sector: ins?.sector || '', style: ins?.style || '', qty: String(ho.qty), avgCost: String(ho.avgCost ?? ''), currency: ho.currency || '', manualPrice: hand == null ? '' : String(hand) }, true) }, '编辑'),
                     h('button', { style: { ...T.btn(t, false), padding: '3px 8px', borderColor: t.red, color: t.red }, disabled: busy, onClick: () => { if (window.confirm('删除该持仓？')) call('holding.remove', { id: ho.id }) } }, '删除')), t))
               }),
