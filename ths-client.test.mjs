@@ -302,7 +302,7 @@ test('fund snapshot (ijj) maps merge_fund to holdings with percost avg cost and 
   assert.equal(form.get('from_id'), '')
   assert.equal(result.holdings.length, 2)
   const first = result.holdings[0]
-  assert.deepEqual([first.symbol, first.assetClass, first.market, first.currency, first.qty, first.avgCost, first.manualPrice, first.externalId], ['001257', 'fund', 'CN', 'CNY', 4316.86, 1.611245, 1.612, '001257'])
+  assert.deepEqual([first.symbol, first.assetClass, first.market, first.currency, first.qty, first.avgCost, first.manualPrice, first.externalId], ['001257', 'fund', 'FUND', 'CNY', 4316.86, 1.611245, 1.612, '001257'])
   assert.equal(result.sourceTotals.totalAsset, 115116.337772)
   assert.equal(result.sourceTotals.totalCost, 141202.550427)
   assert.equal(result.sourceTotals.holdingProfit, 1039.72)

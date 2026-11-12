@@ -23,11 +23,59 @@ export function normalizeSymbol(symbol, market) {
     return { symbol: /^\d{1,5}$/.test(code) ? code.padStart(5, '0') : raw.toUpperCase(), market: m }
   }
   if (m === 'CN' || m === 'FUND') {
-    const code = raw.replace(/^(SH|SZ)[.:]?/i, '')
+    // 长桥/同花顺会把交易所写进代码（600519.SH、000001.SZ、430047.BJ、000001.OF）；
+    // 身份只认六位代码，交易所由后端按代码前缀推导，避免同一只证券因写法不同各建一条。
+    const code = raw.replace(/^(SH|SZ|BJ)[.:]?/i, '').replace(/\.(SH|SZ|BJ|OF)$/i, '')
     return { symbol: /^\d{6}$/.test(code) ? code : raw, market: m }
   }
-  if (m === 'US') return { symbol: raw.replace(/^US[.:]/i, '').toUpperCase(), market: m }
+  if (m === 'US') {
+    // 只去掉市场前后缀（US.AAPL / AAPL.US），保留股份类别里的点（BRK.B ≠ BRKB，ADR 与普通股也不同档）。
+    return { symbol: raw.replace(/^US[.:]/i, '').replace(/\.US$/i, '').toUpperCase(), market: m }
+  }
   return { symbol: raw.toUpperCase(), market: m }
+}
+
+/** 场外基金身份：market=FUND 或 assetClass=fund。股票与基金即使六位代码相同也必须分开建档。 */
+export function isFundLike(instrument = {}) {
+  const m = canonicalMarket(instrument.market)
+  return m === 'FUND' || String(instrument.assetClass || '').toLowerCase() === 'fund'
+}
+
+// A 股交易所由代码前缀推导（沪深北）。债券等特殊品种仍按前缀尽力而为，不保证覆盖全部品种。
+function cnExchange(code) {
+  if (/^(43|83|87|88|92)/.test(code)) return 'BJ'
+  if (/^(5|6|9)/.test(code)) return 'SH'
+  if (/^(0|1|2|3)/.test(code)) return 'SZ'
+  return null
+}
+
+/**
+ * 本地展示用的完整证券代码（项目约定，不是任何接口的入参格式）：
+ *   600519.SH / 000001.SZ / 430047.BJ / 00700.HK / AAPL.US / 000001.OF / CASH:CNY
+ * 存储仍用 symbol + market + assetClass；展示时由本函数推导，避免同一只证券出现多种写法。
+ */
+export function canonicalDisplayCode(instrument = {}) {
+  const raw = String(instrument.symbol || '').trim()
+  if (!raw) return ''
+  const m = canonicalMarket(instrument.market)
+  const cls = String(instrument.assetClass || '').toLowerCase()
+  if (m === 'CASH' || /^[A-Z]{3}\.CASH$/i.test(raw)) {
+    const cur = /^([A-Z]{3})\.CASH$/i.exec(raw)?.[1] || instrument.currency || 'CNY'
+    return 'CASH:' + String(cur).toUpperCase()
+  }
+  const normalized = normalizeSymbol(raw, m).symbol
+  if (m === 'FUND' || (cls === 'fund' && /^\d{6}$/.test(normalized))) {
+    return /^\d{6}$/.test(normalized) ? normalized + '.OF' : raw
+  }
+  if (m === 'CN') {
+    if (!/^\d{6}$/.test(normalized)) return normalized
+    const ex = cnExchange(normalized)
+    return ex ? normalized + '.' + ex : normalized
+  }
+  if (m === 'HK') return (/^\d{1,5}$/.test(normalized) ? normalized.padStart(5, '0') : normalized) + '.HK'
+  if (m === 'US') return normalized + '.US'
+  if (m === 'SG') return normalized + '.SG'
+  return normalized
 }
 
 /** 统一身份键：用于判断两个标的记录是否同一只证券（不含币种与资产类别）。 */

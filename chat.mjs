@@ -2,7 +2,7 @@
 import { applyOp, OpError, summarize } from './store.mjs'
 
 const SAFE_OPS = new Set([
-  'account.upsert', 'account.remove', 'holding.upsert', 'holding.remove', 'instrument.upsert',
+  'account.upsert', 'account.remove', 'holding.upsert', 'holding.remove', 'instrument.upsert', 'instrument.merge',
   'price.set', 'fx.set', 'base.set', 'import.holdings', 'import.trades', 'trade.add', 'trade.remove',
   'historyEvent.add', 'historyEvent.update', 'budget.set',
 ])
@@ -42,6 +42,12 @@ function normalizeOps(ops) {
     // account.remove 会连带删除该账户的持仓、流水与归档，属于不可恢复操作：
     // 模型必须先向用户确认，并显式携带 confirm:true 才会进入校验。
     if (op.op === 'account.remove' && op.confirm !== true) throw badRequest('删除账户会连带删除其全部持仓和流水，必须先向用户确认，并在 op 上携带 confirm:true')
+    // instrument.merge 会把一条标的的全部持仓与流水挂到另一条上，同样属于需要用户确认的破坏性操作。
+    if (op.op === 'instrument.merge') {
+      if (typeof op.keepId !== 'string' || typeof op.dropId !== 'string' || !op.keepId.trim() || !op.dropId.trim()) throw badRequest('instrument.merge 需要 keepId 与 dropId')
+      if (String(op.keepId).trim() === String(op.dropId).trim()) throw badRequest('keepId 与 dropId 不能相同')
+      if (op.confirm !== true) throw badRequest('合并标的会影响其全部持仓与流水，必须先向用户确认，并在 op 上携带 confirm:true')
+    }
     return op
   })
 }
@@ -70,6 +76,7 @@ const OP_DOC = `可用 ops（对象字段为 op 加直接 payload，不要再包
 - account.remove {id,confirm:true}：删除账户及其全部持仓、流水与归档。只有用户明确要求删除账户时才可提出，reply 里必须复述会连带删除的内容；confirm 必须为 true。
 - instrument.upsert {id?或instrumentId?,symbol?,name?,market?,assetClass?,currency?,sector?,style?,note?}：新标的需 symbol；assetClass 为 stock|fund|etf|cash|bond|crypto|other；sector 是行业（自由文本，如 白酒 / 银行 / 半导体，≤24 字，"" 表示清除）；style 为 growth|value|blend|other（成长/价值/均衡/其他）。仅在用户明确说明或标的行业众所周知（如贵州茅台是白酒）时填写，拿不准就先问，不虚构。
 - holding.upsert {id?,accountId,instrumentId 或 symbol/market/name/assetClass/currency,qty?,avgCost?,manualPrice?,currency?,note?}：qty 是总持仓数量，avgCost 是单位成本，manualPrice 是手填单位价格（null 清除）；只给需修改的数字，保留其他值。quotePrice/quoteAt/quoteSource 由「更新行情」维护，不要在 ops 里提交或修改。
+- instrument.merge {keepId,dropId,confirm:true}：把 dropId 标的并入 keepId（持仓、流水随之迁移）。仅用于用户确认过的重复标的（同一证券因历史写法不同各建了一条），必须先复述两只标的的代码与名称并取得确认。
 - holding.remove {id}：删除一条持仓记录。
 - price.set {holdingId 或 instrumentId,price:数字或null}：手动价格，不代表实时行情。
 - fx.set {currency,rate}：1 单位该币种等于 rate 本位币，rate 必须正数。

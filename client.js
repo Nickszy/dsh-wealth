@@ -847,6 +847,7 @@ window.__ModuleLoader__.load({
       return ({ stock: '股票', fund: '基金', etf: 'ETF', cash: '现金', bond: '债券', crypto: '加密资产', other: '其他' })[cls] || cls || '其他'
     }
     // 与 symbols.mjs identityKey 同规则（客户端无模块导入，就地实现）：跨账户合并持仓按统一代码归并。
+    // 股票与场外基金即使六位代码相同也不合并（000001.SZ vs 000001.OF）。
     function identityKeyOf(ins) {
       if (!ins) return ''
       const raw = String(ins.symbol || '').trim()
@@ -856,14 +857,16 @@ window.__ModuleLoader__.load({
         const code = raw.replace(/^HK(EX)?[.:]/i, '').replace(/\.HK$/i, '').replace(/^0+/, '')
         symbol = /^\d{1,5}$/.test(code) ? code.padStart(5, '0') : raw.toUpperCase()
       } else if (m === 'CN' || m === 'FUND') {
-        const code = raw.replace(/^(SH|SZ)[.:]?/i, '')
+        const code = raw.replace(/^(SH|SZ|BJ)[.:]?/i, '').replace(/\.(SH|SZ|BJ|OF)$/i, '')
         symbol = /^\d{6}$/.test(code) ? code : raw
       } else if (m === 'US') {
-        symbol = raw.replace(/^US[.:]/i, '').toUpperCase()
+        // 只去掉市场后缀，保留 BRK.B 这类股份类别的点。
+        symbol = raw.replace(/^US[.:]/i, '').replace(/\.US$/i, '').toUpperCase()
       } else {
         symbol = raw.toUpperCase()
       }
-      return m + '|' + symbol
+      const fund = m === 'FUND' || String(ins.assetClass || '').toLowerCase() === 'fund' ? 'F|' : ''
+      return fund + m + '|' + symbol
     }
     function Settings({ t, state, call, busy, reload }) {
       const db = state.ledger, cur = db.baseCurrency

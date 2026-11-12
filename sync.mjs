@@ -225,8 +225,10 @@ export function mergeSnapshot(db, source, input) {
   for (const row of snapshot.holdings) {
     const holdingKey = keyOf(row)
     // 快照上的 manualPrice 是券商价，只记到 sourcePrice。手填价 manualPrice 不被同步覆盖。
-    const { manualPrice: brokerPrice, ...position } = row
-    const { holding } = applyOp(staged, 'holding.upsert', { holding: { ...position, accountId: account.id } })
+    const { manualPrice: brokerPrice, sourceSymbol, ...position } = row
+    // 把来源自己的原始代码留档（700.HK / HK.00700 …），身份仍按统一代码匹配。
+    const sourceCode = sourceSymbol || row.symbol
+    const { holding } = applyOp(staged, 'holding.upsert', { holding: { ...position, accountId: account.id, source: source.connector, sourceCode } })
     if (seen.has(holding.id)) throw bad('多个来源持仓映射到相同本地标的，请拆分账户')
     seen.add(holding.id)
     Object.assign(holding, { syncSourceId: source.id, externalHoldingKey: holdingKey, sourcePrice: brokerPrice, sourceQueriedAt: snapshot.queriedAt, sourceUploadedAt: snapshot.uploadedAt, sourceQuoteDate: snapshot.quoteDate })

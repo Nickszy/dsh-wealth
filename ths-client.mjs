@@ -229,7 +229,9 @@ async function fundSnapshot(post, source, id, deps) {
       const avgCost = percost !== null && percost > 0 ? percost : costTotal !== null ? Math.round((costTotal / qty) * 1e6) / 1e6 : null
       const quoteDate = thsDay(scalar(row.date).trim(), '净值日期')
       if (quoteDate && (sourceTotals.quoteDate === undefined || quoteDate > sourceTotals.quoteDate)) sourceTotals.quoteDate = quoteDate
-      holdings.push({ symbol, name: scalar(row.fundname).trim() || symbol, market: 'CN', assetClass: 'fund', currency: 'CNY', qty, avgCost, manualPrice, externalId: symbol })
+      // 场外基金用 FUND 身份（000001.OF），不能与同代码股票（000001.SZ 平安银行）共用一条标的。
+      // currencyfund 组是现金管理产品，资产类别仍是 cash，但身份同样按基金保存。
+      holdings.push({ symbol, name: scalar(row.fundname).trim() || symbol, market: 'FUND', assetClass: key === 'currencyfund' ? 'cash' : 'fund', currency: 'CNY', qty, avgCost, manualPrice, externalId: symbol })
       // 净值/市值缺失只是数据质量（v2.3 info 级），基金行仍然可入库，不影响覆盖。
       if (manualPrice === null) warnings.push(infoWarning('PRICE_UNAVAILABLE', 'PRICE_UNAVAILABLE:' + symbol))
       if (value === null) warnings.push(infoWarning('MISSING_FUND_VALUE', 'MISSING_FUND_VALUE:' + symbol))

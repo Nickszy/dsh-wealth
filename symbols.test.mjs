@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { normalizeSymbol, identityKey, resolveSecurity } from './symbols.mjs'
+import { normalizeSymbol, identityKey, resolveSecurity, canonicalDisplayCode, isFundLike } from './symbols.mjs'
 
 test('normalizeSymbol converges HK/CN/US spellings', () => {
   assert.deepEqual(normalizeSymbol('2549.HK', 'HK'), { symbol: '02549', market: 'HK' })
@@ -11,7 +11,13 @@ test('normalizeSymbol converges HK/CN/US spellings', () => {
   assert.deepEqual(normalizeSymbol('sz000001', 'CN'), { symbol: '000001', market: 'CN' })
   assert.deepEqual(normalizeSymbol('us.aapl', 'US'), { symbol: 'AAPL', market: 'US' })
   assert.deepEqual(normalizeSymbol('NIO250117C6000', 'US'), { symbol: 'NIO250117C6000', market: 'US' })
-  assert.deepEqual(normalizeSymbol('AAPL.US', 'US'), { symbol: 'AAPL.US', market: 'US' })
+  assert.deepEqual(normalizeSymbol('AAPL.US', 'US'), { symbol: 'AAPL', market: 'US' })
+  assert.deepEqual(normalizeSymbol('600519.SH', 'CN'), { symbol: '600519', market: 'CN' })
+  assert.deepEqual(normalizeSymbol('430047.BJ', 'CN'), { symbol: '430047', market: 'CN' })
+  assert.deepEqual(normalizeSymbol('000001.OF', 'FUND'), { symbol: '000001', market: 'FUND' })
+  // 股份类别里的点必须保留：BRK.B 不是 BRKB，ADR 与普通股也不能合并
+  assert.deepEqual(normalizeSymbol('US.BRK.B', 'US'), { symbol: 'BRK.B', market: 'US' })
+  assert.notEqual(identityKey({ symbol: 'BRK.B', market: 'US' }), identityKey({ symbol: 'BRKB', market: 'US' }))
   assert.deepEqual(normalizeSymbol('', 'HK'), { symbol: '', market: 'HK' })
 })
 
@@ -36,4 +42,28 @@ test('resolveSecurity picks a tradable security and degrades honestly', async ()
   const onlyIndex = await resolveSecurity('上证指数', { fetch: async () => ({ ok: true, status: 200, json: async () => ({ QuotationCodeTable: { Data: [{ Code: '000001', Name: '上证指数', MktNum: '1', SecurityTypeName: '指数' }] } }) }) })
   assert.equal(onlyIndex, null)
   await assert.rejects(resolveSecurity('x', { fetch: async () => ({ ok: false, status: 503 }) }), /HTTP 503/)
+})
+
+test('canonicalDisplayCode renders the agreed local code while storage stays symbol+market', () => {
+  assert.equal(canonicalDisplayCode({ symbol: '600519', market: 'CN', assetClass: 'stock' }), '600519.SH')
+  assert.equal(canonicalDisplayCode({ symbol: '000001', market: 'CN', assetClass: 'stock' }), '000001.SZ')
+  assert.equal(canonicalDisplayCode({ symbol: '300750', market: 'CN', assetClass: 'stock' }), '300750.SZ')
+  assert.equal(canonicalDisplayCode({ symbol: '688106', market: 'CN', assetClass: 'stock' }), '688106.SH')
+  assert.equal(canonicalDisplayCode({ symbol: '430047', market: 'CN', assetClass: 'stock' }), '430047.BJ')
+  assert.equal(canonicalDisplayCode({ symbol: '510300', market: 'CN', assetClass: 'etf' }), '510300.SH')
+  assert.equal(canonicalDisplayCode({ symbol: '700.HK', market: 'HK', assetClass: 'stock' }), '00700.HK')
+  assert.equal(canonicalDisplayCode({ symbol: 'AAPL.US', market: 'US', assetClass: 'stock' }), 'AAPL.US')
+  assert.equal(canonicalDisplayCode({ symbol: 'BRK.B', market: 'US', assetClass: 'stock' }), 'BRK.B.US')
+  assert.equal(canonicalDisplayCode({ symbol: '000001.OF', market: 'FUND', assetClass: 'fund' }), '000001.OF')
+  assert.equal(canonicalDisplayCode({ symbol: '000001', market: 'CN', assetClass: 'fund' }), '000001.OF')
+  assert.equal(canonicalDisplayCode({ symbol: 'CNY.CASH', market: 'CASH', assetClass: 'cash' }), 'CASH:CNY')
+  assert.equal(canonicalDisplayCode({ symbol: 'HKD.CASH', market: 'CN', assetClass: 'cash', currency: 'HKD' }), 'CASH:HKD')
+})
+
+test('isFundLike separates funds from stocks that share a six-digit code', () => {
+  assert.equal(isFundLike({ market: 'FUND', assetClass: 'fund' }), true)
+  assert.equal(isFundLike({ market: 'CN', assetClass: 'fund' }), true)
+  assert.equal(isFundLike({ market: 'FUND', assetClass: 'cash' }), true)
+  assert.equal(isFundLike({ market: 'CN', assetClass: 'stock' }), false)
+  assert.equal(isFundLike({ market: 'HK', assetClass: 'etf' }), false)
 })

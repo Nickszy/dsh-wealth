@@ -487,3 +487,37 @@ test('a holding with no price and unknown cost is excluded as no-price instead o
   assert.deepEqual(summary.excludedHoldings[0], { holdingId: h.id, accountId: 'a', instrumentId: h.instrumentId, currency: 'USD', reason: 'no-price' })
   assert.ok(summary.warnings.some((w) => w.code === 'no-price' && w.message === '没有价格且成本未知，无法估值'))
 })
+
+// 股票与场外基金可能共用六位代码（000001 平安银行 / 000001.OF 华夏成长）：
+// 身份解析必须带「是不是基金」，旧数据（market=CN 的基金）要被基金引用自愈认领。
+test('a fund and a stock sharing a code never collapse into one instrument', () => {
+  const db = fixture()
+  const stock = applyOp(db, 'holding.upsert', { accountId: 'a', symbol: '000001', market: 'CN', name: '平安银行', assetClass: 'stock', qty: 100, avgCost: 10, manualPrice: 11 }).holding
+  const fund = applyOp(db, 'holding.upsert', { accountId: 'empty', symbol: '000001', market: 'FUND', name: '华夏成长', assetClass: 'fund', qty: 1000, avgCost: 1, manualPrice: 1.2 }).holding
+  assert.notEqual(stock.instrumentId, fund.instrumentId)
+  assert.equal(db.instruments.length, 2)
+})
+
+test('legacy CN-market fund records are claimed by FUND refs instead of duplicated', () => {
+  const db = fixture()
+  const legacy = applyOp(db, 'holding.upsert', { accountId: 'a', symbol: '000002', market: 'CN', name: '旧基金（历史写法）', assetClass: 'fund', qty: 10, avgCost: 1, manualPrice: 1 }).holding
+  const healed = applyOp(db, 'holding.upsert', { accountId: 'empty', symbol: '000002', market: 'FUND', name: '旧基金', assetClass: 'fund', qty: 5, avgCost: 1, manualPrice: 1.1 }).holding
+  assert.equal(healed.instrumentId, legacy.instrumentId, 'FUND ref reuses the legacy CN fund instrument')
+  assert.equal(db.instruments.length, 1)
+  // 反向：股票引用绝不能挂到同代码的基金标的上
+  const stock = applyOp(db, 'holding.upsert', { accountId: 'a', symbol: '000002', market: 'CN', name: '万科A', assetClass: 'stock', qty: 200, avgCost: 9, manualPrice: 10 }).holding
+  assert.notEqual(stock.instrumentId, legacy.instrumentId)
+})
+
+test('source raw codes are recorded per connector without touching identity matching', () => {
+  const db = fixture()
+  const viaFutu = applyOp(db, 'holding.upsert', { accountId: 'a', symbol: 'HK.00700', market: 'HK', name: '腾讯控股', assetClass: 'stock', currency: 'HKD', qty: 100, avgCost: 305, manualPrice: 428, source: 'futu', sourceCode: 'HK.00700' }).holding
+  const viaLb = applyOp(db, 'holding.upsert', { accountId: 'empty', symbol: '700.HK', market: 'HK', name: '腾讯控股', assetClass: 'stock', currency: 'HKD', qty: 200, avgCost: 310, manualPrice: 428, source: 'longbridge', sourceCode: '700.HK' }).holding
+  assert.equal(viaFutu.instrumentId, viaLb.instrumentId, 'both spellings resolve to one instrument')
+  const ins = db.instruments.find(i => i.id === viaFutu.instrumentId)
+  assert.equal(ins.symbol, '00700')
+  assert.deepEqual(ins.sourceCodes, { futu: 'HK.00700', longbridge: '700.HK' })
+  applyOp(db, 'instrument.upsert', { instrumentId: ins.id, sourceCodes: { tencent: 'hk00700', eastmoney: '116.00700' } })
+  assert.deepEqual(ins.sourceCodes, { futu: 'HK.00700', longbridge: '700.HK', tencent: 'hk00700', eastmoney: '116.00700' })
+  bad(db, 'instrument.upsert', { instrumentId: ins.id, sourceCodes: { 'bad key': 'x' } })
+})

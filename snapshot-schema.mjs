@@ -74,13 +74,16 @@ function date(value, field, nullable = false) {
 function identity(row, field) {
   // 统一交易代码：各券商对港股/美股的写法不同（2549.HK、HK.02549、02549），
   // 入库前收敛为一种，保证同一只证券只有一条身份、只查一份历史行情。
-  const normalized = normalizeSymbol(text(row.symbol, `${field}.symbol`), text(row.market, `${field}.market`))
+  const rawSymbol = text(row.symbol, `${field}.symbol`)
+  const normalized = normalizeSymbol(rawSymbol, text(row.market, `${field}.market`))
   const result = {
     symbol: normalized.symbol,
     name: text(row.name, `${field}.name`),
     market: normalized.market,
     assetClass: text(row.assetClass, `${field}.assetClass`).toLowerCase(),
     currency: text(row.currency, `${field}.currency`).toUpperCase(),
+    // 来源原始写法（700.HK / HK.00700 / hk00700）：只用于留档排查，不参与身份匹配。
+    ...(rawSymbol !== normalized.symbol ? { sourceSymbol: rawSymbol } : {}),
   }
   if (!CLASSES.has(result.assetClass)) fail(`${field}.assetClass is unsupported`)
   if (!/^[A-Z]{3}$/.test(result.currency)) fail(`${field}.currency must be a three-letter code`)

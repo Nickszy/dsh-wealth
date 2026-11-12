@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { isFlowKind, KIND_NAMES, normalizeStyle, isLifeCategory, LIFE_CATEGORIES, canonicalMarket } from './model.mjs'
-import { normalizeSymbol, identityKey } from './symbols.mjs'
+import { normalizeSymbol, identityKey, isFundLike } from './symbols.mjs'
 import { valuationPrice } from './quotes.mjs'
 
 export const DATA_DIR = process.env.DSH_PORTFOLIO_DIR || join(homedir(), '.dsh', 'data', 'dsh-portfolio')
@@ -118,17 +118,39 @@ function resolveInstrument(db, ref, { create = true } = {}) {
   }
   const rawSymbol = String(ref.symbol || '').trim()
   if (!rawSymbol) throw new OpError('bad-request', '缺少标的代码 symbol')
-  // 统一交易代码：同一只证券在各来源的写法（2549.HK / HK.02549 / 02549）收敛为一种，
-  // 否则历史行情与估值会按不同身份各查一次，产生重复持仓。
+  // 统一交易代码：同一只证券在各来源的写法（2549.HK / HK.02549 / 02549、600519.SH / SH.600519、
+  // AAPL.US / US.AAPL）收敛为一种，否则历史行情与估值会按不同身份各查一次，产生重复持仓。
   const normalized = normalizeSymbol(rawSymbol, ref.market || '')
   const symbol = normalized.symbol || rawSymbol
-  const market = String(ref.market || '').trim().toUpperCase()
-  // 按统一身份查找：旧写法（2549.HK / HK.02549）也能挂到已有记录上，不再产生第三条重复。
-  const existing = db.instruments.find((i) => {
+  const rawMarket = String(ref.market || '').trim().toUpperCase()
+  const market = normalized.market
+  // 股票与场外基金的六位代码会撞（000001 平安银行 / 000001.OF 华夏成长）：
+  // 只有六位代码的 CN/FUND 标的才区分「是不是基金」，其余市场（港股五位、美股字母）
+  // 不存在这种撞号，不能因为历史数据里 assetClass 缺失而误判成两只。
+  const compareFund = /^\d{6}$/.test(symbol) && (market === 'FUND' || market === 'CN' || rawMarket === '')
+  const wantFund = isFundLike({ market, assetClass: ref.assetClass })
+  const matches = (i) => {
     const n = normalizeSymbol(i.symbol, i.market)
-    return n.symbol === symbol && (market === '' || n.market === market)
-  })
-  if (existing) return existing
+    return n.symbol === symbol && (rawMarket === '' || n.market === market) && (!compareFund || isFundLike(i) === wantFund)
+  }
+  const rememberSourceCode = (instrument) => {
+    const source = String(ref.source || '').trim().toLowerCase()
+    const code = String(ref.sourceCode || '').trim()
+    if (!source || !code || !/^[a-z0-9_-]{1,24}$/.test(source)) return instrument
+    instrument.sourceCodes = { ...(instrument.sourceCodes || {}), [source]: code.slice(0, 80) }
+    return instrument
+  }
+  const existing = db.instruments.find(matches)
+  if (existing) return rememberSourceCode(existing)
+  // 旧数据自愈：场外基金曾以 market=CN 入库（同花顺基金账本）。基金引用优先认领它，
+  // 不再新建一条；股票引用不会走到这里（基金身份不匹配）。
+  if (compareFund && wantFund) {
+    const legacy = db.instruments.find((i) => {
+      const n = normalizeSymbol(i.symbol, i.market)
+      return n.symbol === symbol && canonicalMarket(i.market) === 'CN' && isFundLike(i)
+    })
+    if (legacy) return rememberSourceCode(legacy)
+  }
   if (!create) throw new OpError('not-found', '标的不存在: ' + symbol)
   const instrument = {
     id: uid('INS'),
@@ -141,7 +163,7 @@ function resolveInstrument(db, ref, { create = true } = {}) {
     createdAt: nowISO(),
   }
   db.instruments.push(instrument)
-  return instrument
+  return rememberSourceCode(instrument)
 }
 
 function guessAssetClass(symbol, given) {
@@ -246,11 +268,27 @@ export function applyOp(db, op, payload = {}) {
           changes[key] = key === 'market' ? value.toUpperCase() : value
         }
       }
+      // 各数据源的原始代码（longbridge: 700.HK / tencent: hk00700 …），只做展示与排查，不参与身份匹配。
+      let sourceCodes = null
+      if (p.sourceCodes !== undefined) {
+        if (!p.sourceCodes || typeof p.sourceCodes !== 'object' || Array.isArray(p.sourceCodes)) throw new OpError('bad-request', 'sourceCodes 必须是对象')
+        sourceCodes = {}
+        for (const [rawKey, rawValue] of Object.entries(p.sourceCodes)) {
+          const key = String(rawKey).trim().toLowerCase()
+          if (!/^[a-z0-9_-]{1,24}$/.test(key)) throw new OpError('bad-request', '来源名称不合法: ' + rawKey)
+          const value = String(rawValue ?? '').trim()
+          if (value) sourceCodes[key] = value.slice(0, 80)
+        }
+      }
       const instrument = resolveInstrument(db, { ...p, instrumentId: p.id || p.instrumentId }, { create: true })
       const symbol = changes.symbol ?? instrument.symbol
       const market = changes.market ?? instrument.market
-      if (db.instruments.some((i) => i.id !== instrument.id && i.symbol === symbol && i.market === market)) throw new OpError('bad-request', '相同市场已有此标的代码')
+      // 股票与场外基金允许同代码同市场共存（000001 vs 000001.OF），只有同类身份才算冲突；
+      // 其他代码（港股五位 / 美股字母）沿用原来的严格查重。
+      const compareFund = /^\d{6}$/.test(symbol) && ['CN', 'FUND'].includes(canonicalMarket(market))
+      if (db.instruments.some((i) => i.id !== instrument.id && i.symbol === symbol && i.market === market && (!compareFund || isFundLike(i) === isFundLike(instrument)))) throw new OpError('bad-request', '相同市场已有此标的代码')
       Object.assign(instrument, changes)
+      if (sourceCodes) instrument.sourceCodes = { ...(instrument.sourceCodes || {}), ...sourceCodes }
       instrument.updatedAt = nowISO()
       return { instrument }
     }
@@ -657,14 +695,15 @@ export function summarize(db) {
   let totalBase = 0, totalCost = 0, totalPnl = 0, holdingsWithoutCost = 0
   // 同一只证券可能存在多条历史记录（每个来源一条）：统计按统一身份取首条元数据，
   // 记录本身保持分开，汇总与分类归并到同一身份下。
+  const canonicalKey = (ins) => (isFundLike(ins) ? 'F|' : '') + identityKey(ins)
   const canonical = new Map()
   for (const ins of db.instruments) {
-    const key = identityKey(ins)
+    const key = canonicalKey(ins)
     if (!canonical.has(key)) canonical.set(key, ins)
   }
   const instrumentOf = (id) => {
     const ins = db.instruments.find((i) => i.id === id)
-    return ins ? (canonical.get(identityKey(ins)) || ins) : null
+    return ins ? (canonical.get(canonicalKey(ins)) || ins) : null
   }
   const exclude = (h, currency, reason, message) => {
     excludedHoldings.push({ holdingId: h.id, accountId: h.accountId, instrumentId: h.instrumentId, currency, reason })

@@ -45,7 +45,10 @@ mcpEndpoint。同一来源账户可以对应多个模型账户的情况被 finge
 ```jsonc
 {
   "id": "INS_42A1B6C8",
-  "symbol": "700.HK",              // 来源原生代码；基金为 6 位 fundcode；现金行 HKD.CASH
+  "symbol": "00700",               // 统一代码（写入时归一）：港股 5 位、A 股 6 位、基金 6 位 fundcode、现金 HKD.CASH
+  "sourceCodes": {                  // 各来源原始写法，仅留档/排查，不参与身份匹配
+    "longbridge": "700.HK", "futu": "HK.00700", "tencent": "hk00700"
+  },
   "name": "腾讯控股",
   "market": "HK",                  // CN | HK | US | SG | FUND | CASH | OTHER（canonicalMarket 归一）
   "assetClass": "stock",           // stock | fund | etf | cash | bond | crypto | other（固定枚举）
@@ -63,7 +66,14 @@ mcpEndpoint。同一来源账户可以对应多个模型账户的情况被 finge
   `counter_id` 末段 ISIN → market `FUND`。
 - 同花顺基金 fundcode（6 位数字）→ market `FUND`、assetClass `fund`。
 - 原币现金 → market `CASH`、assetClass `cash`，symbol 用 `币种.CASH`（如 `HKD.CASH`）。
-- 同一 `(symbol, market)` 全局唯一；跨市场同代码（如 000001）不合并。
+- 身份 = `(symbol, market, 是否基金)`：同一身份全局唯一；跨市场同代码（如 000001）不合并。
+- 六位代码的股票与场外基金必须分开建档：`000001`（平安银行，CN）与 `000001`（华夏成长，FUND）
+  是两只标的；旧数据里以 `market=CN` 保存的基金会在下次同步时被基金引用认领，不再新建。
+- 展示代码由 `symbols.mjs` 的 `canonicalDisplayCode()` 推导（项目约定，不是接口入参）：
+  `600519.SH` / `000001.SZ` / `430047.BJ` / `00700.HK` / `AAPL.US` / `000001.OF` / `CASH:CNY`。
+  美股股份类别保留点号（`BRK.B` ≠ `BRKB`）。
+- 来源原始代码存 `sourceCodes[connector]`（如 `hk00700`、`116.00700`），由快照导入自动记录；
+  `instrument.upsert` 可增量补充。
 
 ## 3. Holding 持仓（快照事实）
 
