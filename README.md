@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Nickszy/dsh-wealth/main/brand/logo-lockup.svg" alt="dsh-wealth · 资产账本" width="330">
+  <img src="brand/logo-lockup.svg" alt="dsh-wealth · 资产账本" width="330">
 </p>
 
 <p align="center">
@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Nickszy/dsh-wealth/main/docs/shots/hero.png" alt="dsh-wealth 总览：总资产、资产轨迹、账户分布与右侧资产助手" width="100%">
+  <img src="docs/shots/hero.png" alt="dsh-wealth 总览：总资产、资产轨迹、账户分布与右侧资产助手" width="100%">
 </p>
 
 ---
@@ -45,7 +45,7 @@
 总资产、持仓成本、浮动盈亏、账户和币种分布；资产轨迹来自真实历史快照，
 不是根据当前持仓倒推的示意图。
 
-<img src="https://raw.githubusercontent.com/Nickszy/dsh-wealth/main/docs/shots/accounts.png" alt="账户页：净资产、历史快照曲线与按类型分组的账户" width="100%">
+<img src="docs/shots/accounts.png" alt="账户页：净资产、历史快照曲线与按类型分组的账户" width="100%">
 
 ### 一次登录 = 一条授权，而不是一堆散落的账户
 
@@ -53,8 +53,8 @@
 富途、长桥、且慢、老虎、复星都走各自官方的 OAuth / MCP 授权，插件不接触密码。
 
 <p>
-  <img src="https://raw.githubusercontent.com/Nickszy/dsh-wealth/main/docs/shots/connectors.png" alt="新增账户：同花顺、富途、长桥、且慢、老虎、复星、IB 与手工导入" width="49%">
-  <img src="https://raw.githubusercontent.com/Nickszy/dsh-wealth/main/docs/shots/authorizations.png" alt="授权账号：一次授权下列出全部子账户" width="49%">
+  <img src="docs/shots/connectors.png" alt="新增账户：同花顺、富途、长桥、且慢、老虎、复星、IB 与手工导入" width="49%">
+  <img src="docs/shots/authorizations.png" alt="授权账号：一次授权下列出全部子账户" width="49%">
 </p>
 
 ### 不只是「持仓值多少钱」，而是「我到底赚了多少」
@@ -63,12 +63,12 @@
 **资金加权年化 XIRR**（你自己的真实年化），外加最大回撤、资金流总览、
 资产负债表，以及按行业 / 风格的集中度。
 
-<img src="https://raw.githubusercontent.com/Nickszy/dsh-wealth/main/docs/shots/analysis.png" alt="分析页：TWR、XIRR、最大回撤、历史净值与资金流" width="100%">
+<img src="docs/shots/analysis.png" alt="分析页：TWR、XIRR、最大回撤、历史净值与资金流" width="100%">
 
 单账户还能把流水和历史行情拼回去，看到**买入以来**的净值走势与回撤，
 而不是「从安装那天起」的曲线。
 
-<img src="https://raw.githubusercontent.com/Nickszy/dsh-wealth/main/docs/shots/account-performance.png" alt="账户分析：历史净值回补、区间涨跌与最大回撤" width="100%">
+<img src="docs/shots/account-performance.png" alt="账户分析：历史净值回补、区间涨跌与最大回撤" width="100%">
 
 ### 投资和生活，记在同一本账上
 
@@ -76,7 +76,7 @@
 月度预算、超支提醒、年度现金流，和投资收益放在同一套数据里，
 不再出现「投资账本很漂亮，但不知道钱花哪了」。
 
-<img src="https://raw.githubusercontent.com/Nickszy/dsh-wealth/main/docs/shots/bills.png" alt="生活账单：12 个月分类汇总、月度预算与数据健康" width="100%">
+<img src="docs/shots/bills.png" alt="生活账单：12 个月分类汇总、月度预算与数据健康" width="100%">
 
 ### 一个真的能动手的 AI 助手
 
@@ -84,17 +84,17 @@
 它可以改价格、补录流水、建预算、整理一段粘贴进来的交易记录——
 所有改动先以「待写入 N 项变更」展示，点确认才落盘，落盘前还会校验账本版本。
 
-<img src="https://raw.githubusercontent.com/Nickszy/dsh-wealth/main/docs/shots/assistant.png" alt="资产助手：自然语言核对账目，生成待确认的变更" width="100%">
+<img src="docs/shots/assistant.png" alt="资产助手：自然语言核对账目，生成待确认的变更" width="100%">
 
 ### 持仓、流水、设置都在该在的位置
 
 <p>
-  <img src="https://raw.githubusercontent.com/Nickszy/dsh-wealth/main/docs/shots/holdings.png" alt="持仓页：按资产类别分组，标注行业与风格" width="49%">
-  <img src="https://raw.githubusercontent.com/Nickszy/dsh-wealth/main/docs/shots/trades.png" alt="流水页：统一流水，行内调整生活分类" width="49%">
+  <img src="docs/shots/holdings.png" alt="持仓页：按资产类别分组，标注行业与风格" width="49%">
+  <img src="docs/shots/trades.png" alt="流水页：统一流水，行内调整生活分类" width="49%">
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Nickszy/dsh-wealth/main/docs/shots/overview-dark.png" alt="暗色模式" width="72%">
+  <img src="docs/shots/overview-dark.png" alt="暗色模式" width="72%">
 </p>
 
 > 以上截图由 `scripts/demo-fixture.mjs` 生成：**真实界面 + 真实计算管线 + 虚构演示数据**，
