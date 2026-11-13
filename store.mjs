@@ -863,7 +863,7 @@ export function summarize(db) {
     if (!finiteNonNegative(h.qty) || !finiteNonNegative(price) || (hasCost && !Number.isFinite(h.avgCost)) || !Number.isFinite(valueBase) || (hasCost && (!Number.isFinite(costBase) || !Number.isFinite(totalPnl + pnlBase))) || !Number.isFinite(totalBase + valueBase) || (hasCost && !Number.isFinite(totalCost + costBase))) {
       exclude(h, cur, 'invalid-valuation', '持仓数值无效或超出可计算范围'); continue
     }
-    if (h.manualPrice == null && h.quotePrice == null && h.sourcePrice == null && h.qty > 0) warnings.push({ code: 'cost-estimate-price', message: '未设置现价，使用平均成本估值', holdingId: h.id, currency: cur })
+    if (h.manualPrice == null && h.quotePrice == null && h.sourcePrice == null && h.qty > 0) warnings.push({ code: 'cost-estimate-price', message: '未设置现价，使用平均成本估值（点「⟳ 更新行情」补现价后此提示自动消失）', holdingId: h.id, currency: cur })
     totalBase += valueBase
     if (hasCost) {
       totalCost += costBase

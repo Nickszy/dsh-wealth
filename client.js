@@ -1514,8 +1514,14 @@ window.__ModuleLoader__.load({
           const r = await fetch('/portfolio/api/quotes/refresh', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
           const d = await r.json()
           if (!r.ok || !d.ok) throw new Error(d.error?.message || '行情更新失败')
-          const missing = (d.warnings || []).filter(w => String(w).startsWith('QUOTE_')).length
-          setMsg('已更新 ' + d.updated + ' 条行情现价' + (missing ? '；' + missing + ' 个标的暂无行情，保留原估值' : '') + '。手填价格仍然优先。')
+          // 区分「接口没连上」（一条都没更新）和「个别标的没行情」：前者是故障，后者是常态。
+          const warns = (d.warnings || []).map(w => String(w))
+          const unreachable = warns.find(w => w.startsWith('QUOTES_NETWORK') || w.startsWith('QUOTES_HTTP'))
+          const missing = warns.filter(w => w.startsWith('QUOTE_MISSING') || w.startsWith('QUOTE_UNAVAILABLE')).length
+          setMsg('已更新 ' + d.updated + ' 条行情现价'
+            + (unreachable ? '；行情接口没连上（' + unreachable + '），本次一只都没刷新' : '')
+            + (!unreachable && missing ? '；' + missing + ' 个标的暂无行情，保留原估值' : '')
+            + '。手填价格仍然优先。')
           if (reload) await reload()
         } catch (e) { setMsg(e.message) }
         finally { setQuoting(false) }

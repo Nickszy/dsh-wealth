@@ -180,6 +180,13 @@ const CANNED = [
   { symbol: 'AAPL', market: 'US', name: '苹果', securityType: '美股', assetClass: 'stock', provider: 'eastmoney' },
 ]
 
+// 演示行情：只有这两只有公开行情的标的能被「⟳ 更新行情」刷出价——正好演示
+// 「确认身份之后，行情才补得上；估值提示随之消失」。其余持仓沿用生成时的价格。
+const DEMO_QUOTES = {
+  sz000001: { price: 12.05, changePct: 0.42, name: '平安银行', currency: 'CNY', source: 'sz' },
+  hk02549: { price: 35.6, changePct: 1.15, name: '卡罗特', currency: 'HKD', source: 'hk' },
+}
+
 window.fetch = async (path, opts) => {
   const url = String(path)
   const body = opts && opts.body ? JSON.parse(opts.body) : {}
@@ -217,7 +224,34 @@ window.fetch = async (path, opts) => {
       return J(ledgerResponse(result))
     } catch (error) { return bad(error.message) }
   }
-  if (url.endsWith('/quotes/refresh')) return J({ ok: true, updated: 0, warnings: ['QUOTES_NETWORK:unavailable'], summary: RES.summary, analysis: RES.analysis })
+  if (url.endsWith('/quotes/refresh')) {
+    // 与 quotes.mjs 的 quoteKey / fundQuoteKey 同规则（演示只覆盖股票/ETF 键）。
+    const keyOf = (i) => {
+      const m = String(i.market || '').toUpperCase(), s = String(i.symbol || '').trim()
+      const cls = String(i.assetClass || '').toLowerCase()
+      if (!s || !['stock', 'etf'].includes(cls)) return ''
+      if (m === 'CN') return /^(6|9|5)/.test(s) ? 'sh' + s : (/^(0|1|2|3)/.test(s) ? 'sz' + s : '')
+      if (m === 'HK') return /^\\d{3,5}$/.test(s) ? 'hk' + s.padStart(5, '0') : ''
+      if (m === 'US') return /^[A-Z][A-Z.]{0,9}$/.test(s.toUpperCase()) ? 'us' + s.toUpperCase() : ''
+      return ''
+    }
+    const now = new Date().toISOString()
+    const priced = new Set()
+    for (const h of DB.holdings) {
+      const i = DB.instruments.find((x) => x.id === h.instrumentId)
+      const q = i ? DEMO_QUOTES[keyOf(i)] : null
+      if (!q) continue
+      h.quotePrice = q.price
+      h.quoteAt = now
+      h.quoteSource = q.source
+      h.quoteChangePct = q.changePct
+      priced.add(h.id)
+    }
+    // 有价之后，估值提示里的对应条目跟着消失（真实后端是重算摘要，这里等价模拟）。
+    RES.summary.warnings = (RES.summary.warnings || []).filter((w) => !priced.has(w.holdingId))
+    touched()
+    return J({ ok: true, updated: priced.size, warnings: [], fx: {}, summary: RES.summary, analysis: RES.analysis })
+  }
   if (url.includes('/model')) return J({ ok: true, model: { label: '演示模型（示例数据）' } })
   if (url.includes('/digest')) return J({ ok: true, ...RES.digest })
   if (url.includes('/bills/preview')) return J({ ok: true, text: '', categories: [], warnings: [] })
