@@ -12,11 +12,33 @@ export const inject = ['webServer']
 const HERE = dirname(fileURLToPath(import.meta.url))
 const PAGE = join(HERE, 'public', 'index.html')
 
+// 只接受本机直连、同源的请求：挡掉 DNS rebinding（Host 指向外部域名）和跨站嵌入。
+// 预览页只有演示数据，但这层和 dsh-wealth 的 /portfolio 路由保持一致，免得留下一个
+// 无守卫的静态出口。
+function isLoopback(hostname) {
+  const h = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '')
+  return h === 'localhost' || h === '::1' || h === '127.0.0.1' || /^127\.\d+\.\d+\.\d+$/.test(h)
+}
+
+function trusted(req) {
+  const raw = req.headers && req.headers.host
+  if (!raw) return false
+  let hostUrl
+  try { hostUrl = new URL('http://' + raw) } catch { return false }
+  if (req.headers['sec-fetch-site'] === 'cross-site') return false
+  const origin = req.headers.origin
+  if (origin) {
+    try { if (new URL(origin).host !== hostUrl.host) return false } catch { return false }
+  }
+  return isLoopback(hostUrl.hostname)
+}
+
 export function apply(ctx) {
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
     path: '/portfolio-preview',
     handler: (req, res) => {
+      if (!trusted(req)) { res.writeHead(403); res.end('forbidden'); return }
       if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
       let path
       try { path = new URL(req.url || '/', 'http://dsh.internal').pathname } catch { res.writeHead(400); res.end(); return }

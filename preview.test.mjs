@@ -23,9 +23,9 @@ function mount() {
   return { route, isDisposed: () => disposed }
 }
 
-function request(url, method = 'GET') {
-  const res = { status: 0, headers: null, body: '', writeHead(code, headers) { this.status = code; this.headers = headers || {} }, end(body) { this.body = body ? String(body) : '' } }
-  mount().route.handler({ method, url }, res)
+function request(url, method = 'GET', headers = { host: '127.0.0.1:3580' }) {
+  const res = { status: 0, headers: null, body: '', writeHead(code, hdrs) { this.status = code; this.headers = hdrs || {} }, end(body) { this.body = body ? String(body) : '' } }
+  mount().route.handler({ method, url, headers }, res)
   return res
 }
 
@@ -65,6 +65,14 @@ test('非入口路径 404，非 GET 405', () => {
   assert.equal(request('/portfolio-preview/secret').status, 404)
   assert.equal(request('/portfolio-preview/index.html.bak').status, 404)
   assert.equal(request('/portfolio-preview/', 'POST').status, 405)
+})
+
+test('只服务本机直连的同源请求', () => {
+  assert.equal(request('/portfolio-preview/', 'GET', { host: 'evil.example.com' }).status, 403)
+  assert.equal(request('/portfolio-preview/', 'GET', {}).status, 403)
+  assert.equal(request('/portfolio-preview/', 'GET', { host: '127.0.0.1:3580', 'sec-fetch-site': 'cross-site' }).status, 403)
+  assert.equal(request('/portfolio-preview/', 'GET', { host: '127.0.0.1:3580', origin: 'http://evil.example.com' }).status, 403)
+  assert.notEqual(request('/portfolio-preview/', 'GET', { host: 'localhost:3580', origin: 'http://localhost:3580' }).status, 403)
 })
 
 test('页面自包含，不加载外部资源，也不出现真实账本路径', () => {
