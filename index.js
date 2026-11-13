@@ -762,7 +762,10 @@ export function apply(ctx, config = {}) {
         if (path === 'api/quotes/refresh') {
           if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
           const db = load()
-          const result = await refreshQuotes(db)
+          // 配了同花顺 Key 时，A股 / 场内基金现价优先走同花顺快照；港股 / 美股 / 场外
+          // 净值仍走腾讯。Key 失效只影响现价来源，不影响刷新本身（腾讯照常回落）。
+          const token = dataToken()
+          const result = await refreshQuotes(db, token ? { ths: { token } } : {})
           if (result.updated) save(db)
           send(res, 200, { ok: true, ...result, summary: summarize(db), analysis: analyze(db) })
           return

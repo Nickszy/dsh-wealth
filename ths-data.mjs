@@ -121,6 +121,61 @@ async function thsRequest(path, params, { token, fetch: fetchImpl = globalThis.f
   throw new ThsDataError(code, ERROR_TEXT[code] || String(json.message || '同花顺数据接口返回错误 code=' + code))
 }
 
+// 行情快照：A股一个接口，场内基金（ETF/LOF）另一个；都没有港股 / 美股快照。
+const A_SHARE_SNAPSHOT = '/api/a-share/prices/snapshot'
+const FUND_SNAPSHOT = '/api/fund/market/snapshot'
+
+/** 快照响应 → 与腾讯行情同形的 { symbol, market, price, quotedAt, changePct, source }。 */
+function parseSnapshotQuotes(json) {
+  const rows = json?.data?.item
+  const quotes = new Map()
+  if (!Array.isArray(rows)) return quotes
+  const stamp = Number(json?.data?.timestamp)
+  for (const row of rows) {
+    const thscode = String(row?.thscode || '').trim().toUpperCase()
+    const symbol = String(row?.ticker || '').trim()
+    const price = Number(row?.last_price)
+    if (!symbol || !Number.isFinite(price) || price <= 0) continue
+    // 行情键要和腾讯那边同形（sh/sz 前缀 + 代码），快照按 thscode 后缀给交易所。
+    const suffix = (thscode.split('.').pop() || '').toLowerCase()
+    const key = (suffix === 'sh' || suffix === 'sz' ? suffix : 'sh') + symbol
+    const pct = Number(row?.price_change_ratio_pct)
+    // 与腾讯口径一致：存上海墙钟时间，调用方统一按 UTC 加 Z 落库。
+    const quotedAt = Number.isFinite(stamp) && stamp > 0 ? new Date(stamp + 8 * 3600_000).toISOString().slice(0, 19) : null
+    quotes.set(key.toLowerCase(), {
+      symbol, market: 'cn', name: '', currency: 'CNY', price,
+      quotedAt, changePct: Number.isFinite(pct) ? pct : null, source: 'ths',
+    })
+  }
+  return quotes
+}
+
+/**
+ * 同花顺行情快照（A股 + 场内基金）。targets: [{ key, kind: 'stock'|'etf', thscode }]，
+ * key 是腾讯行情键（如 sh600519 / sz161725），thscode 如 600519.SH / 161725.SZ。
+ * 失败只产警告、返回空表，由调用方回落腾讯；同花顺没有港股 / 美股快照。
+ */
+export async function fetchThsQuotes(targets, { token, fetch: fetchImpl, timeoutMs = 15000 } = {}) {
+  const list = Array.isArray(targets) ? targets.filter((t) => t && t.key && t.thscode) : []
+  const quotes = new Map(), warnings = []
+  if (!token || !list.length) return { quotes, warnings }
+  const options = { token, fetch: fetchImpl, timeoutMs }
+  const groups = [
+    { path: A_SHARE_SNAPSHOT, param: 'thscodes', items: list.filter((t) => t.kind === 'stock') },
+    { path: FUND_SNAPSHOT, param: 'thscode', items: list.filter((t) => t.kind === 'etf') },
+  ]
+  await Promise.all(groups.map(async (g) => {
+    if (!g.items.length) return
+    try {
+      const json = await thsRequest(g.path, { [g.param]: g.items.map((t) => t.thscode).join(',') }, options)
+      for (const [key, quote] of parseSnapshotQuotes(json)) quotes.set(key, quote)
+    } catch (error) {
+      warnings.push('THS_QUOTES:' + (error?.code || error?.name || 'unavailable'))
+    }
+  }))
+  return { quotes, warnings }
+}
+
 /**
  * 取单个标的的历史收盘 / 净值序列（不缓存）。失败抛错，由调用方决定是否回落。
  * 返回按日期升序的 [date, value] 列表；标的不在该来源覆盖范围内时返回 []。

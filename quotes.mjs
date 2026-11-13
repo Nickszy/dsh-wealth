@@ -3,6 +3,7 @@
 // GBK text lines: v_sz002432="51~九安医疗~002432~57.65~..."; field 3 is the last price,
 // field 30 is the stamp, field 32 is today's change in percent (10 means +10%).
 import { normalizeSymbol } from './symbols.mjs'
+import { fetchThsQuotes } from './ths-data.mjs'
 const QUOTES_URL = 'https://qt.gtimg.cn/q='
 const MARKET_CURRENCY = { sh: 'CNY', sz: 'CNY', hk: 'HKD', us: 'USD' }
 const number = (value) => {
@@ -80,6 +81,15 @@ export function quoteKey(instrument = {}) {
   }
   return null
 }
+const assetClassOf = (instrument = {}) => String(instrument.assetClass || '').toLowerCase()
+
+/** 同花顺 thscode（600519.SH / 161725.SZ）：只有 A股和场内基金有快照。 */
+export function thsCodeOf(instrument = {}) {
+  if (!['stock', 'etf'].includes(assetClassOf(instrument))) return null
+  const key = quoteKey(instrument)
+  return key && /^(sh|sz)\d{6}$/.test(key) ? key.slice(2) + '.' + key.slice(0, 2).toUpperCase() : null
+}
+
 /** 场外基金 6 位代码。货币基金经常没有单位净值，调用方会当成无行情而保留原值。 */
 export function fundQuoteKey(instrument = {}) {
   const normalized = normalizeSymbol(instrument.symbol, instrument.market)
@@ -191,9 +201,13 @@ const longDecimal = (value) => (String(value).split('.')[1] || '').replace(/0+$/
  * A real hand price still wins; a broker snapshot copied into manualPrice does not.
  * Pure given a ledger clone; the caller persists and returns counts/warnings.
  */
-export function refreshQuotes(db, { fetch, timeoutMs } = {}) {
+export function refreshQuotes(db, { fetch, timeoutMs, ths } = {}) {
   const insMap = new Map((db.instruments || []).map(i => [i.id, i]))
   const byKey = new Map()
+  // 配置了同花顺 Key 时，A股 / 场内基金优先走同花顺快照（它有腾讯没收录的 LOF）；
+  // 港股 / 美股 / 场外净值没有同花顺快照，仍由腾讯取。腾讯照常请求，作为
+  // 同花顺失败或缺价时的回落。
+  const thsTargets = []
   for (const holding of db.holdings || []) {
     const instrument = insMap.get(holding.instrumentId) || {}
     const key = quoteKey(instrument) || fundQuoteKey(instrument)
@@ -202,11 +216,21 @@ export function refreshQuotes(db, { fetch, timeoutMs } = {}) {
     const id = key.toLowerCase()
     if (!byKey.has(id)) byKey.set(id, [])
     byKey.get(id).push(holding)
+    const thscode = thsCodeOf(instrument)
+    if (thscode && !thsTargets.some(t => t.key === id)) thsTargets.push({ key: id, kind: assetClassOf(instrument) === 'etf' ? 'etf' : 'stock', thscode })
   }
   const keys = [...byKey.keys()]
-  return Promise.all([fetchQuotes(keys, { fetch, timeoutMs }), fetchFundQuotes(keys, { fetch, timeoutMs })]).then(([stocks, funds]) => {
+  const thsCall = ths && ths.token
+    ? fetchThsQuotes(thsTargets, { token: ths.token, fetch: ths.fetch || fetch, timeoutMs })
+    : Promise.resolve({ quotes: new Map(), warnings: [] })
+  return Promise.all([fetchQuotes(keys, { fetch, timeoutMs }), fetchFundQuotes(keys, { fetch, timeoutMs }), thsCall]).then(([stocks, funds, thsQuotes]) => {
     const quotes = new Map([...stocks.quotes, ...funds.quotes])
-    const warnings = [...stocks.warnings, ...funds.warnings]
+    // 同花顺优先：同一个键以它为准；它没给的，留在腾讯结果里。
+    for (const [key, quote] of thsQuotes.quotes) quotes.set(key, quote)
+    // 同花顺已经补上的键，腾讯那边「没收录」的警告就不必再报。
+    const covered = new Set(thsQuotes.quotes.keys())
+    const warnings = [...stocks.warnings, ...funds.warnings, ...thsQuotes.warnings]
+      .filter(w => !(/^QUOTE_(?:MISSING|UNAVAILABLE):/.test(w) && covered.has(w.slice(w.indexOf(':') + 1).toLowerCase())))
     let updated = 0
     const applied = []
     // 行情顺带更新产品表：只用行情里的名称补「占位名」（名称等于代码或为空），
@@ -224,7 +248,7 @@ export function refreshQuotes(db, { fetch, timeoutMs } = {}) {
         const previous = holding.quotePrice
         holding.quotePrice = quote.price
         holding.quoteAt = quote.quotedAt ? new Date(quote.quotedAt + 'Z').toISOString().replace(/\.\d{3}Z$/, 'Z') : null
-        holding.quoteSource = quote.market === 'jj' ? 'tencent-fund' : 'tencent'
+        holding.quoteSource = quote.source || (quote.market === 'jj' ? 'tencent-fund' : 'tencent')
         holding.quoteChangePct = quote.changePct
         // 同步曾经把券商价写进 manualPrice。基金净值还常带着长小数，或与快照相差几个交易日。
         const manual = Number(holding.manualPrice)

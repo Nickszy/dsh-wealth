@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { quoteKey, fundQuoteKey, parseTencentQuotes, parseTencentFundQuotes, fetchQuotes, refreshQuotes, valuationPrice, dayChange } from './quotes.mjs'
+import { quoteKey, fundQuoteKey, thsCodeOf, parseTencentQuotes, parseTencentFundQuotes, fetchQuotes, refreshQuotes, valuationPrice, dayChange } from './quotes.mjs'
 
 const line = (key, name, price, date = '20261107', time = '15:00:03') => {
   const f = []
@@ -214,4 +214,105 @@ test('fund NAV refresh writes the published unit value and drops a broker snapsh
   assert.equal(valuationPrice(db.holdings[1]), 2)
   assert.equal(db.holdings[2].quotePrice, 1.24)
   assert.equal(valuationPrice(db.holdings[2]), 1.24)
+})
+
+// ---- 同花顺行情快照：A股 / 场内基金优先，港股 / 美股 / 场外净值仍走腾讯 ----
+const thsBody = (rows, timestamp = 1763000000000) => ({ code: 0, message: 'success', data: { timestamp, item: rows } })
+const thsRow = (thscode, ticker, price, pct) => ({ thscode, ticker, last_price: price, price_change_ratio_pct: pct })
+const fundLine = (code, name, nav, date = '2026-11-13') => {
+  const f = []
+  f[0] = code
+  f[1] = name
+  f[5] = nav
+  f[8] = date
+  return `v_jj${code}="${f.join('~')}";`
+}
+const textResponse = (payload) => ({ ok: true, status: 200, arrayBuffer: async () => new TextEncoder().encode(payload).buffer })
+const jsonResponse = (body) => ({ ok: true, status: 200, json: async () => body })
+
+const mixedDb = () => ({
+  baseCurrency: 'CNY', fx: { CNY: 1, HKD: 0.92 },
+  instruments: [
+    { id: 'S', symbol: '600519', market: 'CN', assetClass: 'stock', currency: 'CNY' },
+    { id: 'E', symbol: '161725', market: 'CN', assetClass: 'etf', currency: 'CNY' },
+    { id: 'H', symbol: '00700', market: 'HK', assetClass: 'stock', currency: 'HKD' },
+    { id: 'F', symbol: '000001', market: 'FUND', assetClass: 'fund', currency: 'CNY' },
+  ],
+  holdings: [
+    { id: 'HS', accountId: 'A', instrumentId: 'S', qty: 10, avgCost: 1000, manualPrice: null, quotePrice: null, currency: 'CNY' },
+    { id: 'HE', accountId: 'A', instrumentId: 'E', qty: 10, avgCost: 1, manualPrice: null, quotePrice: null, currency: 'CNY' },
+    { id: 'HH', accountId: 'A', instrumentId: 'H', qty: 10, avgCost: 300, manualPrice: null, quotePrice: null, currency: 'HKD' },
+    { id: 'HF', accountId: 'A', instrumentId: 'F', qty: 10, avgCost: 1, manualPrice: null, quotePrice: null, currency: 'CNY' },
+  ],
+})
+
+test('thsCodeOf only covers A-share stocks and on-exchange funds', () => {
+  assert.equal(thsCodeOf({ market: 'CN', symbol: '600519', assetClass: 'stock' }), '600519.SH')
+  assert.equal(thsCodeOf({ market: 'CN', symbol: '000001', assetClass: 'stock' }), '000001.SZ')
+  assert.equal(thsCodeOf({ market: 'CN', symbol: '161725', assetClass: 'etf' }), '161725.SZ')
+  assert.equal(thsCodeOf({ market: 'HK', symbol: '00700', assetClass: 'stock' }), null)
+  assert.equal(thsCodeOf({ market: 'US', symbol: 'AAPL', assetClass: 'stock' }), null)
+  assert.equal(thsCodeOf({ market: 'FUND', symbol: '000001', assetClass: 'fund' }), null)
+})
+
+test('with a THS key, A-share and ETF prices come from THS while HK/funds stay on Tencent', async () => {
+  const db = mixedDb()
+  const calls = []
+  const fetch = async (url) => {
+    const u = String(url)
+    calls.push(u)
+    if (u.includes('/api/a-share/prices/snapshot')) return jsonResponse(thsBody([thsRow('600519.SH', '600519', 1700, 1.2)]))
+    if (u.includes('/api/fund/market/snapshot')) return jsonResponse(thsBody([thsRow('161725.SZ', '161725', 1.11, -0.5)]))
+    if (u.includes('qt.gtimg.cn')) return textResponse([
+      // 腾讯没收录这只 LOF：没有同花顺时它会一直缺价。
+      line('hk00700', 'TENCENT', '410'),
+      fundLine('000001', 'FUND-ONE', '1.23'),
+    ].join(';'))
+    throw new Error('unexpected fetch: ' + u)
+  }
+  const result = await refreshQuotes(db, { fetch, ths: { token: 'tok-123' } })
+
+  assert.equal(db.holdings[0].quotePrice, 1700)
+  assert.equal(db.holdings[0].quoteSource, 'ths')
+  assert.equal(db.holdings[0].quoteChangePct, 1.2)
+  assert.match(db.holdings[0].quoteAt, /^2025-11-13T/, 'THS ms timestamp lands as a parsed ISO stamp')
+  assert.equal(db.holdings[1].quotePrice, 1.11, 'the LOF Tencent does not cover gets a price from THS')
+  assert.equal(db.holdings[1].quoteSource, 'ths')
+  assert.equal(db.holdings[2].quotePrice, 410)
+  assert.equal(db.holdings[2].quoteSource, 'tencent')
+  assert.equal(db.holdings[3].quotePrice, 1.23)
+  assert.equal(db.holdings[3].quoteSource, 'tencent-fund')
+  assert.equal(result.updated, 4)
+  assert.ok(!result.warnings.some((w) => w.includes('161725')), 'a key covered by THS is not reported missing')
+
+  const aShare = calls.find((u) => u.includes('/api/a-share/prices/snapshot'))
+  assert.match(decodeURIComponent(aShare), /thscodes=600519\.SH/)
+  const etf = calls.find((u) => u.includes('/api/fund/market/snapshot'))
+  assert.match(decodeURIComponent(etf), /thscode=161725\.SZ/)
+  assert.ok(calls.every((u) => !/thscode/.test(decodeURIComponent(u)) || !u.includes('00700')), 'HK never goes to THS')
+})
+
+test('a failing THS snapshot falls back to Tencent instead of losing the price', async () => {
+  const db = mixedDb()
+  const fetch = async (url) => {
+    const u = String(url)
+    if (u.includes('fuyao.aicubes.cn')) throw new Error('down')
+    if (u.includes('qt.gtimg.cn')) return textResponse([line('sh600519', 'MOUTAI', '1690'), line('sz161725', 'LOF', '1.09')].join(';'))
+    throw new Error('unexpected fetch: ' + u)
+  }
+  const result = await refreshQuotes(db, { fetch, ths: { token: 'tok-123' } })
+  assert.equal(db.holdings[0].quotePrice, 1690)
+  assert.equal(db.holdings[0].quoteSource, 'tencent')
+  assert.ok(result.warnings.some((w) => w.startsWith('THS_QUOTES:')), 'the THS failure is surfaced')
+})
+
+test('without a THS key the refresh never calls THS', async () => {
+  const db = mixedDb()
+  const calls = []
+  const fetch = async (url) => {
+    calls.push(String(url))
+    return textResponse([line('sh600519', 'MOUTAI', '1690')].join(';'))
+  }
+  await refreshQuotes(db, { fetch })
+  assert.ok(calls.every((u) => !u.includes('fuyao.aicubes.cn')))
 })
