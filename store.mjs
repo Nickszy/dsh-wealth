@@ -126,8 +126,13 @@ export function findInstrumentByIdentity(db, ref) {
   const market = normalized.market
   const wantFund = isFundLike({ market, assetClass: ref.assetClass })
   if (ref.matchAliases) {
-    const refKey = identityKey(normalized) + '|' + (wantFund ? 'F' : 'S')
-    const aliasHit = db.instruments.find((i) => Array.isArray(i.confirmedAliases) && i.confirmedAliases.includes(refKey))
+    // 基金身份的 CN/FUND 两种写法等价（与 store 匹配、目录折叠同构）：
+    // 别名存的是确认当时的写法，来源换一种市场输出时也要能命中。
+    const refKeys = new Set([identityKey(normalized) + '|' + (wantFund ? 'F' : 'S')])
+    if (/^\d{6}$/.test(symbol) && wantFund) {
+      for (const m of ['CN', 'FUND']) refKeys.add(m + '|' + symbol + '|F')
+    }
+    const aliasHit = db.instruments.find((i) => Array.isArray(i.confirmedAliases) && i.confirmedAliases.some((a) => refKeys.has(a)))
     if (aliasHit) return aliasHit
   }
   // 股票与场外基金的六位代码会撞（000001 平安银行 / 000001.OF 华夏成长）：

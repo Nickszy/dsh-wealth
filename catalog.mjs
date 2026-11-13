@@ -287,7 +287,9 @@ export function applyCatalogResolutions(db, resolutions, options = {}) {
     const twins = legacyCashFundTwins(db, resolution.ref).filter((t) => t.id !== hit?.id)
     for (const twin of twins) {
       try {
-        const keep = hit || findInstrumentByIdentity(db, { ...resolution.ref })
+        // 认领的保留方必须是「真正的基金身份条目」（严格匹配，不走别名）：
+        // 别名可能把来源身份指到完全不同的证券上，把旧货基并进去会错迁别人的持仓。
+        const keep = findInstrumentByIdentity(db, { ...resolution.ref })
         if (keep) applyOp(db, 'instrument.merge', { keepId: keep.id, dropId: twin.id })
         else applyOp(db, 'instrument.upsert', { instrument: { id: twin.id, assetClass: 'fund' } })
         result.claimedLegacy++
@@ -297,8 +299,17 @@ export function applyCatalogResolutions(db, resolutions, options = {}) {
       }
     }
     if (twins.length) hit = findInstrumentByIdentity(db, { ...resolution.ref, matchAliases: true })
-    // 本地已命中 → 复用；knownHit 且没有命中（罕见并发删除）→ 不联网建档，交给持仓路径兜底。
-    if (hit || resolution.knownHit) continue
+    // 本地已命中 → 复用。
+    if (hit) continue
+    if (resolution.knownHit) {
+      // 已知身份却在本地找不到条目（别名等价漂移等罕见情形）：宁可建一条待确认
+      // 交人工处理，也不能静默绕过人工确认。
+      const { instrument } = createCatalogInstrument(db, resolution.ref, options)
+      instrument.verification = { status: 'pending', source: 'eastmoney', at: now(), reason: '已知身份未在本地命中，请重新确认或核验', candidates: [] }
+      result.created++
+      result.pending++
+      continue
+    }
     const { instrument, normalized } = createCatalogInstrument(db, resolution.ref, options)
     const status = applyResolution(instrument, normalized, resolution, now)
     result.created++

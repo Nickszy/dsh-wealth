@@ -4,7 +4,7 @@ import {
   resolveProfiles, resolveCatalogForSnapshot, applyCatalogResolutions, ensureCatalogEntry,
   verifyInstrument, verifyInstrumentRef, applyVerificationResult, knownCatalogKeys, legacyCashFundTwins, searchCatalog, pendingInstruments,
 } from './catalog.mjs'
-import { OpError } from './store.mjs'
+import { OpError, findInstrumentByIdentity } from './store.mjs'
 
 const json = (data) => ({ ok: true, status: 200, json: async () => data })
 const html = (text) => ({ ok: true, status: 200, arrayBuffer: async () => new TextEncoder().encode(text) })
@@ -239,6 +239,40 @@ test('upgrading a legacy cash fund tolerates a same-code stock entry', () => {
   assert.equal(db.instruments.length, 2)
   assert.equal(db.instruments.find((i) => i.id === 'LEGACY').assetClass, 'fund')
   assert.equal(result.warnings.length, 0, 'no collision warning: the upgrade succeeds')
+})
+
+test('an alias hit never absorbs a legacy cash twin belonging to a different security', async () => {
+  const { fetch, calls } = fullProfileFetch()
+  const db = emptyDb()
+  // 用户把来源的 000001 基金身份确认成了 600519（别名挂在股票上），账本另有一只真正的旧货基。
+  db.instruments.push(
+    { id: 'MAPPED', symbol: '600519', name: '贵州茅台', market: 'CN', assetClass: 'stock', currency: 'CNY', confirmedAliases: ['CN|000001|F'] },
+    { id: 'LEGACY', symbol: '000001', name: '货基', market: 'CN', assetClass: 'cash', currency: 'CNY' },
+  )
+  const known = knownCatalogKeys(db)
+  const resolutions = await resolveCatalogForSnapshot(snapshot([row('000001', { assetClass: 'fund', market: 'CN' })]), { fetch, known })
+  assert.equal(calls.length, 0)
+  const result = applyCatalogResolutions(db, resolutions, { source: 'ths', now })
+  assert.equal(result.claimedLegacy, 1)
+  // 认领的保留方必须是真正的基金身份条目：没有就升级旧条目本身，绝不并进别名指向的无关证券。
+  assert.equal(db.instruments.find((i) => i.id === 'LEGACY').assetClass, 'fund')
+  assert.deepEqual(db.instruments.map((i) => i.id).sort(), ['LEGACY', 'MAPPED'], 'the alias target keeps its own holdings')
+  assert.equal(result.warnings.length, 0)
+})
+
+test('aliases resolve across the CN/FUND market spelling on both the directory and the store side', async () => {
+  const { fetch, calls } = fullProfileFetch()
+  const db = emptyDb()
+  // 别名按确认当时的 CN 写法保存；来源这次输出 FUND 写法，仍然要命中同一只标的。
+  db.instruments.push({ id: 'STOCKX', symbol: '000001', name: '平安银行', market: 'CN', assetClass: 'stock', currency: 'CNY', confirmedAliases: ['CN|000001|F'] })
+  const known = knownCatalogKeys(db)
+  const resolutions = await resolveCatalogForSnapshot(snapshot([row('000001', { assetClass: 'fund', market: 'FUND' })]), { fetch, known })
+  assert.equal(calls.length, 0, 'the collapsed alias key is known')
+  const result = applyCatalogResolutions(db, resolutions, { source: 'ths', now })
+  assert.equal(result.created, 0, 'the alias target is found across the spelling change — no unverified re-creation')
+  assert.equal(db.instruments.length, 1)
+  // store 侧同样按折叠等价命中。
+  assert.equal(findInstrumentByIdentity(db, { symbol: '000001', market: 'FUND', assetClass: 'fund', matchAliases: true }).id, 'STOCKX')
 })
 
 test('verification results are voided when the identity drifted during the lookup', async () => {
