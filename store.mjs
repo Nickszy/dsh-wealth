@@ -129,7 +129,9 @@ export function findInstrumentByIdentity(db, ref) {
     // 基金身份的 CN/FUND 两种写法等价（与 store 匹配、目录折叠同构）：
     // 别名存的是确认当时的写法，来源换一种市场输出时也要能命中。
     const refKeys = new Set([identityKey(normalized) + '|' + (wantFund ? 'F' : 'S')])
-    if (/^\d{6}$/.test(symbol) && wantFund) {
+    // 只有 CN/FUND 市场的六位基金才做两种写法折叠（与目录层一致）；
+    // 其他市场（SG 等）同代码是另一个身份，不能借别名吸附到国内基金上。
+    if (/^\d{6}$/.test(symbol) && wantFund && ['CN', 'FUND'].includes(canonicalMarket(market))) {
       for (const m of ['CN', 'FUND']) refKeys.add(m + '|' + symbol + '|F')
     }
     const aliasHit = db.instruments.find((i) => Array.isArray(i.confirmedAliases) && i.confirmedAliases.some((a) => refKeys.has(a)))

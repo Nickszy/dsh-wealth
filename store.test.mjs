@@ -486,6 +486,8 @@ test('instrument.confirm records the old identity as an alias that identity look
   assert.equal(findInstrumentByIdentity(db, { symbol: '000001', market: 'CN', assetClass: 'fund', matchAliases: true }).id, 'INS_P')
   assert.equal(findInstrumentByIdentity(db, { symbol: '000001', market: 'CN', assetClass: 'fund' }), undefined, 'without matchAliases the fund identity does not hit the stock entry')
   assert.equal(findInstrumentByIdentity(db, { symbol: '000001', market: 'CN', assetClass: 'stock' }).id, 'INS_P', 'manual stock entries still resolve normally')
+  // 折叠只适用于 CN/FUND 市场：其他市场的同代码基金是另一个身份，不得借别名吸附。
+  assert.equal(findInstrumentByIdentity(db, { symbol: '000001', market: 'SG', assetClass: 'fund', matchAliases: true }), undefined)
   // 合并时别名随迁到保留方。
   db.instruments.push({ id: 'INS_Q', symbol: '000001', name: '待确认二', market: 'CN', assetClass: 'fund', currency: 'CNY', confirmedAliases: ['CN|000001|F'] })
   applyOp(db, 'instrument.merge', { keepId: 'INS_P', dropId: 'INS_Q' })
