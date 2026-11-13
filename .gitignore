@@ -11,6 +11,9 @@ brand/preview.html
 brand/demo-db.json
 brand/demo-state.json
 
+# preview plugin build output (node scripts/preview-build.mjs)
+preview/public/
+
 # wrangler files
 .wrangler
 .dev.vars*
