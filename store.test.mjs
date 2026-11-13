@@ -448,6 +448,23 @@ test('instrument.confirm merges into an existing instrument when the chosen iden
   assert.equal(db.holdings.find((h) => h.id === 'H2').instrumentId, 'KEEP')
 })
 
+test('confirming a pending fund into an existing stock records the fund identity as an alias', () => {
+  const db = fixture()
+  db.instruments.push(
+    { id: 'STOCK', symbol: '000001', name: '平安银行', market: 'CN', assetClass: 'stock', currency: 'CNY' },
+    { id: 'PEND', symbol: '000001', name: '待确认基金', market: 'CN', assetClass: 'fund', currency: 'CNY', verification: { status: 'pending' } },
+  )
+  db.holdings.push({ id: 'H2', accountId: 'empty', instrumentId: 'PEND', qty: 3, avgCost: 1.2, currency: 'CNY' })
+  // 确认为已有股票档（类别一并改成 stock）→ 自动并账；被并条目的旧基金身份
+  // 必须记为别名，否则下一次同步仍按它重建待确认。
+  const result = applyOp(db, 'instrument.confirm', { id: 'PEND', confirm: true, assetClass: 'stock', name: '平安银行' })
+  assert.equal(result.mergedInto, 'STOCK')
+  assert.deepEqual(result.instrument.confirmedAliases, ['CN|000001|F'], 'the dropped fund identity is kept as an alias on the survivor')
+  assert.equal(db.instruments.length, 1)
+  assert.equal(findInstrumentByIdentity(db, { symbol: '000001', market: 'CN', assetClass: 'fund', matchAliases: true }).id, 'STOCK')
+  assert.equal(db.holdings.find((h) => h.id === 'H2').instrumentId, 'STOCK')
+})
+
 test('holding.upsert with an id refuses to spill an edit onto a same-code sibling holding', () => {
   const db = fixture()
   const stock = applyOp(db, 'holding.upsert', { holding: { accountId: 'a', symbol: '000001', market: 'CN', assetClass: 'stock', qty: 100, avgCost: 10, currency: 'CNY' } }).holding

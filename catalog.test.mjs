@@ -189,7 +189,7 @@ test('candidates carry an explicit asset class so adoption cannot leave a fund v
   assert.equal(fundCandidate.assetClass, 'stock')
 })
 
-test('identities already in the ledger and cash rows are not re-queried', async () => {
+test('identities already in the ledger and cash rows are not re-queried, but known rows still claim twins', async () => {
   const { fetch, calls } = fullProfileFetch()
   const db = emptyDb()
   db.instruments.push({ id: 'I1', symbol: 'AAPL', name: '苹果', market: 'US', assetClass: 'stock', currency: 'USD' })
@@ -201,11 +201,55 @@ test('identities already in the ledger and cash rows are not re-queried', async 
     row('CNY.CASH', { market: 'CASH', assetClass: 'cash', currency: 'CNY' }),
   ]), { fetch, known })
   assert.equal(calls.filter((u) => u.includes('searchapi')).length, 0, 'AAPL is known: no suggest lookup')
-  assert.deepEqual(resolutions.map((r) => r.ref.symbol), ['600519'], 'cash rows are skipped entirely')
+  assert.deepEqual(resolutions.map((r) => r.ref.symbol), ['AAPL', '600519'], 'cash rows are skipped entirely')
+  assert.equal(resolutions[0].knownHit, true, 'the known identity flows through as a no-network resolution')
   // 应用阶段对已知身份仍然只复用、不重建。
   const result = applyCatalogResolutions(db, resolutions, { source: 'ths', now })
   assert.equal(result.created, 1)
   assert.equal(db.instruments.filter((i) => i.symbol === 'AAPL').length, 1)
+})
+
+test('fund identity keys collapse across CN and FUND markets, and known rows still claim legacy cash twins', async () => {
+  const { fetch, calls } = fullProfileFetch()
+  const db = emptyDb()
+  db.instruments.push(
+    { id: 'FUNDENTRY', symbol: '000001', name: '华夏成长混合', market: 'FUND', assetClass: 'fund', currency: 'CNY' },
+    { id: 'LEGACY', symbol: '000001', name: '货基', market: 'CN', assetClass: 'cash', currency: 'CNY' },
+  )
+  const known = knownCatalogKeys(db)
+  // CN 基金快照折叠后与 FUND 档是同一个键：不联网，但旧 cash 条目的认领不能被跳过。
+  const resolutions = await resolveCatalogForSnapshot(snapshot([row('000001', { assetClass: 'fund', market: 'CN' })]), { fetch, known })
+  assert.equal(calls.length, 0, 'collapsed fund identity is known: no network')
+  const result = applyCatalogResolutions(db, resolutions, { source: 'ths', now })
+  assert.equal(result.claimedLegacy, 1, 'the legacy cash twin is merged even though the row was known')
+  assert.deepEqual(db.instruments.map((i) => i.id), ['FUNDENTRY'])
+})
+
+test('upgrading a legacy cash fund tolerates a same-code stock entry', () => {
+  const db = emptyDb()
+  db.instruments.push(
+    { id: 'LEGACY', symbol: '000001', name: '货基', market: 'CN', assetClass: 'cash', currency: 'CNY' },
+    { id: 'STOCK', symbol: '000001', name: '平安银行', market: 'CN', assetClass: 'stock', currency: 'CNY' },
+  )
+  // 升级旧条目的碰撞检查必须用「改后」的基金位：cash 与股票都不是基金，改前比较会误报碰撞。
+  const result = applyCatalogResolutions(db, [
+    { ref: { symbol: '000001', market: 'CN', assetClass: 'fund', currency: 'CNY' }, profiles: [], error: { message: 'offline' } },
+  ], { source: 'ths', now })
+  assert.equal(result.claimedLegacy, 1)
+  assert.equal(db.instruments.length, 2)
+  assert.equal(db.instruments.find((i) => i.id === 'LEGACY').assetClass, 'fund')
+  assert.equal(result.warnings.length, 0, 'no collision warning: the upgrade succeeds')
+})
+
+test('verification results are voided when the identity drifted during the lookup', async () => {
+  const db = emptyDb()
+  db.instruments.push({ id: 'INS_1', symbol: '000001', name: '平安银行', market: 'CN', assetClass: 'stock', currency: 'CNY' })
+  const outcome = await verifyInstrumentRef(db, 'INS_1', { fetch: fullProfileFetch().fetch, now })
+  assert.equal(outcome.id, 'INS_1')
+  // 查询期间用户把它确认成了基金档：旧回包必须作废，而不是把基金分类写进股票档。
+  db.instruments[0].assetClass = 'fund'
+  assert.throws(() => applyVerificationResult(db, outcome, { now }), /身份已被修改/)
+  assert.equal(db.instruments[0].securityType, undefined, 'nothing was written')
 })
 
 test('legacy cash-classified money funds are claimed: upgraded when alone, merged when a fund entry exists', () => {

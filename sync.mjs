@@ -960,7 +960,8 @@ export function createSyncService(ctx, options = {}) {
       if (disposed || abort.signal.aborted) throw bad('同步已中止')
       const db = readLedger()
       // 入库即关联：新身份写进本地产品表（查询失败降级为待确认），再把持仓合并进去。
-      applyCatalogResolutions(db, catalog, { source: current.connector, now: iso })
+      // 目录阶段的警告（如旧货基认领需要人工核对）随同步结果返回，不能静默丢弃。
+      const catalogResult = applyCatalogResolutions(db, catalog, { source: current.connector, now: iso })
       const { ledger, snapshot, imported } = mergeSnapshot(db, current, input)
       const contentHash = snapshotContentHash(snapshot)
       const uploadWatermark = current.uploadedAtWatermark || current.uploadedAt, quoteWatermark = current.quoteDateWatermark || current.quoteDate
@@ -983,7 +984,7 @@ export function createSyncService(ctx, options = {}) {
       // 深扫过的账户随同步增量收尾新转账；失败或未开通游标都不影响本次持仓结果。
       let transferScan = null
       try { transferScan = await syncThsTransfers(current, abort.signal) } catch (error) { transferScan = { error: String(error?.message || error).slice(0, 200) } }
-      return { source:updated,ledger:stored,summary:summarize(stored),imported,transferScan }
+      return { source:updated,ledger:stored,summary:summarize(stored),imported,transferScan,catalog:catalogResult }
     } catch (error) {
       // Adapter messages are curated and safe; still redact every known secret
       // before the message reaches the browser or sources.json.

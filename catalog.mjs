@@ -12,7 +12,7 @@
 // 读账本 → applyCatalogResolutions → mergeSnapshot → 落盘 之间不允许再有 await，
 // 否则两个来源并行同步会各自基于旧账本合并、后写者覆盖前写者。
 import { canonicalMarket } from './model.mjs'
-import { normalizeSymbol, isFundLike, identityKey, resolveSecurity } from './symbols.mjs'
+import { normalizeSymbol, isFundLike, resolveSecurity } from './symbols.mjs'
 import { applyOp, findInstrumentByIdentity, OpError } from './store.mjs'
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36'
@@ -133,17 +133,29 @@ export async function resolveCatalogRef(ref, options = {}) {
 }
 
 // 身份键含基金位：目录已知集合与「来源身份 → 已确认条目」别名都用它。
+// 与 store 的匹配规则同构：六位代码的 CN/FUND 基金身份折叠成同一个键，
+// 否则「已有 FUND 基金档」遇上「CN 基金快照」会被当成陌生身份重复联网。
 export function catalogKey(symbol, market, assetClass) {
   const normalized = normalizeSymbol(symbol, market || '')
-  return identityKey(normalized) + '|' + (isFundLike({ market: normalized.market, assetClass }) ? 'F' : 'S')
+  const wantFund = isFundLike({ market: normalized.market, assetClass })
+  const sixDigit = /^\d{6}$/.test(normalized.symbol)
+  const marketKey = sixDigit && wantFund && ['CN', 'FUND'].includes(canonicalMarket(normalized.market)) ? 'FUND' : canonicalMarket(normalized.market)
+  return marketKey + '|' + normalized.symbol + '|' + (wantFund ? 'F' : 'S')
 }
 
-/** 同步联网前的只读快照：账本里已有身份（含确认别名）。命中的引用不再重复联网。 */
+// store 侧别名键（identityKey 原样，如 CN|000001|F）折算成目录键，统一进已知集合。
+function aliasToCatalogKey(alias) {
+  const match = /^([^|]+)\|([^|]+)\|([FS])$/.exec(String(alias || ''))
+  if (!match) return String(alias || '')
+  return catalogKey(match[2], match[1], match[3] === 'F' ? 'fund' : 'stock')
+}
+
+/** 同步联网前的只读快照：账本里已有身份（含确认别名，按折叠后的键）。 */
 export function knownCatalogKeys(db) {
   const keys = new Set()
   for (const i of db.instruments || []) {
     keys.add(catalogKey(i.symbol, i.market, i.assetClass))
-    for (const alias of i.confirmedAliases || []) keys.add(alias)
+    for (const alias of i.confirmedAliases || []) keys.add(aliasToCatalogKey(alias))
   }
   return keys
 }
@@ -151,7 +163,8 @@ export function knownCatalogKeys(db) {
 /**
  * 快照级预核验：把快照里每个不同身份（代码 + 市场 + 基金位）各查一次。
  * 这是异步网络阶段，必须在读账本之前调用；结果交给 applyCatalogResolutions 写表。
- * 已在账本里的身份（options.known）与现金（CASH 市场，身份即币种）直接跳过，不再联网。
+ * 现金（CASH 市场，身份即币种）完全跳过；账本已有的身份标记 knownHit——
+ * 仍会流入写表阶段（旧 cash 货币基金的认领不能被跳过），只是不再联网。
  */
 export async function resolveCatalogForSnapshot(snapshot, options = {}) {
   const distinct = new Map()
@@ -164,11 +177,15 @@ export async function resolveCatalogForSnapshot(snapshot, options = {}) {
     // 现金没有可核验的公开证券；身份就是币种，建档交给 holding.upsert 即可。
     if (canonicalMarket(normalized.market) === 'CASH') continue
     const key = catalogKey(row.symbol, row.market, row.assetClass)
-    if (options.known?.has(key)) continue
-    if (!distinct.has(key)) distinct.set(key, ref)
+    const existing = distinct.get(key)
+    if (existing) continue
+    distinct.set(key, { ref, profiles: options.known?.has(key) ? null : undefined, error: null, knownHit: !!options.known?.has(key) })
   }
   const resolutions = []
-  for (const ref of distinct.values()) resolutions.push(await resolveCatalogRef(ref, options))
+  for (const entry of distinct.values()) {
+    if (entry.knownHit) { resolutions.push(entry); continue }
+    resolutions.push(await resolveCatalogRef(entry.ref, options))
+  }
   return resolutions
 }
 
@@ -266,7 +283,7 @@ export function applyCatalogResolutions(db, resolutions, options = {}) {
     let hit = findInstrumentByIdentity(db, { ...resolution.ref, matchAliases: true })
     // 基金身份遇到旧版 cash 货币基金条目：有基金档（含命中的这条）就并进去，
     // 没有就把旧条目升级为基金档——即使基金档已命中也不能跳过，否则旧条目
-    // 永远留在 cash 档，赎回后不可剪枝，资产被虚增。
+    // 永远留在 cash 档，赎回后不可剪枝，资产被虚增。knownHit 的引用同样要走到这里。
     const twins = legacyCashFundTwins(db, resolution.ref).filter((t) => t.id !== hit?.id)
     for (const twin of twins) {
       try {
@@ -280,7 +297,8 @@ export function applyCatalogResolutions(db, resolutions, options = {}) {
       }
     }
     if (twins.length) hit = findInstrumentByIdentity(db, { ...resolution.ref, matchAliases: true })
-    if (hit) continue
+    // 本地已命中 → 复用；knownHit 且没有命中（罕见并发删除）→ 不联网建档，交给持仓路径兜底。
+    if (hit || resolution.knownHit) continue
     const { instrument, normalized } = createCatalogInstrument(db, resolution.ref, options)
     const status = applyResolution(instrument, normalized, resolution, now)
     result.created++
@@ -322,6 +340,13 @@ export function applyVerificationResult(db, outcome, options = {}) {
   const now = options.now || (() => new Date().toISOString())
   const instrument = db.instruments.find((i) => i.id === outcome.id)
   if (!instrument) throw new OpError('not-found', '标的不存在: ' + outcome.id)
+  // 查询期间身份可能已被人工确认改掉：旧回包按过期的 ref 匹配会把股票档补成基金
+  // 分类、甚至标成已核验。身份已漂移就作废这次结果，让用户重新查询。
+  const refNow = catalogKey(instrument.symbol, instrument.market, instrument.assetClass)
+  const refThen = catalogKey(outcome.ref.symbol, outcome.ref.market, outcome.ref.assetClass)
+  if (refNow !== refThen) {
+    throw new OpError('bad-request', '查询期间该标的的身份已被修改，本次核验结果已作废，请重新查询')
+  }
   const normalized = normalizeSymbol(instrument.symbol, instrument.market)
   const status = applyResolution(instrument, normalized, outcome.resolution, now)
   instrument.updatedAt = now()

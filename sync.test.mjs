@@ -122,6 +122,7 @@ test('legacy cash-classified money funds upgrade on ingest and prune once redeem
  assert.equal(ins.assetClass, 'fund', 'legacy entry upgraded in place')
  assert.equal(r.ledger.holdings.length, 1)
  assert.equal(r.ledger.holdings[0].instrumentId, 'LEGACY', 'the holding hangs off the upgraded entry')
+ assert.equal(r.catalog.claimedLegacy, 1, 'catalog claim counts ride along on the sync result')
  // 已升级的旧条目在完整空快照下可剪枝（基金段 full）。
  const g = setup({ fetchSnapshot: async () => snapshot([], { coverage: { stock: 'full', fund: 'full' } }) })
  const gsrc = g.add()

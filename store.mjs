@@ -336,11 +336,14 @@ export function applyOp(db, op, payload = {}) {
       }
       const instrument = resolveInstrument(db, { ...p, instrumentId: p.id || p.instrumentId }, { create: true })
       const symbol = changes.symbol ?? instrument.symbol
-      const market = changes.market ?? instrument.market
+      const market = canonicalMarket(changes.market ?? instrument.market)
       // 股票与场外基金允许同代码同市场共存（000001 vs 000001.OF），只有同类身份才算冲突；
-      // 其他代码（港股五位 / 美股字母）沿用原来的严格查重。
+      // 其他代码（港股五位 / 美股字母）沿用原来的严格查重。碰撞按「本次修改之后」的
+      // 基金位判定——升级旧 cash 货币基金为 fund 时，cash 与股票都不是基金，
+      // 用改前的类别会误报碰撞。
       const compareFund = /^\d{6}$/.test(symbol) && ['CN', 'FUND'].includes(canonicalMarket(market))
-      if (db.instruments.some((i) => i.id !== instrument.id && i.symbol === symbol && i.market === market && (!compareFund || isFundLike(i) === isFundLike(instrument)))) throw new OpError('bad-request', '相同市场已有此标的代码')
+      const targetFund = isFundLike({ market, assetClass: changes.assetClass !== undefined ? changes.assetClass : instrument.assetClass })
+      if (db.instruments.some((i) => i.id !== instrument.id && i.symbol === symbol && i.market === market && (!compareFund || isFundLike(i) === targetFund))) throw new OpError('bad-request', '相同市场已有此标的代码')
       Object.assign(instrument, changes)
       if (sourceCodes) instrument.sourceCodes = { ...(instrument.sourceCodes || {}), ...sourceCodes }
       instrument.updatedAt = nowISO()
@@ -571,13 +574,19 @@ export function applyOp(db, op, payload = {}) {
         return !compareFund || isFundLike(i) === wantFund
       })
       if (clash) {
-        // 元数据按「只填空位」补到保留方，再迁移持仓与流水。
+        // 元数据按「只填空位」补到保留方，再迁移持仓与流水。两个分支都必须把
+        // 「本次确认前的身份」记为别名：并账分支里被并条目的旧身份同样是来源
+        // 仍在用的身份，否则下一次同步会按它重建一条待确认。
         for (const [key, value] of Object.entries(changes)) {
           if (key === 'symbol' || key === 'market') continue
           if (value != null && value !== '' && !clash[key]) clash[key] = value
         }
         if (!clash.verification || clash.verification.status !== 'verified') {
           clash.verification = { status: 'verified', source: String(p.source || 'user'), at: nowISO() }
+        }
+        const dropKey = identityKeyOf(instrument)
+        if (dropKey !== identityKeyOf(clash)) {
+          clash.confirmedAliases = [...new Set([...(clash.confirmedAliases || []), dropKey])]
         }
         if (Array.isArray(instrument.confirmedAliases)) {
           clash.confirmedAliases = [...new Set([...(clash.confirmedAliases || []), ...instrument.confirmedAliases])]
