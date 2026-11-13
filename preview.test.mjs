@@ -3,7 +3,7 @@
 // 所以这里只断言「已构建就返回页面、没构建就明确 503」，两种都算通过。
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { name as HOST_NAME, inject as HOST_INJECT, apply } from './preview/index.js'
@@ -84,6 +84,20 @@ test('页面自包含，不加载外部资源，也不出现真实账本路径',
   assert.doesNotMatch(html, /\.dsh[\\/]data/)
   assert.match(html, /window\.fetch\s*=/)
   assert.match(html, /预览模式 · 演示数据 · 不读写真实账本/)
+})
+
+// `main.conversation` 是 single slot：同一 priority 只能有一个注册。正式的 dsh-wealth
+// 面板占着 -10，预览再注册 -10 会直接报 "already has a registration"。这里锁住约定。
+test('预览的 main.conversation 占位用独立 priority，不抢 dsh-wealth 的 -10', async () => {
+  const src = readFileSync(join(HERE, 'preview', 'client.js'), 'utf8')
+  assert.doesNotMatch(src, /priority:\s*-10\b/)
+  assert.match(src, /priority:\s*OVERLAY_PRIORITY/)
+  assert.match(src, /OVERLAY_PRIORITY\s*=\s*-20/)
+  assert.match(src, /yield on panel switch/)
+  const { execFileSync } = await import('node:child_process')
+  const copy = join((await import('node:fs')).mkdtempSync(join((await import('node:os')).tmpdir(), 'preview-check-')), 'client.mjs')
+  writeFileSync(copy, src)
+  execFileSync(process.execPath, ['--check', copy], { stdio: 'pipe' })
 })
 
 test('package.json 的 dsh 元数据指向本包的 host / client 半', () => {

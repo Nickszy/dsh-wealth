@@ -956,7 +956,8 @@ window.__ModuleLoader__.load({
         setSavingData(true); setDataNote(null)
         try {
           const r = await post('settings/data-source', { token: value })
-          setDataNote({ ok: true, text: r.thsData.configured ? '已保存并验证 API Key，历史净值 / 日线将优先使用同花顺数据。' : '已清除 API Key，历史行情回落东方财富公开接口。' })
+          const on = Boolean(r?.thsData?.configured)
+          setDataNote({ ok: true, text: on ? '已保存并验证 API Key，历史净值 / 日线将优先使用同花顺数据。' : '已清除 API Key，历史行情回落东方财富公开接口。' })
           setDataToken('')
           await reload?.()
         } catch (e) { setDataNote({ ok: false, text: e.message }) }
@@ -1522,6 +1523,12 @@ window.__ModuleLoader__.load({
       const pendingIns = db.instruments.filter(i => i.verification?.status === 'pending')
       const pendingCount = (ins) => db.holdings.filter(h => h.instrumentId === ins.id).length
       const candidateLabel = (c) => [c.name || '未命名', displayCodeOf({ symbol: c.symbol, market: c.market }), c.securityType].filter(Boolean).join(' · ')
+      const marketLabel = (m) => ({ CN: 'A股', HK: '港股', US: '美股', FUND: '场外基金', CASH: '现金' })[String(m || '').toUpperCase()] || String(m || '')
+      const declaredLabelOf = (ins) => {
+        const m = marketLabel(ins.market)
+        const a = assetLabel(ins.assetClass)
+        return [m, m === '场外基金' && a === '基金' ? '' : a, ins.currency].filter(Boolean).join(' · ')
+      }
       // 确认身份：采用候选 = 钉死代码/市场/类别/分类；不传候选 = 保留现状只标已确认。
       // 确认后的身份若与已有标的相同，后端会自动并账（result.mergedInto）。
       const confirmIdentity = async (ins, candidate) => {
@@ -1684,11 +1691,13 @@ window.__ModuleLoader__.load({
           const chosen = pick[ins.id] ?? 0
           return h('div', { key: ins.id, style: { borderTop: '1px solid ' + t.border, marginTop: 10, paddingTop: 10 } },
             h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', alignItems: 'flex-start' } },
-              h('span', null,
+              h('span', { style: { minWidth: 0 } },
                 h('strong', null, ins.name + ' '),
                 h('small', { style: { color: t.sub } }, displayCodeOf(ins)),
+                h('small', { style: { display: 'block', color: t.sub, fontSize: 11, marginTop: 2 } },
+                  '券商报的是 ' + declaredLabelOf(ins) + ' · 影响 ' + pendingCount(ins) + ' 条持仓'),
                 h('small', { style: { display: 'block', color: t.terra, fontSize: 11, marginTop: 2 } },
-                  (ins.verification?.reason || '身份待确认') + ' · 影响 ' + pendingCount(ins) + ' 条持仓')),
+                  ins.verification?.reason || '身份待确认')),
               h('span', { style: { display: 'flex', gap: 6 } },
                 h('button', { style: { ...T.btn(t, false), padding: '3px 9px' }, disabled: busy || verifying === ins.id, onClick: () => reverify(ins) }, verifying === ins.id ? '查询中…' : '重新查询'),
                 h('button', { style: { ...T.btn(t, false), padding: '3px 9px' }, disabled: busy || verifying === ins.id, title: '保留当前代码与类别，只标记为已确认', onClick: () => confirmIdentity(ins, null) }, '保留现状'))),

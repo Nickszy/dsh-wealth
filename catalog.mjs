@@ -206,6 +206,9 @@ function profileAssetClass(profile) {
   return 'stock'
 }
 
+const assetClassLabel = (cls) => ({ fund: '场外基金', stock: '股票', etf: 'ETF', cash: '现金', bond: '债券' })[String(cls || '').toLowerCase()] || String(cls || '标的')
+const marketLabel = (market) => ({ CN: 'A股', HK: '港股', US: '美股', FUND: '场外基金', CASH: '现金' })[canonicalMarket(market)] || String(market || '')
+
 const candidateOf = (profile) => ({
   symbol: profile.symbol, market: profile.market, name: profile.name || '',
   securityType: profile.securityType || null, assetClass: profileAssetClass(profile),
@@ -251,9 +254,14 @@ function applyResolution(instrument, normalized, resolution, now) {
     instrument.verification = { status: 'verified', source: 'eastmoney', at: now(), securityType: matched.securityType || null }
     return 'verified'
   }
+  // 说明「券商报的」和「公开目录里是什么」两边，用户才知道自己在确认什么。
+  const first = resolution.profiles[0]
+  const claimed = assetClassLabel(resolution.ref.assetClass)
   instrument.verification = {
     status: 'pending', source: 'eastmoney', at: now(),
-    reason: resolution.profiles.length ? '公开目录候选与快照声明的市场或类别不一致' : '公开目录未收录此代码',
+    reason: first
+      ? `公开目录里 ${first.symbol} 是「${first.name || first.symbol}」（${first.securityType || marketLabel(first.market)}），和券商报的${claimed}对不上`
+      : '公开目录未收录此代码',
     candidates: resolution.profiles.map(candidateOf),
   }
   return 'pending'

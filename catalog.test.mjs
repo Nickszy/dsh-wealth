@@ -115,7 +115,9 @@ test('a declared fund the public catalog lists only as a stock lands in the pend
   assert.equal(result.pending, 1)
   const [instrument] = db.instruments
   assert.equal(instrument.verification.status, 'pending')
-  assert.match(instrument.verification.reason, /不一致/)
+  // 理由要能回答「我到底买了什么」：点名公开目录里的候选与它的类别，并点出券商报的类别。
+  assert.match(instrument.verification.reason, /贵州茅台/)
+  assert.match(instrument.verification.reason, /和券商报的场外基金对不上/)
   assert.deepEqual(instrument.verification.candidates.map((c) => c.market), ['CN'])
   assert.equal(instrument.verification.candidates[0].name, '贵州茅台')
 })

@@ -32,12 +32,12 @@ const fundAcc = db.accounts.find((a) => a.type === 'fund') || db.accounts[0]
 const hkAcc = db.accounts.find((a) => a.currency === 'HKD') || db.accounts[0]
 const at = db.updatedAt || new Date().toISOString()
 
-// ① 券商把场外基金报成六位代码：公开目录只有同名股票 → 身份冲突，等待确认。
-applyOp(db, 'holding.upsert', { accountId: fundAcc.id, symbol: '000001', market: 'CN', name: '000001', assetClass: 'fund', currency: 'CNY', qty: 12000, avgCost: 1.02 })
+// ① 券商把场外基金报成六位代码：公开目录里 000001 只有平安银行的股票档 → 身份冲突。
+applyOp(db, 'holding.upsert', { accountId: fundAcc.id, symbol: '000001', market: 'FUND', name: '000001', assetClass: 'fund', currency: 'CNY', qty: 12000, avgCost: 1.02 })
 const pendingFund = db.instruments.find((i) => i.symbol === '000001' && i.assetClass === 'fund')
 pendingFund.verification = {
   status: 'pending', source: 'eastmoney', at,
-  reason: '公开目录候选与快照声明的市场或类别不一致',
+  reason: '公开目录里 000001 是「平安银行」（A股），和券商报的场外基金对不上',
   candidates: [{ symbol: '000001', market: 'CN', name: '平安银行', securityType: 'A股', assetClass: 'stock', provider: 'eastmoney' }],
 }
 
@@ -77,6 +77,11 @@ const sources = {
   })),
   authorizations: [], connectors: [],
 }
+// 设置页要读 state.dataSource.thsData / westock，保存 Key 后还要读响应里的 thsData。
+const dataSource = {
+  thsData: { configured: false, adminUrl: 'https://fuyao.aicubes.cn/admin' },
+  westock: { configured: false, authUrl: '' },
+}
 
 // ---- 生成页面 -------------------------------------------------------------
 const client = readFileSync(join(ROOT, 'client.js'), 'utf8')
@@ -88,7 +93,7 @@ const html = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>资
 <script>${readFileSync(join(ROOT, 'brand/vendor/react.js'), 'utf8')}</script>
 <script>${readFileSync(join(ROOT, 'brand/vendor/react-dom.js'), 'utf8')}</script>
 <script>
-window.__demo = ${json({ ledger: db, responses: { summary, analysis, bills, forecast: fc, digest, performance, sources } })};
+window.__demo = ${json({ ledger: db, responses: { summary, analysis, bills, forecast: fc, digest, performance, sources, dataSource } })};
 
 // ---------- 演示账本上的交互式 mock（不联网、不读写真实数据） ----------
 const DB = window.__demo.ledger, RES = window.__demo.responses
@@ -178,7 +183,12 @@ const CANNED = [
 window.fetch = async (path, opts) => {
   const url = String(path)
   const body = opts && opts.body ? JSON.parse(opts.body) : {}
-  if (url.endsWith('/state')) return J({ ok: true, version: '0.0.0-preview', ledger: DB, summary: RES.summary, analysis: RES.analysis, dataSource: {} })
+  if (url.endsWith('/state')) return J({ ok: true, version: '0.0.0-preview', ledger: DB, summary: RES.summary, analysis: RES.analysis, dataSource: RES.dataSource })
+  if (url.includes('settings/data-source')) {
+    // 演示里不保存任何 Key，只切换「已配置」状态，让设置页的提示文案可走通。
+    RES.dataSource.thsData = { ...RES.dataSource.thsData, configured: Boolean(body.token) }
+    return J({ ok: true, thsData: RES.dataSource.thsData })
+  }
   if (url.includes('/instruments/search')) {
     const q = decodeURIComponent((url.split('q=')[1] || '').split('&')[0] || '').trim().toLowerCase()
     const hits = CANNED.filter((c) => c.symbol.toLowerCase().startsWith(q) || c.name.includes(q) || q.includes(c.name.toLowerCase()))

@@ -7,6 +7,10 @@ window.__ModuleLoader__.load({
     const React = require('react')
     const PANEL = 'dsh-wealth-preview'
     const PAGE_URL = '/portfolio-preview/'
+    // `main.conversation` 是 single slot：同一 priority 只能有一个注册。正式的
+    // dsh-wealth 面板占了 -10，所以预览用 -20（数值越低越优先渲染）叠在上面，
+    // 而不是抢同一个槽位报 "already has a registration"。
+    const OVERLAY_PRIORITY = -20
     let ctx = null
     let shellDispose = null
     let panelSession = null
@@ -21,7 +25,7 @@ window.__ModuleLoader__.load({
       if (!shellDispose) {
         const sidebar = ctx.get('sidebarRight')
         panelSession = (sidebar && sidebar.mounted && sidebar.mounted.getSnapshot && sidebar.mounted.getSnapshot()) || null
-        shellDispose = ctx.slots.register({ name: 'main.conversation', priority: -10 }, PreviewFrame)
+        shellDispose = ctx.slots.register({ name: 'main.conversation', priority: OVERLAY_PRIORITY }, PreviewFrame)
       }
       try { layout.selectPanel(null) } catch (e) { closePanel(); throw e }
     }
@@ -70,6 +74,18 @@ window.__ModuleLoader__.load({
         c.effect(() => c.slots.inject('main', () => c.slots.register({
           name: 'main', key: PANEL,
         }, PreviewEntry)), 'dsh-wealth-preview: panel entry')
+        // 叠在别人上面时，用户点别的插件图标（包括「资产」）要把自己让出来：
+        // activePanelId 一旦切到别处就撤销本插件的占位，让原来的面板接着渲染。
+        c.effect(() => {
+          const layout = c.get && c.get('layout')
+          const info = layout && layout.panelInfo
+          if (!info || typeof info.subscribe !== 'function' || typeof info.getSnapshot !== 'function') return undefined
+          const sub = info.subscribe(() => {
+            const active = info.getSnapshot().activePanelId
+            if (active !== null && active !== undefined && active !== PANEL) closePanel()
+          })
+          return () => { try { sub() } catch (_) {} }
+        }, 'dsh-wealth-preview: yield on panel switch')
         c.effect(() => () => closePanel(), 'dsh-wealth-preview: restore shell')
       },
     }
