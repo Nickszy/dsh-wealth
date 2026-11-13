@@ -868,6 +868,32 @@ window.__ModuleLoader__.load({
       const fund = m === 'FUND' || String(ins.assetClass || '').toLowerCase() === 'fund' ? 'F|' : ''
       return fund + m + '|' + symbol
     }
+    // 与 symbols.mjs canonicalDisplayCode 同规则：页面显示 600519.SH / 00700.HK / 000001.OF / CASH:CNY。
+    function displayCodeOf(ins) {
+      if (!ins) return ''
+      const raw = String(ins.symbol || '').trim()
+      if (!raw) return ''
+      const m = String(ins.market || '').trim().toUpperCase()
+      const cls = String(ins.assetClass || '').toLowerCase()
+      if (m === 'CASH' || /^[A-Z]{3}\.CASH$/i.test(raw)) {
+        const cur = /^([A-Z]{3})\.CASH$/i.exec(raw)?.[1]
+        return cur ? 'CASH:' + cur.toUpperCase() : raw
+      }
+      const key = identityKeyOf(ins)
+      const body = key.split('|').pop()
+      if (m === 'FUND' || (cls === 'fund' && /^\d{6}$/.test(body))) return /^\d{6}$/.test(body) ? body + '.OF' : body
+      if (m === 'CN') {
+        if (!/^\d{6}$/.test(body)) return body
+        if (/^(43|83|87|88|92)/.test(body)) return body + '.BJ'
+        if (/^(5|6|9)/.test(body)) return body + '.SH'
+        if (/^(0|1|2|3)/.test(body)) return body + '.SZ'
+        return body
+      }
+      if (m === 'HK') return body + '.HK'
+      if (m === 'US') return body + '.US'
+      if (m === 'SG') return body + '.SG'
+      return body
+    }
     function Settings({ t, state, call, busy, reload }) {
       const db = state.ledger, cur = db.baseCurrency
       const [baseSel, setBaseSel] = React.useState(cur)
@@ -1463,6 +1489,13 @@ window.__ModuleLoader__.load({
         editing ? h(EditAccountModal, { t, state, call, busy, reload, account, source, authorization: authorizations.find(x => x.id === (source?.authId || source?.id)), onClose: () => { setEditing(false); refreshSources() } }) : null)
     }
 
+    // 保存持仓后要用「这次返回的持仓」反查标的，不能按 symbol+market 找第一条：
+    // 同代码的股票与场外基金（000001 / 000001.OF）会选错，把股票元数据改成基金。
+    function instrumentOfSavedHolding(ledger, saved) {
+      if (!saved || !saved.instrumentId) return null
+      return (ledger.instruments || []).find((i) => i.id === saved.instrumentId) || null
+    }
+
     function Holdings({ t, state, call, busy, accountId, reload }) {
       const db = state.ledger
       const accMap = new Map(db.accounts.map((a) => [a.id, a]))
@@ -1490,7 +1523,7 @@ window.__ModuleLoader__.load({
         const avgCost = String(form.avgCost ?? '').trim() === '' ? null : form.avgCost
         const r = await call('holding.upsert', { holding: { ...form, currency: form.currency || undefined, qty: form.qty, avgCost, manualPrice: form.manualPrice === '' ? null : form.manualPrice } })
         if (!r.ok) { setMsg(r.error?.message || '保存失败'); return }
-        const ins = r.ledger.instruments.find(i => i.symbol === form.symbol && i.market === form.market)
+        const ins = instrumentOfSavedHolding(r.ledger, r.result?.holding)
         if (ins && (ins.assetClass !== form.assetClass || (form.name && ins.name !== form.name) || (form.sector || '') !== (ins.sector || '') || (form.style || '') !== (ins.style || ''))) {
           const meta = await call('instrument.upsert', { instrument: { id: ins.id, name: form.name || form.symbol, assetClass: form.assetClass, ...(form.sector.trim() ? { sector: form.sector.trim() } : {}), ...(form.style ? { style: form.style } : {}) } })
           if (!meta.ok) { setMsg(meta.error?.message || '标的信息保存失败'); return }
@@ -1545,9 +1578,12 @@ window.__ModuleLoader__.load({
           return { ho, hand: u.hand, price: u.price, mv }
         })
         const qty = rows.reduce((s, x) => s + (Number(x.qty) || 0), 0)
+        // 合并行若混了币种，数量可以相加，但单位成本绝不能跨币种加权——显示「—」并标注。
+        const currencies = [...new Set(rows.map(x => x.currency || e.ins?.currency || db.baseCurrency))]
+        const mixedCurrency = currencies.length > 1
         const withCost = rows.filter(x => x.avgCost != null && Number.isFinite(Number(x.avgCost)))
         const costQty = withCost.reduce((s, x) => s + (Number(x.qty) || 0), 0)
-        const avgCost = withCost.length === rows.length && costQty > 0 ? withCost.reduce((s, x) => s + (Number(x.qty) || 0) * Number(x.avgCost), 0) / costQty : null
+        const avgCost = !mixedCurrency && withCost.length === rows.length && costQty > 0 ? withCost.reduce((s, x) => s + (Number(x.qty) || 0) * Number(x.avgCost), 0) / costQty : null
         let best = null
         for (const p of [x => x.hand != null, x => x.ho.quotePrice != null, x => x.ho.sourcePrice != null]) { best = priced.find(p); if (best) break }
         if (!best) best = priced[0]
@@ -1555,10 +1591,12 @@ window.__ModuleLoader__.load({
         const mvs = priced.map(x => x.mv).filter(v => v != null)
         return {
           ...e, priced, qty,
-          avgCost, best,
+          avgCost, best, mixedCurrency,
           pct: pct == null ? null : pct,
-          currency: rows[0].currency,
+          currency: currencies[0],
           mv: mvs.length ? mvs.reduce((s, x) => s + x, 0) : null,
+          // 合并行里有的持仓没有价格：市值只汇总了部分，必须显式提示，不能静默当全额。
+          unpriced: priced.filter(x => x.mv == null).length,
           accIds: [...new Set(rows.map(x => x.accountId))],
         }
       }
@@ -1601,17 +1639,21 @@ window.__ModuleLoader__.load({
                 const pctText = pct == null ? '—' : (pct > 0 ? '+' : '') + pct.toFixed(2) + '%'
                 const qtyText = v.accIds.length > 1 ? String(Number(v.qty.toFixed(6))) : String(ho.qty)
                 return h('tr', { key: v.key },
-                  T.td(h('span', null, (ins ? ins.name + ' ' + ins.symbol : ho.instrumentId), ins?.sector ? h('small', { style: { display: 'block', color: t.sub } }, ins.sector + (ins.style ? ' · ' + styleLabel(ins.style) : '')) : null), t),
+                  T.td(h('span', null, (ins ? ins.name + ' ' + displayCodeOf(ins) : ho.instrumentId), ins?.sector ? h('small', { style: { display: 'block', color: t.sub } }, ins.sector + (ins.style ? ' · ' + styleLabel(ins.style) : '')) : null), t),
                   T.td(qtyText, t),
-                  T.td(readOnly && v.accIds.length > 1 && v.avgCost == null ? h('span', { title: '部分持仓成本未知' }, '—') : readOnly && v.accIds.length > 1 ? fmtMoney(v.avgCost) : fmtMoney(ho.avgCost), t),
+                  T.td(v.accIds.length > 1 || v.mixedCurrency
+                    ? (v.avgCost == null
+                      ? h('span', { title: v.mixedCurrency ? '合并持仓币种不一致，无法汇总单位成本' : '部分持仓成本未知，无法汇总单位成本' }, '—')
+                      : h('span', { title: '按数量加权的单位成本' }, fmtMoney(v.avgCost)))
+                    : fmtMoney(ho.avgCost), t),
                   T.td(h('span', null,
                     !readOnly && hand != null
                       ? h('input', { key: ho.id + ':' + hand, defaultValue: String(hand), placeholder: '手填', title: '手填价格（清空则改用行情）', onBlur: (e) => { const v2 = e.target.value; if (String(hand) !== v2) call('price.set', { holdingId: ho.id, price: v2 === '' ? null : Number(v2) }) }, style: { ...T.input(t), width: 78 } })
                       : h('span', { style: { fontWeight: 650, fontVariantNumeric: 'tabular-nums' } }, price == null ? '—' : String(price)),
                     handTag, quoteTag, sourceTag), t),
                   T.td(pctText, t, { color: pct == null || pct === 0 ? t.sub : pct > 0 ? t.green : t.red, fontWeight: 650, fontVariantNumeric: 'tabular-nums' }),
-                  T.td(v.currency, t),
-                  T.td(fmtMoney(mv, db.baseCurrency), t),
+                  T.td(h('span', null, v.currency, v.mixedCurrency ? h('small', { style: { display: 'block', color: t.sub, fontSize: 10 } }, '多币种') : null), t),
+                  T.td(h('span', null, fmtMoney(mv, db.baseCurrency), v.unpriced ? h('small', { style: { display: 'block', color: t.terra || t.sub, fontSize: 10 }, title: '这些持仓没有可用价格，未计入本行市值' }, '另有 ' + v.unpriced + ' 条无价') : null), t),
                   readOnly
                     ? T.td(h('span', { style: { color: t.sub, fontSize: 11 } }, '只读 · 到账户中编辑'), t)
                     : T.td(h('span', null,

@@ -129,9 +129,15 @@ function resolveInstrument(db, ref, { create = true } = {}) {
   // 不存在这种撞号，不能因为历史数据里 assetClass 缺失而误判成两只。
   const compareFund = /^\d{6}$/.test(symbol) && (market === 'FUND' || market === 'CN' || rawMarket === '')
   const wantFund = isFundLike({ market, assetClass: ref.assetClass })
+  const fundMarket = (m) => canonicalMarket(m) === 'FUND' || canonicalMarket(m) === 'CN'
   const matches = (i) => {
     const n = normalizeSymbol(i.symbol, i.market)
-    return n.symbol === symbol && (rawMarket === '' || n.market === market) && (!compareFund || isFundLike(i) === wantFund)
+    if (n.symbol !== symbol) return false
+    const iFund = isFundLike(i)
+    // 场外基金的历史身份可能是 CN 或 FUND（同花顺 MCP 仍输出 CN）：
+    // 两个方向都视为同一只基金，否则先后导入顺序不同会各建一条。
+    if (compareFund && wantFund && iFund) return rawMarket === '' || fundMarket(i.market)
+    return (rawMarket === '' || n.market === market) && (!compareFund || iFund === wantFund)
   }
   const rememberSourceCode = (instrument) => {
     const source = String(ref.source || '').trim().toLowerCase()
@@ -142,15 +148,6 @@ function resolveInstrument(db, ref, { create = true } = {}) {
   }
   const existing = db.instruments.find(matches)
   if (existing) return rememberSourceCode(existing)
-  // 旧数据自愈：场外基金曾以 market=CN 入库（同花顺基金账本）。基金引用优先认领它，
-  // 不再新建一条；股票引用不会走到这里（基金身份不匹配）。
-  if (compareFund && wantFund) {
-    const legacy = db.instruments.find((i) => {
-      const n = normalizeSymbol(i.symbol, i.market)
-      return n.symbol === symbol && canonicalMarket(i.market) === 'CN' && isFundLike(i)
-    })
-    if (legacy) return rememberSourceCode(legacy)
-  }
   if (!create) throw new OpError('not-found', '标的不存在: ' + symbol)
   const instrument = {
     id: uid('INS'),
@@ -476,11 +473,17 @@ export function applyOp(db, op, payload = {}) {
         if (clash) throw new OpError('bad-request', '账户「' + holding.accountId + '」同时持有两个重复标的，请先人工核对再合并')
       }
       for (const holding of moved) holding.instrumentId = keep.id
+      // 交易与归档流水也引用 instrumentId；只迁移持仓会把它们留成悬空引用。
+      const movedTrades = (db.trades || []).filter((t) => t.instrumentId === drop.id)
+      for (const trade of movedTrades) trade.instrumentId = keep.id
+      const movedEvents = (db.historyEvents || []).filter((e) => e.instrumentId === drop.id)
+      for (const event of movedEvents) event.instrumentId = keep.id
       db.instruments = db.instruments.filter((i) => i.id !== drop.id)
       if (!keep.name && drop.name) keep.name = drop.name
       if (!keep.sector && drop.sector) keep.sector = drop.sector
       if (!keep.style && drop.style) keep.style = drop.style
-      return { instrument: keep, movedHoldings: moved.length, removed: drop.id }
+      if (drop.sourceCodes) keep.sourceCodes = { ...drop.sourceCodes, ...(keep.sourceCodes || {}) }
+      return { instrument: keep, movedHoldings: moved.length, movedTrades: movedTrades.length, movedEvents: movedEvents.length, removed: drop.id }
     }
 
     // 月度生活预算：每个分类一条；monthly 为 null 表示删除该分类预算。

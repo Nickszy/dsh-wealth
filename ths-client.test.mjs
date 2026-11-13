@@ -525,3 +525,15 @@ test('transfer scan rejects fund books before any request', async () => {
     /基金账本/,
   )
 })
+
+test('currency-fund rows stay fund-class so an empty snapshot can prune them', async () => {
+  // currencyfund 是货币基金 / 现金管理产品：身份仍按基金保存。若标成 cash，
+  // 快照只声明 fund 段完整，清仓后的空快照永远删不掉这条持仓（资产虚增）。
+  const merge = { account: { cust_id: '100108832246', username: '爱基金', total_asset: '100', total_cost: '100', trans_date: '2026-11-06' },
+    fund: [], currencyfund: [{ fundcode: '000198', fundname: '天弘余额宝', fundcount: '100', fundcost: '100', fundnav: '1', fundvalue: '100', date: '2026-11-06', percost: '1' }],
+    onwayfund: [], clearfund: [], empty: 'false' }
+  const result = await fetchStandaloneThsSnapshot({ portfolioId: '100108832246', thsBookType: 'ijj' }, secrets, undefined, fundDeps({ merge }))
+  assert.equal(result.holdings.length, 1)
+  assert.deepEqual([result.holdings[0].symbol, result.holdings[0].market, result.holdings[0].assetClass], ['000198', 'FUND', 'fund'])
+  assert.equal(result.coverage.fund, 'full')
+})

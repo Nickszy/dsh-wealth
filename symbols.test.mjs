@@ -58,6 +58,8 @@ test('canonicalDisplayCode renders the agreed local code while storage stays sym
   assert.equal(canonicalDisplayCode({ symbol: '000001', market: 'CN', assetClass: 'fund' }), '000001.OF')
   assert.equal(canonicalDisplayCode({ symbol: 'CNY.CASH', market: 'CASH', assetClass: 'cash' }), 'CASH:CNY')
   assert.equal(canonicalDisplayCode({ symbol: 'HKD.CASH', market: 'CN', assetClass: 'cash', currency: 'HKD' }), 'CASH:HKD')
+  // 非币种现金行（信用卡账单等）保留自己的代码，避免与真实现金行重名
+  assert.equal(canonicalDisplayCode({ symbol: 'CREDIT.BALANCE', market: 'CASH', assetClass: 'cash', currency: 'CNY' }), 'CREDIT.BALANCE')
 })
 
 test('isFundLike separates funds from stocks that share a six-digit code', () => {

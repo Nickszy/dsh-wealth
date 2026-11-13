@@ -384,12 +384,20 @@ test('instrument.merge repoints holdings across accounts and refuses same-accoun
   const db = fixture()
   db.instruments.push(
     { id: 'IA', symbol: '02549', name: 'CAROTE', market: 'HK', assetClass: 'stock', currency: 'HKD' },
-    { id: 'IB', symbol: '2549.HK', name: 'CAROTE LTD', market: 'HK', assetClass: 'stock', currency: 'HKD' })
+    { id: 'IB', symbol: '2549.HK', name: 'CAROTE LTD', market: 'HK', assetClass: 'stock', currency: 'HKD', sourceCodes: { futu: 'HK.02549' } })
   db.holdings.push(
     { id: 'H1', accountId: 'a', instrumentId: 'IA', qty: 4000, avgCost: 10, manualPrice: 12, currency: 'HKD' },
     { id: 'H2', accountId: 'empty', instrumentId: 'IB', qty: 3500, avgCost: 9, currency: 'HKD' })
+  // 交易与归档流水同样引用 instrumentId，合并时必须一起迁移，否则引用悬空。
+  db.trades.push({ id: 'T1', accountId: 'empty', instrumentId: 'IB', side: 'buy', qty: 100, price: 9, currency: 'HKD', date: '2026-01-02' })
+  db.historyEvents = [{ id: 'E1', accountId: 'empty', kind: 'dividend', date: '2026-02-03', instrumentId: 'IB', cashAmount: 20, currency: 'HKD' }]
   const result = applyOp(db, 'instrument.merge', { keepId: 'IA', dropId: 'IB' })
   assert.equal(result.movedHoldings, 1)
+  assert.equal(result.movedTrades, 1)
+  assert.equal(result.movedEvents, 1)
+  assert.equal(db.trades.find((t) => t.id === 'T1').instrumentId, 'IA')
+  assert.equal(db.historyEvents.find((e) => e.id === 'E1').instrumentId, 'IA')
+  assert.deepEqual(db.instruments.find((i) => i.id === 'IA').sourceCodes, { futu: 'HK.02549' })
   assert.equal(db.instruments.length, 1)
   assert.equal(db.holdings.find((h) => h.id === 'H2').instrumentId, 'IA')
   assert.equal(db.holdings.length, 2)
@@ -520,4 +528,18 @@ test('source raw codes are recorded per connector without touching identity matc
   applyOp(db, 'instrument.upsert', { instrumentId: ins.id, sourceCodes: { tencent: 'hk00700', eastmoney: '116.00700' } })
   assert.deepEqual(ins.sourceCodes, { futu: 'HK.00700', longbridge: '700.HK', tencent: 'hk00700', eastmoney: '116.00700' })
   bad(db, 'instrument.upsert', { instrumentId: ins.id, sourceCodes: { 'bad key': 'x' } })
+})
+
+test('fund identity is order-independent: CN first or FUND first reuses one instrument', () => {
+  const fundFirst = fixture()
+  const a = applyOp(fundFirst, 'holding.upsert', { accountId: 'a', symbol: '000003', market: 'FUND', name: '基金', assetClass: 'fund', qty: 10, avgCost: 1, manualPrice: 1 }).holding
+  const b = applyOp(fundFirst, 'holding.upsert', { accountId: 'empty', symbol: '000003', market: 'CN', name: '基金', assetClass: 'fund', qty: 5, avgCost: 1, manualPrice: 1 }).holding
+  assert.equal(b.instrumentId, a.instrumentId)
+  assert.equal(fundFirst.instruments.length, 1)
+
+  const cnFirst = fixture()
+  const c = applyOp(cnFirst, 'holding.upsert', { accountId: 'a', symbol: '000004', market: 'CN', name: '基金', assetClass: 'fund', qty: 10, avgCost: 1, manualPrice: 1 }).holding
+  const d = applyOp(cnFirst, 'holding.upsert', { accountId: 'empty', symbol: '000004', market: 'FUND', name: '基金', assetClass: 'fund', qty: 5, avgCost: 1, manualPrice: 1 }).holding
+  assert.equal(d.instrumentId, c.instrumentId)
+  assert.equal(cnFirst.instruments.length, 1)
 })

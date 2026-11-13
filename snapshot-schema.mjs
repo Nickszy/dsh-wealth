@@ -76,14 +76,19 @@ function identity(row, field) {
   // 入库前收敛为一种，保证同一只证券只有一条身份、只查一份历史行情。
   const rawSymbol = text(row.symbol, `${field}.symbol`)
   const normalized = normalizeSymbol(rawSymbol, text(row.market, `${field}.market`))
+  // 来源原始写法（700.HK / HK.00700 / hk00700）：只用于留档排查，不参与身份匹配。
+  // 快照可能被再次归一化（适配器一次、同步一次）；已经带 sourceSymbol 时必须保留，
+  // 否则第二次处理会把 700.HK 丢成 00700。
+  const declaredSource = row.sourceSymbol === undefined || row.sourceSymbol === null ? '' : text(row.sourceSymbol, `${field}.sourceSymbol`).trim()
+  if (declaredSource.length > 64) fail(`${field}.sourceSymbol must be at most 64 characters`)
+  const sourceSymbol = declaredSource || (rawSymbol !== normalized.symbol ? rawSymbol : '')
   const result = {
     symbol: normalized.symbol,
     name: text(row.name, `${field}.name`),
     market: normalized.market,
     assetClass: text(row.assetClass, `${field}.assetClass`).toLowerCase(),
     currency: text(row.currency, `${field}.currency`).toUpperCase(),
-    // 来源原始写法（700.HK / HK.00700 / hk00700）：只用于留档排查，不参与身份匹配。
-    ...(rawSymbol !== normalized.symbol ? { sourceSymbol: rawSymbol } : {}),
+    ...(sourceSymbol ? { sourceSymbol } : {}),
   }
   if (!CLASSES.has(result.assetClass)) fail(`${field}.assetClass is unsupported`)
   if (!/^[A-Z]{3}$/.test(result.currency)) fail(`${field}.currency must be a three-letter code`)

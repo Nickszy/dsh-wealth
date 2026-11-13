@@ -210,8 +210,8 @@ async function fundSnapshot(post, source, id, deps) {
   const holdingProfit = decimal(account.now_profit)
   if (holdingProfit !== null) sourceTotals.holdingProfit = holdingProfit
   if (totalAsset === null) partial('MISSING_ASSET_FIELD:totalAsset')
-  const groups = [['fund', 'fund'], ['currencyfund', 'cash']]
-  for (const [key] of groups) {
+  const groups = ['fund', 'currencyfund']
+  for (const key of groups) {
     const rows = Array.isArray(data[key]) ? data[key] : fail('INVALID_RESPONSE', '同花顺基金账本持仓数据不完整，已保留现有持仓')
     for (const raw of rows) {
       const row = record(raw)
@@ -230,8 +230,9 @@ async function fundSnapshot(post, source, id, deps) {
       const quoteDate = thsDay(scalar(row.date).trim(), '净值日期')
       if (quoteDate && (sourceTotals.quoteDate === undefined || quoteDate > sourceTotals.quoteDate)) sourceTotals.quoteDate = quoteDate
       // 场外基金用 FUND 身份（000001.OF），不能与同代码股票（000001.SZ 平安银行）共用一条标的。
-      // currencyfund 组是现金管理产品，资产类别仍是 cash，但身份同样按基金保存。
-      holdings.push({ symbol, name: scalar(row.fundname).trim() || symbol, market: 'FUND', assetClass: key === 'currencyfund' ? 'cash' : 'fund', currency: 'CNY', qty, avgCost, manualPrice, externalId: symbol })
+      // currencyfund（货币基金 / 现金管理产品）仍按基金保存：快照的覆盖段只声明 fund，
+      // 若把它标成 cash，清仓后的空快照永远删不掉旧持仓。
+      holdings.push({ symbol, name: scalar(row.fundname).trim() || symbol, market: 'FUND', assetClass: 'fund', currency: 'CNY', qty, avgCost, manualPrice, externalId: symbol })
       // 净值/市值缺失只是数据质量（v2.3 info 级），基金行仍然可入库，不影响覆盖。
       if (manualPrice === null) warnings.push(infoWarning('PRICE_UNAVAILABLE', 'PRICE_UNAVAILABLE:' + symbol))
       if (value === null) warnings.push(infoWarning('MISSING_FUND_VALUE', 'MISSING_FUND_VALUE:' + symbol))

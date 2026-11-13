@@ -60,8 +60,10 @@ export function canonicalDisplayCode(instrument = {}) {
   const m = canonicalMarket(instrument.market)
   const cls = String(instrument.assetClass || '').toLowerCase()
   if (m === 'CASH' || /^[A-Z]{3}\.CASH$/i.test(raw)) {
-    const cur = /^([A-Z]{3})\.CASH$/i.exec(raw)?.[1] || instrument.currency || 'CNY'
-    return 'CASH:' + String(cur).toUpperCase()
+    // 只有「币种.CASH」才是现金余额；信用卡账单等其他 CASH 市场行保留自己的代码，
+    // 否则两条不同资产会显示成同一个 CASH:CNY。
+    const cur = /^([A-Z]{3})\.CASH$/i.exec(raw)?.[1]
+    return cur ? 'CASH:' + cur.toUpperCase() : raw
   }
   const normalized = normalizeSymbol(raw, m).symbol
   if (m === 'FUND' || (cls === 'fund' && /^\d{6}$/.test(normalized))) {

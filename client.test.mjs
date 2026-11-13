@@ -65,6 +65,14 @@ function walk(node, visit) {
   walk(node.children, visit)
 }
 
+function realClientHelper(name) {
+  const src = readFileSync(new URL('./client.js', import.meta.url), 'utf8')
+  const deps = name === 'identityKeyOf' ? '' : `${extractFunction(src, 'identityKeyOf')}
+`
+  return new Function(`${deps}${extractFunction(src, name)}
+return ${name}`)()
+}
+
 const theme = { sub: '#888', text: '#111', border: '#ddd', card: '#fff', accent: '#36c', accent2: '#258', input: '#fff', shadow: 'none', red: '#c00', green: '#080' }
 
 function renderHoldings(reload) {
@@ -79,8 +87,8 @@ function renderHoldings(reload) {
   }
   const h = (type, props, ...children) => ({ type, props: props || {}, children })
   const T = { th: (c) => c, td: (c) => c, btn: () => ({}), input: () => ({}), card: () => ({}), label: () => ({}) }
-  const Holdings = new Function('React', 'h', 'T', 'assetLabel', 'fmtMoney', 'Modal', 'currencyOptions', 'identityKeyOf', `${extractFunction(src, 'Holdings')}\nreturn Holdings`)(
-    React, h, T, (cls) => cls || '', () => '0', () => null, () => [], (ins) => (ins ? ins.market + '|' + ins.symbol : ''),
+  const Holdings = new Function('React', 'h', 'T', 'assetLabel', 'fmtMoney', 'Modal', 'currencyOptions', 'identityKeyOf', 'displayCodeOf', 'instrumentOfSavedHolding', `${extractFunction(src, 'Holdings')}\nreturn Holdings`)(
+    React, h, T, (cls) => cls || '', () => '0', () => null, () => [], realClientHelper('identityKeyOf'), realClientHelper('displayCodeOf'), () => null,
   )
   const state = {
     ledger: {
@@ -126,8 +134,8 @@ function makeHoldings() {
   }
   const h = (type, props, ...children) => ({ type, props: props || {}, children })
   const T = { th: (c) => c, td: (c) => c, btn: () => ({}), input: () => ({}), card: () => ({}), label: () => ({}) }
-  return new Function('React', 'h', 'T', 'assetLabel', 'fmtMoney', 'Modal', 'currencyOptions', 'identityKeyOf', `${extractFunction(src, 'Holdings')}\nreturn Holdings`)(
-    React, h, T, (cls) => cls || '', (n) => String(n ?? '—'), () => null, () => [], (ins) => (ins ? ins.market + '|' + ins.symbol : ''),
+  return new Function('React', 'h', 'T', 'assetLabel', 'fmtMoney', 'Modal', 'currencyOptions', 'identityKeyOf', 'displayCodeOf', 'instrumentOfSavedHolding', `${extractFunction(src, 'Holdings')}\nreturn Holdings`)(
+    React, h, T, (cls) => cls || '', (n) => String(n ?? '—'), () => null, () => [], realClientHelper('identityKeyOf'), realClientHelper('displayCodeOf'), () => null,
   )
 }
 
@@ -158,4 +166,54 @@ test('all-accounts view merges same-code holdings into one read-only row', () =>
   const actionButtons = []
   walk(tree, (node) => { if (node.type === 'button' && ['编辑', '删除'].some((t2) => textOf(node).includes(t2))) actionButtons.push(node) })
   assert.equal(actionButtons.length, 0, 'no edit/delete buttons in merged view (the hint sentence mentions them)')
+})
+
+test('metadata updates follow the saved holding, not the first matching code', () => {
+  const pick = realClientHelper('instrumentOfSavedHolding')
+  const ledger = {
+    instruments: [
+      { id: 'INS_STOCK', symbol: '000001', market: 'CN', assetClass: 'stock' },
+      { id: 'INS_FUND', symbol: '000001', market: 'FUND', assetClass: 'fund' },
+    ],
+  }
+  assert.equal(pick(ledger, { instrumentId: 'INS_FUND' }).id, 'INS_FUND', 'same-code stock must not shadow the saved fund')
+  assert.equal(pick(ledger, { instrumentId: 'INS_STOCK' }).id, 'INS_STOCK')
+  assert.equal(pick(ledger, { instrumentId: 'missing' }), null)
+  assert.equal(pick(ledger, null), null)
+})
+
+test('displayCodeOf renders the agreed full local code in the holdings table', () => {
+  const code = realClientHelper('displayCodeOf')
+  assert.equal(code({ symbol: '600519', market: 'CN', assetClass: 'stock' }), '600519.SH')
+  assert.equal(code({ symbol: '000001', market: 'CN', assetClass: 'stock' }), '000001.SZ')
+  assert.equal(code({ symbol: '430047', market: 'CN', assetClass: 'stock' }), '430047.BJ')
+  assert.equal(code({ symbol: '510300', market: 'CN', assetClass: 'etf' }), '510300.SH')
+  assert.equal(code({ symbol: '700.HK', market: 'HK', assetClass: 'stock' }), '00700.HK')
+  assert.equal(code({ symbol: 'AAPL', market: 'US', assetClass: 'stock' }), 'AAPL.US')
+  assert.equal(code({ symbol: 'BRK.B', market: 'US', assetClass: 'stock' }), 'BRK.B.US')
+  assert.equal(code({ symbol: '000001', market: 'FUND', assetClass: 'fund' }), '000001.OF')
+  assert.equal(code({ symbol: 'CNY.CASH', market: 'CASH', assetClass: 'cash' }), 'CASH:CNY')
+  assert.equal(code({ symbol: 'CREDIT.BALANCE', market: 'CASH', assetClass: 'cash', currency: 'CNY' }), 'CREDIT.BALANCE')
+  assert.equal(code(null), '')
+})
+
+test('merged rows flag mixed currencies and holdings without a price', () => {
+  const Holdings = makeHoldings()
+  const state = {
+    ledger: {
+      baseCurrency: 'CNY',
+      fx: { CNY: 1, USD: 7 },
+      accounts: [{ id: 'a1', name: 'A' }, { id: 'a2', name: 'B' }],
+      instruments: [{ id: 'i1', symbol: 'AAPL', name: '苹果', market: 'US', assetClass: 'stock', currency: 'USD' }],
+      holdings: [
+        { id: 'h1', accountId: 'a1', instrumentId: 'i1', qty: 10, avgCost: 180, currency: 'USD', manualPrice: null, quotePrice: 200 },
+        { id: 'h2', accountId: 'a2', instrumentId: 'i1', qty: 5, avgCost: 180, currency: 'CNY', manualPrice: null, quotePrice: 1400 },
+        { id: 'h3', accountId: 'a2', instrumentId: 'i1', qty: 2, avgCost: null, currency: 'USD', manualPrice: null, quotePrice: null },
+      ],
+    },
+  }
+  const text = textOf(Holdings({ t: theme, state, call: async () => ({ ok: true }), busy: false }))
+  assert.ok(text.includes('多币种'), 'mixed-currency merge is labelled')
+  assert.ok(text.includes('另有 1 条无价'), 'partially valued merge discloses the unpriced rows')
+  assert.ok(text.includes('苹果 AAPL.US'), 'display code is used in the table')
 })

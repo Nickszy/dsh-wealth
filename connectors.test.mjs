@@ -115,3 +115,20 @@ test('v1 string warnings output stays byte-identical to before', () => {
   const result = normalizeSnapshot(raw)
   assert.deepEqual(result.warnings, ['PARTIAL', 'FUTU_MCP_COST_UNAVAILABLE:US.AAPL'])
 })
+
+test('normalizer keeps a raw source code across repeated normalization passes', () => {
+  const raw = canonical()
+  raw.holdings = [{ symbol: '700.HK', name: '腾讯控股', market: 'HK', assetClass: 'stock', currency: 'HKD', qty: 100, avgCost: 300, manualPrice: 420, externalId: 'p2' }]
+  const first = normalizeSnapshot(raw)
+  assert.equal(first.holdings[0].symbol, '00700')
+  assert.equal(first.holdings[0].sourceSymbol, '700.HK')
+  const second = normalizeSnapshot(first)
+  assert.equal(second.holdings[0].symbol, '00700')
+  assert.equal(second.holdings[0].sourceSymbol, '700.HK', 'second pass must not drop the archived spelling')
+  const declared = canonical()
+  declared.holdings = [{ symbol: '00700', name: '腾讯控股', market: 'HK', assetClass: 'stock', currency: 'HKD', qty: 1, avgCost: 300, manualPrice: 420, sourceSymbol: 'HK.00700' }]
+  assert.equal(normalizeSnapshot(declared).holdings[0].sourceSymbol, 'HK.00700')
+  const tooLong = canonical()
+  tooLong.holdings = [{ symbol: '00700', name: '腾讯控股', market: 'HK', assetClass: 'stock', currency: 'HKD', qty: 1, avgCost: 300, manualPrice: 420, sourceSymbol: 'x'.repeat(65) }]
+  assert.throws(() => normalizeSnapshot(tooLong), /sourceSymbol/)
+})
