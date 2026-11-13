@@ -320,3 +320,34 @@ test('editing a holding binds its id so an edit cannot spill onto a same-code si
   assert.equal(form.id, 'h1', 'the edit form is bound to the saved holding id')
   assert.equal(form.assetClass, 'stock', 'identity fields come from the original row, not a sibling')
 })
+
+test('holdings split into per-class tabs: stock, ETF, fund and cash stay apart', async () => {
+  const state = {
+    ledger: {
+      baseCurrency: 'CNY', fx: { CNY: 1 },
+      accounts: [{ id: 'a1', name: 'A' }],
+      instruments: [
+        { id: 'S', symbol: '600519', name: '贵州茅台', market: 'CN', assetClass: 'stock', currency: 'CNY' },
+        { id: 'E', symbol: '510300', name: '沪深300ETF', market: 'CN', assetClass: 'etf', currency: 'CNY' },
+        { id: 'F', symbol: '005827', name: '易方达蓝筹', market: 'FUND', assetClass: 'fund', currency: 'CNY' },
+        { id: 'C', symbol: 'CNY.CASH', name: '人民币现金', market: 'CASH', assetClass: 'cash', currency: 'CNY' },
+      ],
+      holdings: [
+        { id: 'h1', accountId: 'a1', instrumentId: 'S', qty: 1, avgCost: 1500, currency: 'CNY', manualPrice: null, quotePrice: 1688 },
+        { id: 'h2', accountId: 'a1', instrumentId: 'E', qty: 100, avgCost: 3.9, currency: 'CNY', manualPrice: null, quotePrice: 4.1 },
+        { id: 'h3', accountId: 'a1', instrumentId: 'F', qty: 10, avgCost: 2, currency: 'CNY', manualPrice: null, quotePrice: 2.3 },
+        { id: 'h4', accountId: 'a1', instrumentId: 'C', qty: 1000, avgCost: null, currency: 'CNY', manualPrice: 1, quotePrice: null },
+      ],
+    },
+  }
+  const { Holdings, sets } = makeHoldings()
+  const tree = Holdings({ t: theme, state, call: async () => ({ ok: true }), busy: false, accountId: 'a1' })
+  const tabs = []
+  walk(tree, (node) => { if (node.type === 'button' && node.props.role === 'tab') tabs.push(node) })
+  const labels = tabs.map((b) => textOf(b))
+  assert.deepEqual(labels, ['全部 · 4', '股票 · 1', 'ETF · 1', '基金 · 1', '现金 · 1'], 'one tab per class that exists, with counts')
+  assert.ok(tabs[0].props['aria-selected'], 'the all view is selected by default')
+  const fundTab = tabs.find((b) => textOf(b).startsWith('基金'))
+  fundTab.props.onClick()
+  assert.ok(sets.includes('fund'), 'clicking a tab switches the class filter')
+})

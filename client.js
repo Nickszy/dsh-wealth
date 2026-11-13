@@ -1504,6 +1504,10 @@ window.__ModuleLoader__.load({
       const blank = () => ({ id: '', accountId: accountId || db.accounts[0]?.id || '', symbol: '', name: '', market: 'CN', assetClass: 'stock', sector: '', style: '', qty: '', avgCost: '', currency: '', manualPrice: '' })
       const [form, setForm] = React.useState(null), [editing, setEditing] = React.useState(false), [msg, setMsg] = React.useState(''), [acctFilter, setAcctFilter] = React.useState('')
       const [group, setGroup] = React.useState('class')
+      // 品种 tab：现金 / 股票 / ETF / 基金分开展示，不再混在一张表里（'' = 全部）。
+      const [classTab, setClassTab] = React.useState('')
+      // tab 顺序：先证券后现金；数据里没有的类别不占位置。
+      const CLASS_TABS = [['stock', '股票'], ['etf', 'ETF'], ['fund', '基金'], ['cash', '现金'], ['bond', '债券'], ['crypto', '加密资产'], ['other', '其他']]
       const [quoting, setQuoting] = React.useState(false)
       // 入库时没核对上身份的标的（verification.status === 'pending'）：逐条确认或重新查询。
       const [verifying, setVerifying] = React.useState('')
@@ -1676,7 +1680,16 @@ window.__ModuleLoader__.load({
           accIds: [...new Set(rows.map(x => x.accountId))],
         }
       }
-      const views = entries.map(entryView)
+      // 品种 tab：只展示存在的类别，计数按合并后的行算（与「全部持仓 · N」同口径）。
+      const classOf = (e) => String(e.ins?.assetClass || 'other').toLowerCase()
+      const classCounts = new Map()
+      for (const e of entries) classCounts.set(classOf(e), (classCounts.get(classOf(e)) || 0) + 1)
+      const tabs = [['', '全部', entries.length], ...CLASS_TABS.filter(([k]) => classCounts.has(k)).map(([k, label]) => [k, label, classCounts.get(k)])]
+      // 数据变化后（例如把待确认的基金确认为股票）原 tab 可能已空：退回「全部」而不是白屏。
+      const tab = classTab && classCounts.has(classTab) ? classTab : ''
+      const shownEntries = tab ? entries.filter((e) => classOf(e) === tab) : entries
+      const shownHoldings = shownEntries.reduce((n, e) => n + e.holdings.length, 0)
+      const views = shownEntries.map(entryView)
       const groups = []
       for (const v of views) {
         const key = groupKey(v.holdings[0])
@@ -1720,7 +1733,8 @@ window.__ModuleLoader__.load({
         pendingPanel,
         h('div', { style: T.card(t) },
           h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' } },
-            h('strong', null, (accountId ? '账户持仓' : '全部持仓') + ' · ' + views.length + (merged && views.length !== list.length ? '（合并自 ' + list.length + ' 条）' : '')),
+            h('strong', null, (accountId ? '账户持仓' : '全部持仓') + (tab ? ' · ' + assetLabel(tab) : '') + ' · ' + views.length
+              + (merged && views.length !== shownHoldings ? '（合并自 ' + shownHoldings + ' 条）' : '')),
             h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
               accountId ? null : h('select', { value: acctFilter, onChange: (e) => setAcctFilter(e.target.value), 'aria-label': '按账户筛选', style: { ...T.input(t), minHeight: 30, width: 180, fontSize: 12 } },
                 h('option', { value: '' }, '全部账户'),
@@ -1729,17 +1743,26 @@ window.__ModuleLoader__.load({
                 (accountId ? [['class', '按资产类别'], ['sector', '按行业'], ['style', '按风格'], ['market', '按市场'], ['currency', '按币种']] : [['class', '按资产类别'], ['account', '按账户'], ['sector', '按行业'], ['style', '按风格'], ['market', '按市场'], ['currency', '按币种']]).map(([v, n]) => h('option', { key: v, value: v }, n))),
               h('button', { style: T.btn(t, false), disabled: busy || quoting, onClick: refreshQuotes }, quoting ? '正在更新行情…' : '⟳ 更新行情'),
               h('button', { style: T.btn(t, true), disabled: busy || !db.accounts.length, onClick: () => open(blank()) }, '＋ 添加持仓'))),
+          tabs.length > 2 ? h('div', { role: 'tablist', 'aria-label': '按品种筛选', style: { display: 'flex', gap: 6, flexWrap: 'wrap', margin: '0 0 10px' } },
+            tabs.map(([v, label, n]) => h('button', {
+              key: 'tab-' + v, role: 'tab', 'aria-selected': tab === v,
+              onClick: () => setClassTab(v),
+              style: { ...T.btn(t, tab === v), padding: '4px 12px', minHeight: 28, fontSize: 12 },
+            }, label + ' · ' + n))) : null,
           readOnly ? h('div', { style: { fontSize: 11, color: t.sub, margin: '-2px 0 10px' } }, merged ? '同一代码的持仓已合并计算，此视图只读；编辑 / 删除请进入对应账户。' : '此视图只读；编辑 / 删除请进入对应账户。') : null,
           h('table', { style: { width: '100%', borderCollapse: 'collapse' } },
             h('thead', null, h('tr', null, T.th('标的', t), T.th('数量', t), T.th('成本', t), T.th('现价', t), T.th('涨跌幅', t), T.th('币种', t), T.th('市值(本位币)', t), T.th('操作', t))),
             h('tbody', null, views.length ? groups.map((g) => [
-              h('tr', { key: 'g:' + g.key }, T.td(h('span', { style: { fontWeight: 650, fontSize: 12 } }, g.key, h('small', { style: { display: 'block', color: t.sub, fontWeight: 400 } }, g.rows.length + ' 项 · ' + fmtMoney(g.mv, db.baseCurrency) + (totalMv ? ' · ' + (g.mv / totalMv * 100).toFixed(1) + '%' : ''))), t, { colSpan: 8 })),
+              // 选中品种 tab 后只剩一个分组，表头就不必再重复一遍类别名。
+              tab && groups.length === 1 ? null : h('tr', { key: 'g:' + g.key }, T.td(h('span', { style: { fontWeight: 650, fontSize: 12 } }, g.key, h('small', { style: { display: 'block', color: t.sub, fontWeight: 400 } }, g.rows.length + ' 项 · ' + fmtMoney(g.mv, db.baseCurrency) + (totalMv ? ' · ' + (g.mv / totalMv * 100).toFixed(1) + '%' : ''))), t, { colSpan: 8 })),
               g.rows.map((v) => {
                 const ho = v.holdings[0], ins = v.ins
                 // 估值链：手填价 > 行情价 > 券商快照价 > 平均成本；全空时市值为「—」，绝不按 0 计。
                 const { hand, price } = readOnly ? { hand: null, price: v.best.price } : usedPrice(ho)
                 const mv = v.mv
-                const quoteTag = hand == null && v.best.ho.quotePrice != null ? h('small', { style: { display: 'block', color: t.sub, fontSize: 10 } }, (v.best.ho.quoteSource === 'tencent-fund' ? '净值' : '行情') + (v.best.ho.quoteAt ? ' ' + String(v.best.ho.quoteAt).slice(5, 10) : '')) : null
+                // 行情来源如实标注：同花顺 / 腾讯行情 / 场外净值。
+                const quoteLabel = { ths: '同花顺', 'tencent-fund': '净值' }[v.best.ho.quoteSource] || '行情'
+                const quoteTag = hand == null && v.best.ho.quotePrice != null ? h('small', { style: { display: 'block', color: t.sub, fontSize: 10 } }, quoteLabel + (v.best.ho.quoteAt ? ' ' + String(v.best.ho.quoteAt).slice(5, 10) : '')) : null
                 const sourceTag = hand == null && v.best.ho.quotePrice == null && v.best.ho.sourcePrice != null ? h('small', { style: { display: 'block', color: t.sub, fontSize: 10 } }, '券商价') : null
                 const handTag = hand != null ? h('small', { style: { display: 'block', color: t.sub, fontSize: 10 } }, '手填') : null
                 const pct = v.pct == null ? null : v.pct
