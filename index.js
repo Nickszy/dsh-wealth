@@ -24,6 +24,7 @@ import { inferredTransfers } from './timeline.mjs'
 import { previewImport } from './importer.mjs'
 import { modelInfo, chatTurn, applyChatOps } from './chat.mjs'
 import { createSyncService } from './sync.mjs'
+import { searchCatalog } from './catalog.mjs'
 import { startTigerDeviceAuth, pollTigerDeviceToken } from './tiger-mcp.mjs'
 import { createTigerLogin } from './tiger-login.mjs'
 import { createQiemanLogin } from './qieman-login.mjs'
@@ -730,6 +731,16 @@ export function apply(ctx, config = {}) {
             const code = error instanceof OpError ? error.code : 'internal'
             send(res, code === 'not-found' ? 404 : code === 'bad-request' ? 400 : 500, { ok: false, op, error: { code, message: error.message } })
           }
+          return
+        }
+        // 手工录入辅助：按代码或公司名称查公开目录（东财 suggest），返回带资产类别的候选。
+        // 「添加持仓」表单用它一键填入名称/市场/类别；与同步入库核验共用同一数据源。
+        if (path === 'api/instruments/search') {
+          if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
+          const q = String(url.searchParams.get('q') || '').trim()
+          if (!q) { send(res, 200, { ok: true, candidates: [] }); return }
+          const candidates = await searchCatalog(q, { timeoutMs: 15000 })
+          send(res, 200, { ok: true, candidates })
           return
         }
         // 待确认标的重新核验：联网查公开目录，吻合则补齐维度并转「已核验」，

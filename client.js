@@ -1500,7 +1500,7 @@ window.__ModuleLoader__.load({
       const db = state.ledger
       const accMap = new Map(db.accounts.map((a) => [a.id, a]))
       const insMap = new Map(db.instruments.map((i) => [i.id, i]))
-      const blank = () => ({ accountId: accountId || db.accounts[0]?.id || '', symbol: '', name: '', market: 'CN', assetClass: 'stock', sector: '', style: '', qty: '', avgCost: '', currency: '', manualPrice: '' })
+      const blank = () => ({ id: '', accountId: accountId || db.accounts[0]?.id || '', symbol: '', name: '', market: 'CN', assetClass: 'stock', sector: '', style: '', qty: '', avgCost: '', currency: '', manualPrice: '' })
       const [form, setForm] = React.useState(null), [editing, setEditing] = React.useState(false), [msg, setMsg] = React.useState(''), [acctFilter, setAcctFilter] = React.useState('')
       const [group, setGroup] = React.useState('class')
       const [quoting, setQuoting] = React.useState(false)
@@ -1530,7 +1530,9 @@ window.__ModuleLoader__.load({
           ...(candidate ? {
             symbol: candidate.symbol, market: candidate.market,
             ...(candidate.name ? { name: candidate.name } : {}),
-            ...(candidate.market === 'FUND' ? { assetClass: 'fund' } : {}),
+            // 候选自带资产类别：待确认的基金采用股票候选时必须同时改成 stock，
+            // 否则市场变了类别没变，条目会显示已核验却仍按基金（.OF）估值。
+            ...(candidate.assetClass ? { assetClass: candidate.assetClass } : candidate.market === 'FUND' ? { assetClass: 'fund' } : {}),
             ...(candidate.securityType ? { securityType: candidate.securityType } : {}),
           } : {}),
         })
@@ -1549,12 +1551,38 @@ window.__ModuleLoader__.load({
         } catch (e) { setMsg(e.message) }
         finally { setVerifying('') }
       }
+      // 手工录入的查询入口：按代码或公司名称查公开目录，一键填入名称/市场/类别（仍由用户核对保存）。
+      const [looking, setLooking] = React.useState(false)
+      const lookupSecurity = async () => {
+        const q = String(form?.symbol || '').trim()
+        if (!q) { setMsg('请先填写代码或公司名称'); return }
+        setLooking(true); setMsg('')
+        try {
+          const r = await fetch('/portfolio/api/instruments/search?q=' + encodeURIComponent(q), { headers: { accept: 'application/json' } })
+          const d = await r.json().catch(() => null)
+          if (!r.ok || !d?.ok) throw new Error(d?.error?.message || '查询失败')
+          const c = (d.candidates || [])[0]
+          if (!c) { setMsg('公开目录没有匹配的证券；可手工补全名称与市场。'); return }
+          const marketOk = ['CN', 'HK', 'US', 'SG', 'FUND', 'OTHER'].includes(c.market)
+          setForm({
+            ...form,
+            symbol: c.symbol || form.symbol,
+            name: c.name || form.name,
+            market: marketOk ? c.market : form.market,
+            assetClass: marketOk && c.assetClass ? c.assetClass : form.assetClass,
+          })
+          setMsg('已从公开目录填入：' + (c.name || c.symbol) + (c.securityType ? ' · ' + c.securityType : '') + '，请核对后保存。')
+        } catch (e) { setMsg(e.message) }
+        finally { setLooking(false) }
+      }
       const open = (f, isEdit) => { setForm(f); setEditing(!!isEdit); setMsg('') }
       const submit = async () => {
         if (!form.accountId || !form.symbol.trim()) { setMsg('请选择账户并填写代码'); return }
         // 成本留空 = 未知（null），与真实的 0 成本区分；输入的 0 仍按数字保存。
         const avgCost = String(form.avgCost ?? '').trim() === '' ? null : form.avgCost
-        const r = await call('holding.upsert', { holding: { ...form, currency: form.currency || undefined, qty: form.qty, avgCost, manualPrice: form.manualPrice === '' ? null : form.manualPrice } })
+        // 编辑必须绑定原持仓 id：代码/市场相同的股票与基金是两只标的，仅凭身份重新解析
+        // 会把编辑写到另一条持仓上（例如把基金的份额改成股票的股数）。
+        const r = await call('holding.upsert', { holding: { ...form, id: form.id || undefined, currency: form.currency || undefined, qty: form.qty, avgCost, manualPrice: form.manualPrice === '' ? null : form.manualPrice } })
         if (!r.ok) { setMsg(r.error?.message || '保存失败'); return }
         const ins = instrumentOfSavedHolding(r.ledger, r.result?.holding)
         if (ins && (ins.assetClass !== form.assetClass || (form.name && ins.name !== form.name) || (form.sector || '') !== (ins.sector || '') || (form.style || '') !== (ins.style || ''))) {
@@ -1722,7 +1750,7 @@ window.__ModuleLoader__.load({
                   readOnly
                     ? T.td(h('span', { style: { color: t.sub, fontSize: 11 } }, '只读 · 到账户中编辑'), t)
                     : T.td(h('span', null,
-                    h('button', { style: { ...T.btn(t, false), padding: '3px 8px', marginRight: 6 }, disabled: busy, onClick: () => open({ accountId: ho.accountId, symbol: ins?.symbol || '', name: ins?.name || '', market: ins?.market || 'CN', assetClass: ins?.assetClass || 'stock', sector: ins?.sector || '', style: ins?.style || '', qty: String(ho.qty), avgCost: String(ho.avgCost ?? ''), currency: ho.currency || '', manualPrice: hand == null ? '' : String(hand) }, true) }, '编辑'),
+                    h('button', { style: { ...T.btn(t, false), padding: '3px 8px', marginRight: 6 }, disabled: busy, onClick: () => open({ id: ho.id, accountId: ho.accountId, symbol: ins?.symbol || '', name: ins?.name || '', market: ins?.market || 'CN', assetClass: ins?.assetClass || 'stock', sector: ins?.sector || '', style: ins?.style || '', qty: String(ho.qty), avgCost: String(ho.avgCost ?? ''), currency: ho.currency || '', manualPrice: hand == null ? '' : String(hand) }, true) }, '编辑'),
                     h('button', { style: { ...T.btn(t, false), padding: '3px 8px', borderColor: t.red, color: t.red }, disabled: busy, onClick: () => { if (window.confirm('删除该持仓？')) call('holding.remove', { id: ho.id }) } }, '删除')), t))
               }),
             ]) : h('tr', null, T.td('还没有持仓', t, { color: t.sub }))))),
@@ -1730,15 +1758,19 @@ window.__ModuleLoader__.load({
         form ? h(Modal, { t, title: editing ? '编辑持仓' : '添加持仓', onClose: () => setForm(null) },
           h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12 } },
             accountId ? null : sel('账户', 'accountId', db.accounts.map(a => [a.id, a.name]), editing),
-            fld('代码', 'symbol', { placeholder: '600519', disabled: editing, trim: true }),
+            h('div', null,
+              fld('代码', 'symbol', { placeholder: '600519 / 贵州茅台', disabled: editing, trim: true }),
+              editing ? null : h('button', { type: 'button', style: { ...T.btn(t, false), padding: '3px 9px', fontSize: 11.5, marginTop: 4 }, disabled: busy || looking, onClick: lookupSecurity }, looking ? '查询中…' : '按名称 / 代码查询')),
             fld('名称', 'name', { placeholder: '贵州茅台' }),
             sel('市场', 'market', ['CN', 'HK', 'US', 'SG', 'FUND', 'OTHER'].map(x => [x, x]), editing),
-            sel('资产类别', 'assetClass', [['stock', '股票'], ['fund', '基金'], ['etf', 'ETF'], ['cash', '现金'], ['bond', '债券'], ['crypto', '数字资产'], ['other', '其他']]),
+            // 代码、市场、资产类别共同决定持仓身份（000001 股票 / 000001.OF 基金是两只标的），
+            // 编辑时不可改，避免把改动写到同代码的另一条持仓上。
+            sel('资产类别', 'assetClass', [['stock', '股票'], ['fund', '基金'], ['etf', 'ETF'], ['cash', '现金'], ['bond', '债券'], ['crypto', '数字资产'], ['other', '其他']], editing),
             fld('行业（可选）', 'sector', { placeholder: '如 白酒 / 银行 / 半导体', trim: true }),
             sel('风格（可选）', 'style', [['', '未分类'], ['growth', '成长'], ['value', '价值'], ['blend', '均衡'], ['other', '其他']]),
             fld('数量', 'qty'), fld('成本价', 'avgCost'), fld('现价（手填，可空）', 'manualPrice'), h('label', null, h('span', { style: T.label(t) }, '币种'), h('select', { value: form.currency, onChange: e => setForm({ ...form, currency: e.target.value }), 'aria-label': '币种', style: T.input(t) },
               [['', '自动（跟随账户）'], ...currencyOptions([form.currency])].map(([v, l]) => h('option', { key: v, value: v }, l))))),
-          editing ? h('p', { style: { fontSize: 11, color: t.sub, marginTop: 10 } }, '代码与市场决定持仓身份，如需更换请删除后重新添加。自动同步的账户下次同步可能覆盖手工修改。') : null,
+          editing ? h('p', { style: { fontSize: 11, color: t.sub, marginTop: 10 } }, '代码、市场与资产类别共同决定持仓身份，编辑时不可修改；如需更换请删除后重新添加。自动同步的账户下次同步可能覆盖手工修改。') : null,
           msg ? h('div', { role: 'alert', style: { color: t.red, fontSize: 12, marginTop: 10 } }, msg) : null,
           h('div', { style: { display: 'flex', gap: 10, marginTop: 18 } }, h('button', { style: T.btn(t, true), disabled: busy, onClick: submit }, editing ? '保存' : '添加'), h('button', { style: T.btn(t, false), onClick: () => setForm(null) }, '取消'))) : null)
     }

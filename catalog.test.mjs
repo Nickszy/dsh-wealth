@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   resolveProfiles, resolveCatalogForSnapshot, applyCatalogResolutions, ensureCatalogEntry,
-  verifyInstrument, pendingInstruments,
+  verifyInstrument, verifyInstrumentRef, applyVerificationResult, knownCatalogKeys, legacyCashFundTwins, searchCatalog, pendingInstruments,
 } from './catalog.mjs'
 import { OpError } from './store.mjs'
 
@@ -171,4 +171,89 @@ test('pendingInstruments lists every unconfirmed entry with its holding count', 
   const pending = pendingInstruments(db)
   assert.deepEqual(pending.map((i) => i.id), ['INS_1'])
   assert.equal(pending[0].holdingsCount, 1)
+})
+
+test('candidates carry an explicit asset class so adoption cannot leave a fund valued as a fund', async () => {
+  const { fetch } = fullProfileFetch()
+  const db = emptyDb()
+  // 待确认的场外基金采用股票候选：确认必须同时把 assetClass 改成 stock。
+  const resolutions = await resolveCatalogForSnapshot(snapshot([row('600519', { assetClass: 'fund', market: 'CN' })]), { fetch })
+  applyCatalogResolutions(db, resolutions, { source: 'ths', now })
+  const candidate = db.instruments[0].verification.candidates[0]
+  assert.equal(candidate.market, 'CN')
+  assert.equal(candidate.assetClass, 'stock', 'stock candidates declare assetClass stock')
+  const fundProfiles = await resolveProfiles({ symbol: '000001', market: 'FUND', assetClass: 'fund' }, { fetch })
+  assert.equal(fundProfiles.find((p) => p.market === 'FUND').securityType.includes('基金'), true)
+  const fundCandidate = (await searchCatalog('000001', { fetch }))[0]
+  // suggest 接口对 000001 返回的是深市股票档：候选类别必须是 stock，不能含糊。
+  assert.equal(fundCandidate.assetClass, 'stock')
+})
+
+test('identities already in the ledger and cash rows are not re-queried', async () => {
+  const { fetch, calls } = fullProfileFetch()
+  const db = emptyDb()
+  db.instruments.push({ id: 'I1', symbol: 'AAPL', name: '苹果', market: 'US', assetClass: 'stock', currency: 'USD' })
+  const known = knownCatalogKeys(db)
+  assert.equal(known.has('US|AAPL|S'), true)
+  const resolutions = await resolveCatalogForSnapshot(snapshot([
+    row('AAPL', { market: 'US', assetClass: 'stock', currency: 'USD' }),
+    row('600519'),
+    row('CNY.CASH', { market: 'CASH', assetClass: 'cash', currency: 'CNY' }),
+  ]), { fetch, known })
+  assert.equal(calls.filter((u) => u.includes('searchapi')).length, 0, 'AAPL is known: no suggest lookup')
+  assert.deepEqual(resolutions.map((r) => r.ref.symbol), ['600519'], 'cash rows are skipped entirely')
+  // 应用阶段对已知身份仍然只复用、不重建。
+  const result = applyCatalogResolutions(db, resolutions, { source: 'ths', now })
+  assert.equal(result.created, 1)
+  assert.equal(db.instruments.filter((i) => i.symbol === 'AAPL').length, 1)
+})
+
+test('legacy cash-classified money funds are claimed: upgraded when alone, merged when a fund entry exists', () => {
+  const db = emptyDb()
+  db.instruments.push({ id: 'LEGACY', symbol: '000001', name: '货币基金', market: 'CN', assetClass: 'cash', currency: 'CNY' })
+  const ref = { symbol: '000001', market: 'CN', assetClass: 'fund', currency: 'CNY' }
+  assert.deepEqual(legacyCashFundTwins(db, ref).map((i) => i.id), ['LEGACY'])
+  assert.deepEqual(legacyCashFundTwins(db, { ...ref, assetClass: 'stock' }), [], 'stock refs never claim cash rows')
+  // 只剩旧条目：升级为基金档。
+  const resolutions = [{ ref, profiles: [], error: { message: 'catalog offline' } }]
+  const result = applyCatalogResolutions(db, resolutions, { source: 'ths', now })
+  assert.equal(result.claimedLegacy, 1)
+  assert.equal(db.instruments.length, 1)
+  assert.equal(db.instruments[0].assetClass, 'fund', 'legacy entry upgraded in place')
+
+  // 旧条目与真正的基金档并存：旧条目并入基金档（别处还有同代码股票也不受影响）。
+  const db2 = emptyDb()
+  db2.instruments.push(
+    { id: 'LEGACY', symbol: '000001', name: '货币基金', market: 'CN', assetClass: 'cash', currency: 'CNY' },
+    { id: 'FUNDENTRY', symbol: '000001', name: '华夏成长混合', market: 'FUND', assetClass: 'fund', currency: 'CNY' },
+    { id: 'STOCK', symbol: '000001', name: '平安银行', market: 'CN', assetClass: 'stock', currency: 'CNY' },
+  )
+  db2.holdings.push(
+    { id: 'HL', accountId: 'a1', instrumentId: 'LEGACY', qty: 100, currency: 'CNY' },
+    { id: 'HF', accountId: 'a2', instrumentId: 'FUNDENTRY', qty: 5, currency: 'CNY' },
+  )
+  const r2 = applyCatalogResolutions(db2, [{ ref, profiles: [], error: { message: 'x' } }], { source: 'ths', now })
+  assert.equal(r2.claimedLegacy, 1)
+  assert.deepEqual(db2.instruments.map((i) => i.id).sort(), ['FUNDENTRY', 'STOCK'])
+  assert.equal(db2.holdings.find((h) => h.id === 'HL').instrumentId, 'FUNDENTRY', 'legacy holding now hangs off the fund entry')
+})
+
+test('verification is split: the network stage never writes, and the apply stage refuses deleted ids', async () => {
+  const db = emptyDb()
+  db.instruments.push({ id: 'INS_1', symbol: '000001', name: '000001', market: 'FUND', assetClass: 'fund', currency: 'CNY', verification: { status: 'pending' } })
+  const before = structuredClone(db)
+  const outcome = await verifyInstrumentRef(db, 'INS_1', { fetch: fullProfileFetch().fetch, now })
+  assert.deepEqual(db, before, 'the network stage must not touch the ledger')
+  assert.equal(outcome.id, 'INS_1')
+  // 查询期间标的被删：应用阶段按 not-found 报告，而不是把旧副本写回。
+  db.instruments.length = 0
+  assert.throws(() => applyVerificationResult(db, outcome, { now }), (error) => error instanceof OpError && error.code === 'not-found')
+  // 正常路径：查询后重读的账本里条目仍在 → 只写这一条的核验结果。
+  const fresh = emptyDb()
+  fresh.instruments.push(structuredClone(before.instruments[0]))
+  const result = applyVerificationResult(fresh, outcome, { now })
+  assert.equal(result.status, 'verified')
+  assert.equal(fresh.instruments[0].name, '华夏成长混合')
+  assert.equal(fresh.accounts.length, 0, 'only the instrument was written; nothing else came along')
+  await assert.rejects(verifyInstrumentRef(db, 'INS_MISSING', { fetch: fullProfileFetch().fetch }), (error) => error instanceof OpError && error.code === 'not-found')
 })

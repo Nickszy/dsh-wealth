@@ -67,11 +67,15 @@ mcpEndpoint。同一来源账户可以对应多个模型账户的情况被 finge
     "at": "2026-11-13T09:41:27.080Z",
     "securityType": "港股",        // 核验时公开目录给出的分类（留档）
     "reason": "…",                 // pending 时说明原因
-    "candidates": [ { "symbol": "00700", "market": "HK", "name": "腾讯控股", "securityType": "港股", "provider": "eastmoney" } ]
+    "candidates": [ { "symbol": "00700", "market": "HK", "name": "腾讯控股", "securityType": "港股", "assetClass": "stock", "provider": "eastmoney" } ]
   },
+  "confirmedAliases": [ "CN|000001|F" ], // 人工确认改过身份时记录的旧身份键（来源→已确认条目的映射）
   "note": "", "createdAt": "…"
 }
 ```
+
+`confirmedAliases` 只在「人工确认把身份改掉了」时写入（键 = 统一代码+市场+基金位）。同步入库路径
+（`matchAliases`）会按别名把来源原来的代码/市场找回已确认条目；手工录入不使用别名，避免误吸附。
 
 分类规则：`sector`/`style` 是可选的人工 / AI 标注，摘要层把缺失值聚合为「未分类」（summary.sectors / summary.styles），快照按日保存这两个维度，供行业与风格集中度分析。AI 助手仅在用户明确说明或标的行业众所周知时才填写，不确定必须询问。
 
@@ -92,12 +96,27 @@ mcpEndpoint。同一来源账户可以对应多个模型账户的情况被 finge
 3. 读账本到落盘之间禁止 `await`：两个来源可以并行同步，跨网络等 待会让双方各自基于旧账本合并、后写者覆盖前写者。
 
 `instrument.confirm {id, …, confirm:true}` 由用户（界面「待确认标的」面板）或 AI 钉死身份：
-写入所选代码/市场/类别/分类，`verification` 转为 `verified` 并清空候选；若确认后的身份与已有标的
-相同，自动把本条并入那条（`instrument.merge` 的同一套迁移：持仓、交易、归档流水、`sourceCodes`）。
-`POST /portfolio/api/instruments/verify {id}` 用于重新查询公开目录（「重新查询」按钮）。
+写入所选代码/市场/类别/分类（候选自带 `assetClass`，采用候选时一并提交），`verification` 转为
+`verified` 并清空候选；若确认后的身份与已有标的相同，自动把本条并入那条（`instrument.merge` 的
+同一套迁移：持仓、交易、归档流水、`sourceCodes`、`confirmedAliases`）。
+
+`POST /portfolio/api/instruments/verify {id}` 用于重新查询公开目录（「重新查询」按钮）。核验分两段：
+联网阶段只读账本定位身份（不写），返回后**重读账本**、只写回这一条标的的核验结果——查询期间
+账本可能被并发修改（新增账户、另一笔同步落盘），整本回写旧副本会吞掉这些修改。
+
+旧版二进制把货币基金写成 `market=CN + 六位代码 + assetClass=cash`。基金引用入库时会认领这类
+旧条目：没有基金档就原地升级为 `fund`，已有基金档就并入（`instrument.merge`）——否则赎回后
+旧持仓不满足覆盖段剪枝，资产被永久虚增。真现金一律是 CASH 市场（`币种.CASH`），不会被认领。
+
+`GET /portfolio/api/instruments/search?q=` 是手工录入的查询入口：按代码或公司名称查公开目录，
+返回带 `assetClass` 的候选；「添加持仓」表单用它一键填入名称/市场/类别，仍由用户核对后保存。
+文件导入（`importer.mjs`）与对话录入不联网，直接按用户核对过的列写账本；这些条目没有
+`verification` 字段，需要时可用 `POST api/instruments/verify` 补核验（「重新查询」按钮只出现在
+待确认面板里）。
 
 前端只按已确认的 `instrumentId` 合并汇总：`verification.status = "pending"` 的标的在持仓页
-单独成行并标「待确认」，不与同代码的已确认标的合并。
+单独成行并标「待确认」，不与同代码的已确认标的合并。持仓编辑绑定原持仓 `id`，代码/市场/资产类别
+共同决定身份、编辑时不可修改——否则同账户里的 `000001` 股票与 `000001.OF` 基金会互相覆盖。
 
 映射规则（适配器负责，不得再各自发明）：
 - 长桥 `700.HK` → market HK；`SH/SZ` 后缀 → **CN**（长桥原义是交易所，我们归一为市场）；

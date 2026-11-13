@@ -110,6 +110,9 @@ function findHolding(db, accountId, instrumentId) {
 
 // 按「统一代码 + 基金位」做纯查找（不创建）：catalog.mjs 的入库核验与
 // resolveInstrument 共用同一套身份判定，保证两条路径不会对同一只证券得出不同结论。
+// ref.matchAliases 开启后，还会命中「曾被人工确认成另一身份」的别名
+// （confirmedAliases，见 instrument.confirm）——只有同步入库路径开启，
+// 手工录入不得借别名吸附到别的证券上。
 export function findInstrumentByIdentity(db, ref) {
   if (!ref) return undefined
   if (ref.instrumentId) return findInstrument(db, ref.instrumentId)
@@ -121,11 +124,16 @@ export function findInstrumentByIdentity(db, ref) {
   const symbol = normalized.symbol || rawSymbol
   const rawMarket = String(ref.market || '').trim().toUpperCase()
   const market = normalized.market
+  const wantFund = isFundLike({ market, assetClass: ref.assetClass })
+  if (ref.matchAliases) {
+    const refKey = identityKey(normalized) + '|' + (wantFund ? 'F' : 'S')
+    const aliasHit = db.instruments.find((i) => Array.isArray(i.confirmedAliases) && i.confirmedAliases.includes(refKey))
+    if (aliasHit) return aliasHit
+  }
   // 股票与场外基金的六位代码会撞（000001 平安银行 / 000001.OF 华夏成长）：
   // 只有六位代码的 CN/FUND 标的才区分「是不是基金」，其余市场（港股五位、美股字母）
   // 不存在这种撞号，不能因为历史数据里 assetClass 缺失而误判成两只。
   const compareFund = /^\d{6}$/.test(symbol) && (market === 'FUND' || market === 'CN' || rawMarket === '')
-  const wantFund = isFundLike({ market, assetClass: ref.assetClass })
   const fundMarket = (m) => canonicalMarket(m) === 'FUND' || canonicalMarket(m) === 'CN'
   return db.instruments.find((i) => {
     const n = normalizeSymbol(i.symbol, i.market)
@@ -136,6 +144,11 @@ export function findInstrumentByIdentity(db, ref) {
     if (compareFund && wantFund && iFund) return rawMarket === '' || fundMarket(i.market)
     return (rawMarket === '' || n.market === market) && (!compareFund || iFund === wantFund)
   })
+}
+
+// 身份键含基金位：目录别名与「来源身份 → 已确认条目」映射都用它。
+function identityKeyOf(instrument) {
+  return identityKey({ symbol: instrument.symbol, market: instrument.market }) + '|' + (isFundLike(instrument) ? 'F' : 'S')
 }
 
 // Resolve an instrument by id, or by symbol+market (creating it if allowed).
@@ -194,6 +207,7 @@ function mergeInstrumentInto(db, keep, drop) {
   if (!keep.fullName && drop.fullName) keep.fullName = drop.fullName
   if (!keep.securityType && drop.securityType) keep.securityType = drop.securityType
   if (drop.sourceCodes) keep.sourceCodes = { ...drop.sourceCodes, ...(keep.sourceCodes || {}) }
+  if (Array.isArray(drop.confirmedAliases)) keep.confirmedAliases = [...new Set([...(drop.confirmedAliases), ...(keep.confirmedAliases || [])])]
   keep.updatedAt = nowISO()
   return { movedHoldings: moved.length, movedTrades: movedTrades.length, movedEvents: movedEvents.length }
 }
@@ -565,10 +579,19 @@ export function applyOp(db, op, payload = {}) {
         if (!clash.verification || clash.verification.status !== 'verified') {
           clash.verification = { status: 'verified', source: String(p.source || 'user'), at: nowISO() }
         }
+        if (Array.isArray(instrument.confirmedAliases)) {
+          clash.confirmedAliases = [...new Set([...(clash.confirmedAliases || []), ...instrument.confirmedAliases])]
+        }
         const moved = mergeInstrumentInto(db, clash, instrument)
         return { instrument: clash, mergedInto: clash.id, ...moved, removed: instrument.id }
       }
+      // 确认把身份改掉了：旧身份记为别名，后续同步仍按来源原来的代码/市场找到本条目，
+      // 否则下一次同步会当作陌生身份重新建一条待确认。
+      const previousKey = identityKeyOf(instrument)
       Object.assign(instrument, changes)
+      if (identityKeyOf(instrument) !== previousKey) {
+        instrument.confirmedAliases = [...new Set([...(instrument.confirmedAliases || []), previousKey])]
+      }
       instrument.verification = { status: 'verified', source: String(p.source || 'user'), at: nowISO() }
       instrument.updatedAt = nowISO()
       return { instrument }

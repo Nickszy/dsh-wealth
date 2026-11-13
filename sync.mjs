@@ -10,7 +10,7 @@ import { getConnector, timeoutMs, resolveAuthTransport, resolveSaveTransport, de
 import { listThsAccounts, scanThsTransfers } from './ths-client.mjs'
 import { fetchNativeHistory } from './history-provider.mjs'
 // 入库即关联：合并快照前先把新身份写进本地证券目录（产品表）。
-import { verifyInstrument as verifyCatalogEntry, pendingInstruments as pendingCatalogEntries, resolveCatalogForSnapshot, applyCatalogResolutions } from './catalog.mjs'
+import { verifyInstrumentRef as verifyCatalogRef, applyVerificationResult as applyVerifiedResult, knownCatalogKeys, resolveCatalogForSnapshot, applyCatalogResolutions, pendingInstruments as pendingCatalogEntries } from './catalog.mjs'
 
 const plain = x => x !== null && typeof x === 'object' && !Array.isArray(x)
 const keyOf = row => JSON.stringify([row.market, row.symbol, row.currency])
@@ -230,7 +230,9 @@ export function mergeSnapshot(db, source, input) {
     const { manualPrice: brokerPrice, sourceSymbol, ...position } = row
     // 把来源自己的原始代码留档（700.HK / HK.00700 …），身份仍按统一代码匹配。
     const sourceCode = sourceSymbol || row.symbol
-    const { holding } = applyOp(staged, 'holding.upsert', { holding: { ...position, accountId: account.id, source: source.connector, sourceCode } })
+    // matchAliases：人工确认改过身份的标的（confirmedAliases）仍能被来源原来的代码/市场找到，
+    // 否则每次同步都会把同一只证券当成陌生身份重建一条待确认。
+    const { holding } = applyOp(staged, 'holding.upsert', { holding: { ...position, accountId: account.id, source: source.connector, sourceCode, matchAliases: true } })
     if (seen.has(holding.id)) throw bad('多个来源持仓映射到相同本地标的，请拆分账户')
     seen.add(holding.id)
     Object.assign(holding, { syncSourceId: source.id, externalHoldingKey: holdingKey, sourcePrice: brokerPrice, sourceQueriedAt: snapshot.queriedAt, sourceUploadedAt: snapshot.uploadedAt, sourceQuoteDate: snapshot.quoteDate })
@@ -243,7 +245,7 @@ export function mergeSnapshot(db, source, input) {
     return instrument ? snapshot.coverage[coverageSegment(instrument.assetClass)] === 'full' : false
   }
   staged.holdings = staged.holdings.filter(h=>h.syncSourceId !== source.id || seen.has(h.id) || !prunable(h))
-  if (snapshot.trades?.length) applyOp(staged, 'import.trades', { rows: snapshot.trades.map(t=>({...t, accountId: account.id, source: source.id})), source: source.id, applyHoldings: false })
+  if (snapshot.trades?.length) applyOp(staged, 'import.trades', { rows: snapshot.trades.map(t=>({...t, accountId: account.id, source: source.id, matchAliases: true})), source: source.id, applyHoldings: false })
   account.syncSourceId = source.id
   account.sourceTotals = snapshot.sourceTotals || null
   account.sourceQueriedAt = snapshot.queriedAt
@@ -287,11 +289,11 @@ const latestDate = (stored, incoming) => !stored ? incoming ?? null : !incoming 
 // 入库即关联的第一阶段（只联网、不碰账本）：核验快照里的新证券身份。
 // 必须放在 readLedger 之前——若在「读账本 → 落盘」之间 await 网络，两个来源并行
 // 同步会各自基于旧账本合并，后写者覆盖前写者。归一化失败按原样抛出（与合并一致）。
-async function resolveCatalogInput(snapshot, { catalogFetch }) {
+async function resolveCatalogInput(snapshot, { catalogFetch, known }) {
   // 归一化错误与 mergeSnapshot 一致地抛出（快照本身不合法）；单只核验失败在内部降级。
   const normalized = normalizeSnapshot(snapshot)
   try {
-    return await resolveCatalogForSnapshot(normalized, { fetch: catalogFetch })
+    return await resolveCatalogForSnapshot(normalized, { fetch: catalogFetch, known })
   } catch {
     // 目录核验的意外错误不能阻断同步：空结果 = 全部按快照身份建档（无核验）。
     return []
@@ -849,7 +851,7 @@ export function createSyncService(ctx, options = {}) {
           const raw = await fetchSnapshot({...input,transport:(input.transport === 'mcp' ? 'mcp' : 'native')},abort.signal,secrets)
           if (disposed || abort.signal.aborted) throw bad('账户导入已中止')
           // 目录核验同样是先联网、后写账本；失败降级为待确认，不影响首次导入。
-          const catalog = await resolveCatalogInput(raw, { catalogFetch })
+          const catalog = await resolveCatalogInput(raw, { catalogFetch, known: knownCatalogKeys(ledger) })
           if (disposed || abort.signal.aborted) throw bad('账户导入已中止')
           applyCatalogResolutions(ledger, catalog, { source: input.connector, now: iso })
           const merged = mergeSnapshot(ledger,{...sourceInput,id:sourceId},raw)
@@ -952,7 +954,9 @@ export function createSyncService(ctx, options = {}) {
       const current = config.read().find(s=>s.id === id)
       if (!current || current.configRevision !== revision) throw bad('连接配置已变化，请重新同步')
       // 目录核验（联网）必须在读账本之前完成；读账本后到落盘之间保持同步，避免并行同步丢写。
-      const catalog = await resolveCatalogInput(input, { catalogFetch })
+      // known 只是一份只读快照，用于跳过账本已有的身份——即使过期也只是多查一次，不影响正确性。
+      const known = knownCatalogKeys(readLedger())
+      const catalog = await resolveCatalogInput(input, { catalogFetch, known })
       if (disposed || abort.signal.aborted) throw bad('同步已中止')
       const db = readLedger()
       // 入库即关联：新身份写进本地产品表（查询失败降级为待确认），再把持仓合并进去。
@@ -1090,5 +1094,15 @@ export function createSyncService(ctx, options = {}) {
       await Promise.all(chains.values())
     } finally { tickBusy=false }
   }
-  return { list,saveSource,removeSource,sync,tick,listAccounts,listAuthAccounts,createAuthorization,renameAuthorization,removeAuthorization,connectSource,acceptThsLogin,readHistory,scanThsTransfers:scanThsTransfersDeep,verifyInstrument:async(id)=>{const db=readLedger();const r=await verifyCatalogEntry(db,id,{fetch:catalogFetch});writeLedger(db);return r},pendingInstruments:()=>pendingCatalogEntries(readLedger()),listThsPortfolios:async()=>{const r=await listAccounts({connector:'ths'});return {portfolios:r.accounts.map(a=>({...a,selected:false})),warnings:r.warnings||[]}},dispose() { disposed=true; for (const controller of aborts) controller.abort() } }
+  return { list,saveSource,removeSource,sync,tick,listAccounts,listAuthAccounts,createAuthorization,renameAuthorization,removeAuthorization,connectSource,acceptThsLogin,readHistory,scanThsTransfers:scanThsTransfersDeep,
+    // 重新核验：查询期间账本可能被并发修改（新增账户、另一笔同步落盘）。先只读地定位
+    // 身份并联网，返回后重读账本，只把这一条标的的核验结果写回——整本回写旧副本会吞掉期间的其他修改。
+    verifyInstrument:async(id)=>{
+      const outcome = await verifyCatalogRef(readLedger(), id, { fetch: catalogFetch })
+      const fresh = readLedger()
+      const result = applyVerifiedResult(fresh, outcome, { now: iso })
+      writeLedger(fresh)
+      return result
+    },
+    pendingInstruments:()=>pendingCatalogEntries(readLedger()),listThsPortfolios:async()=>{const r=await listAccounts({connector:'ths'});return {portfolios:r.accounts.map(a=>({...a,selected:false})),warnings:r.warnings||[]}},dispose() { disposed=true; for (const controller of aborts) controller.abort() } }
 }

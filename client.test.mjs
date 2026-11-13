@@ -125,18 +125,20 @@ test('updating quotes reloads the ledger instead of reporting reload is not defi
 // 选定单个账户后仍逐条可编辑（编辑 / 删除只发生在具体账户里）。
 function makeHoldings() {
   const src = readFileSync(new URL('./client.js', import.meta.url), 'utf8')
+  const sets = []
   const React = {
     useState(init) {
       const value = typeof init === 'function' ? init() : init
-      return [value, () => {}]
+      return [value, (next) => { sets.push(typeof next === 'function' ? next(value) : next) }]
     },
     createElement(type, props, ...children) { return { type, props: props || {}, children } },
   }
   const h = (type, props, ...children) => ({ type, props: props || {}, children })
   const T = { th: (c) => c, td: (c) => c, btn: () => ({}), input: () => ({}), card: () => ({}), label: () => ({}) }
-  return new Function('React', 'h', 'T', 'assetLabel', 'fmtMoney', 'Modal', 'currencyOptions', 'identityKeyOf', 'displayCodeOf', 'instrumentOfSavedHolding', `${extractFunction(src, 'Holdings')}\nreturn Holdings`)(
+  const Holdings = new Function('React', 'h', 'T', 'assetLabel', 'fmtMoney', 'Modal', 'currencyOptions', 'identityKeyOf', 'displayCodeOf', 'instrumentOfSavedHolding', `${extractFunction(src, 'Holdings')}\nreturn Holdings`)(
     React, h, T, (cls) => cls || '', (n) => String(n ?? '—'), () => null, () => [], realClientHelper('identityKeyOf'), realClientHelper('displayCodeOf'), () => null,
   )
+  return { Holdings, sets }
 }
 
 const mergedFixture = () => ({
@@ -153,7 +155,7 @@ const mergedFixture = () => ({
 })
 
 test('all-accounts view merges same-code holdings into one read-only row', () => {
-  const Holdings = makeHoldings()
+  const { Holdings } = makeHoldings()
   const tree = Holdings({ t: theme, state: mergedFixture(), call: async () => ({ ok: true }), busy: false })
   const text = textOf(tree)
   const rows = []
@@ -198,7 +200,7 @@ test('displayCodeOf renders the agreed full local code in the holdings table', (
 })
 
 test('merged rows flag mixed currencies and holdings without a price', () => {
-  const Holdings = makeHoldings()
+  const { Holdings } = makeHoldings()
   const state = {
     ledger: {
       baseCurrency: 'CNY',
@@ -225,7 +227,7 @@ const pendingFixture = () => ({
     accounts: [{ id: 'a1', name: 'A' }, { id: 'a2', name: 'B' }],
     instruments: [
       { id: 'i1', symbol: '00700', name: '腾讯控股', market: 'HK', assetClass: 'stock', currency: 'HKD' },
-      { id: 'i2', symbol: '00700', name: '00700', market: 'HK', assetClass: 'stock', currency: 'HKD', verification: { status: 'pending', reason: '核验查询失败：catalog offline', candidates: [{ symbol: '00700', market: 'HK', name: '腾讯控股', securityType: '港股', provider: 'eastmoney' }] } },
+      { id: 'i2', symbol: '00700', name: '00700', market: 'HK', assetClass: 'stock', currency: 'HKD', verification: { status: 'pending', reason: '核验查询失败：catalog offline', candidates: [{ symbol: '00700', market: 'HK', name: '腾讯控股', securityType: '港股', assetClass: 'stock', provider: 'eastmoney' }] } },
     ],
     holdings: [
       { id: 'h1', accountId: 'a1', instrumentId: 'i1', qty: 100, avgCost: 300, currency: 'HKD', manualPrice: null, quotePrice: 400, quoteChangePct: 1.2 },
@@ -241,7 +243,7 @@ function findButtons(tree, label) {
 }
 
 test('pending instruments get a confirmation panel and stay split from confirmed same-code rows', () => {
-  const Holdings = makeHoldings()
+  const { Holdings } = makeHoldings()
   const calls = []
   const tree = Holdings({ t: theme, state: pendingFixture(), call: async (op, payload) => { calls.push({ op, payload }); return { ok: true, result: {} } }, busy: false })
   const text = textOf(tree)
@@ -260,7 +262,7 @@ test('pending instruments get a confirmation panel and stay split from confirmed
 })
 
 test('adopting a candidate confirms via instrument.confirm; keep-as-is sends no identity fields', async () => {
-  const Holdings = makeHoldings()
+  const { Holdings } = makeHoldings()
   const calls = []
   const tree = Holdings({ t: theme, state: pendingFixture(), call: async (op, payload) => { calls.push({ op, payload }); return { ok: true, result: {} } }, busy: false })
   const adopt = findButtons(tree, '采用所选候选')
@@ -268,10 +270,53 @@ test('adopting a candidate confirms via instrument.confirm; keep-as-is sends no 
   await adopt[0].props.onClick()
   assert.deepEqual(calls[0], {
     op: 'instrument.confirm',
-    payload: { id: 'i2', confirm: true, symbol: '00700', market: 'HK', name: '腾讯控股', securityType: '港股' },
-  }, 'adoption pins the candidate identity with confirm:true')
+    payload: { id: 'i2', confirm: true, symbol: '00700', market: 'HK', name: '腾讯控股', assetClass: 'stock', securityType: '港股' },
+  }, 'adoption pins the candidate identity — including its asset class — with confirm:true')
   const keep = findButtons(tree, '保留现状')
   assert.equal(keep.length, 1)
   await keep[0].props.onClick()
   assert.deepEqual(calls[1], { op: 'instrument.confirm', payload: { id: 'i2', confirm: true } }, 'keep-as-is only marks the entry verified')
+})
+
+test('adopting a stock candidate for a pending fund also fixes the asset class', async () => {
+  const state = pendingFixture()
+  // 同花顺报错身份的典型场景：待确认条目是 FUND/000001，候选是平安银行股票档。
+  state.ledger.instruments = [
+    { id: 'i2', symbol: '000001', name: '000001', market: 'FUND', assetClass: 'fund', currency: 'CNY', verification: { status: 'pending', reason: '公开目录候选与快照声明的市场或类别不一致', candidates: [{ symbol: '000001', market: 'CN', name: '平安银行', securityType: 'A股', assetClass: 'stock', provider: 'eastmoney' }] } },
+  ]
+  state.ledger.holdings = [{ id: 'h2', accountId: 'a1', instrumentId: 'i2', qty: 3, avgCost: 1.2, currency: 'CNY', manualPrice: null, quotePrice: 1.5 }]
+  const { Holdings } = makeHoldings()
+  const calls = []
+  const tree = Holdings({ t: theme, state, call: async (op, payload) => { calls.push({ op, payload }); return { ok: true, result: {} } }, busy: false })
+  const adopt = findButtons(tree, '采用所选候选')
+  await adopt[0].props.onClick()
+  assert.deepEqual(calls[0].payload, {
+    id: 'i2', confirm: true, symbol: '000001', market: 'CN', name: '平安银行', assetClass: 'stock', securityType: 'A股',
+  }, 'the stock candidate carries assetClass stock so the confirmed entry is valued as a stock')
+})
+
+test('editing a holding binds its id so an edit cannot spill onto a same-code sibling', async () => {
+  const state = {
+    ledger: {
+      baseCurrency: 'CNY', fx: { CNY: 1 },
+      accounts: [{ id: 'a1', name: 'A' }],
+      instruments: [
+        { id: 'STOCK', symbol: '000001', name: '平安银行', market: 'CN', assetClass: 'stock', currency: 'CNY' },
+        { id: 'FUND', symbol: '000001', name: '华夏成长', market: 'CN', assetClass: 'fund', currency: 'CNY' },
+      ],
+      holdings: [
+        { id: 'h1', accountId: 'a1', instrumentId: 'STOCK', qty: 100, avgCost: 10, currency: 'CNY', manualPrice: null, quotePrice: 11 },
+        { id: 'h2', accountId: 'a1', instrumentId: 'FUND', qty: 3, avgCost: 1.2, currency: 'CNY', manualPrice: null, quotePrice: 1.5 },
+      ],
+    },
+  }
+  const { Holdings, sets } = makeHoldings()
+  const tree = Holdings({ t: theme, state, call: async () => ({ ok: true }), busy: false, accountId: 'a1' })
+  const edit = findButtons(tree, '编辑')
+  assert.equal(edit.length, 2, 'both rows are editable in the single-account view')
+  await edit[0].props.onClick()
+  const form = sets.find((s) => s && typeof s === 'object' && s.symbol === '000001' && s.assetClass === 'stock')
+  assert.ok(form, 'the edit form state is opened')
+  assert.equal(form.id, 'h1', 'the edit form is bound to the saved holding id')
+  assert.equal(form.assetClass, 'stock', 'identity fields come from the original row, not a sibling')
 })

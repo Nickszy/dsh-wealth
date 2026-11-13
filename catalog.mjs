@@ -132,9 +132,26 @@ export async function resolveCatalogRef(ref, options = {}) {
   }
 }
 
+// 身份键含基金位：目录已知集合与「来源身份 → 已确认条目」别名都用它。
+export function catalogKey(symbol, market, assetClass) {
+  const normalized = normalizeSymbol(symbol, market || '')
+  return identityKey(normalized) + '|' + (isFundLike({ market: normalized.market, assetClass }) ? 'F' : 'S')
+}
+
+/** 同步联网前的只读快照：账本里已有身份（含确认别名）。命中的引用不再重复联网。 */
+export function knownCatalogKeys(db) {
+  const keys = new Set()
+  for (const i of db.instruments || []) {
+    keys.add(catalogKey(i.symbol, i.market, i.assetClass))
+    for (const alias of i.confirmedAliases || []) keys.add(alias)
+  }
+  return keys
+}
+
 /**
  * 快照级预核验：把快照里每个不同身份（代码 + 市场 + 基金位）各查一次。
  * 这是异步网络阶段，必须在读账本之前调用；结果交给 applyCatalogResolutions 写表。
+ * 已在账本里的身份（options.known）与现金（CASH 市场，身份即币种）直接跳过，不再联网。
  */
 export async function resolveCatalogForSnapshot(snapshot, options = {}) {
   const distinct = new Map()
@@ -143,8 +160,11 @@ export async function resolveCatalogForSnapshot(snapshot, options = {}) {
       symbol: row.symbol, market: row.market, assetClass: row.assetClass, currency: row.currency,
       name: row.name, sourceCode: row.sourceSymbol || row.symbol,
     }
-    const wantFund = isFundLike({ market: normalizeSymbol(row.symbol, row.market).market, assetClass: row.assetClass })
-    const key = identityKey({ symbol: row.symbol, market: row.market }) + '|' + (wantFund ? 'F' : 'S')
+    const normalized = normalizeSymbol(row.symbol, row.market)
+    // 现金没有可核验的公开证券；身份就是币种，建档交给 holding.upsert 即可。
+    if (canonicalMarket(normalized.market) === 'CASH') continue
+    const key = catalogKey(row.symbol, row.market, row.assetClass)
+    if (options.known?.has(key)) continue
     if (!distinct.has(key)) distinct.set(key, ref)
   }
   const resolutions = []
@@ -161,9 +181,18 @@ function profileMatches(profile, ref) {
   return canonicalMarket(profile.market) === canonicalMarket(normalized.market)
 }
 
+// 候选必须自带明确的资产类别：确认时一并保存，否则「待确认基金 + 股票候选」
+// 会保留 fund 类别，条目显示已核验却仍按基金估值。
+function profileAssetClass(profile) {
+  if (canonicalMarket(profile.market) === 'FUND') return 'fund'
+  if (/ETF|LOF/i.test(String(profile.securityType || ''))) return 'etf'
+  return 'stock'
+}
+
 const candidateOf = (profile) => ({
   symbol: profile.symbol, market: profile.market, name: profile.name || '',
-  securityType: profile.securityType || null, provider: profile.provider || 'eastmoney',
+  securityType: profile.securityType || null, assetClass: profileAssetClass(profile),
+  provider: profile.provider || 'eastmoney',
 })
 
 // 只填空位：外部核验是数据来源，但绝不覆盖用户已填的名称、行业、全称。
@@ -213,19 +242,49 @@ function applyResolution(instrument, normalized, resolution, now) {
   return 'pending'
 }
 
+// 旧版同花顺把货币基金存成 market=CN + 六位代码 + assetClass=cash；真现金一律是
+// CASH 市场（币种.CASH）。基金引用遇到这样的旧条目必须认领——否则赎回后旧持仓
+// 永远不满足覆盖段剪枝，资产被虚增。返回与该基金引用同代码的旧 cash 条目。
+export function legacyCashFundTwins(db, ref) {
+  const normalized = normalizeSymbol(ref.symbol, ref.market || '')
+  if (!/^\d{6}$/.test(normalized.symbol) || !['CN', 'FUND'].includes(canonicalMarket(normalized.market))) return []
+  if (!isFundLike({ market: normalized.market, assetClass: ref.assetClass })) return []
+  return (db.instruments || []).filter((i) => i.symbol === normalized.symbol
+    && canonicalMarket(i.market) === 'CN'
+    && String(i.assetClass || '').toLowerCase() === 'cash')
+}
+
 /**
- * 把预核验结果写进账本（同步，事务内调用）：本地已命中就复用，未命中才建条目。
+ * 把预核验结果写进账本（同步，事务内调用）。命中即复用（含确认别名命中）；
+ * 未命中才建条目。基金引用还会先认领旧版 cash 货币基金条目（升级或并账）。
  * 必须在 readLedger 之后、落盘之前、无 await 的同一段代码里执行。
  */
 export function applyCatalogResolutions(db, resolutions, options = {}) {
   const now = options.now || (() => new Date().toISOString())
-  const result = { created: 0, verified: 0, pending: 0, warnings: [] }
+  const result = { created: 0, verified: 0, pending: 0, claimedLegacy: 0, warnings: [] }
   for (const resolution of resolutions) {
-    if (findInstrumentByIdentity(db, resolution.ref)) continue
+    let hit = findInstrumentByIdentity(db, { ...resolution.ref, matchAliases: true })
+    // 基金身份遇到旧版 cash 货币基金条目：有基金档（含命中的这条）就并进去，
+    // 没有就把旧条目升级为基金档——即使基金档已命中也不能跳过，否则旧条目
+    // 永远留在 cash 档，赎回后不可剪枝，资产被虚增。
+    const twins = legacyCashFundTwins(db, resolution.ref).filter((t) => t.id !== hit?.id)
+    for (const twin of twins) {
+      try {
+        const keep = hit || findInstrumentByIdentity(db, { ...resolution.ref })
+        if (keep) applyOp(db, 'instrument.merge', { keepId: keep.id, dropId: twin.id })
+        else applyOp(db, 'instrument.upsert', { instrument: { id: twin.id, assetClass: 'fund' } })
+        result.claimedLegacy++
+      } catch (error) {
+        // 同账户同币种双持仓等需人工核对的情形：保留现状，不阻断同步。
+        result.warnings.push('旧货币基金条目认领跳过 ' + twin.symbol + '：' + String(error?.message || error).slice(0, 120))
+      }
+    }
+    if (twins.length) hit = findInstrumentByIdentity(db, { ...resolution.ref, matchAliases: true })
+    if (hit) continue
     const { instrument, normalized } = createCatalogInstrument(db, resolution.ref, options)
     const status = applyResolution(instrument, normalized, resolution, now)
     result.created++
-    result[status]++
+    if (result[status] !== undefined) result[status]++
     if (resolution.error) result.warnings.push('目录核验失败 ' + resolution.ref.symbol + '：' + String(resolution.error?.message || resolution.error).slice(0, 120))
   }
   return result
@@ -245,20 +304,48 @@ export async function ensureCatalogEntry(db, ref, options = {}) {
 }
 
 /**
- * 对已有条目重新核验（用户点「重新查询」或首次补核验）。
- * 吻合 → 套用档案并标已核验；不吻合/未收录 → 待确认并附候选。查询失败原样抛出由路由转错误。
+ * 核验第一阶段（只联网、不写账本）：定位标的身份并查询公开目录。
+ * 调用方在查询返回后必须重读账本，把结果交给 applyVerificationResult——
+ * 查询期间账本可能被并发修改，整本回写旧副本会吞掉期间的其他变更。
  */
-export async function verifyInstrument(db, id, options = {}) {
-  const now = options.now || (() => new Date().toISOString())
+export async function verifyInstrumentRef(db, id, options = {}) {
   const instrument = db.instruments.find((i) => i.id === id)
   if (!instrument) throw new OpError('not-found', '标的不存在: ' + id)
   const ref = { symbol: instrument.symbol, market: instrument.market, assetClass: instrument.assetClass }
   const resolution = await resolveCatalogRef(ref, options)
   if (resolution.error) throw new OpError('bad-request', '核验查询失败：' + String(resolution.error?.message || resolution.error).slice(0, 120))
+  return { id, ref, resolution }
+}
+
+/** 核验第二阶段（同步写）：只更新这一条标的的核验结果；标的已被删除则报 not-found。 */
+export function applyVerificationResult(db, outcome, options = {}) {
+  const now = options.now || (() => new Date().toISOString())
+  const instrument = db.instruments.find((i) => i.id === outcome.id)
+  if (!instrument) throw new OpError('not-found', '标的不存在: ' + outcome.id)
   const normalized = normalizeSymbol(instrument.symbol, instrument.market)
-  const status = applyResolution(instrument, normalized, resolution, now)
+  const status = applyResolution(instrument, normalized, outcome.resolution, now)
   instrument.updatedAt = now()
   return { instrument, status }
+}
+
+/** 单条便捷入口（测试用）：定位 → 联网 → 应用到同一账本。 */
+export async function verifyInstrument(db, id, options = {}) {
+  const outcome = await verifyInstrumentRef(db, id, options)
+  return applyVerificationResult(db, outcome, options)
+}
+
+/**
+ * 手工录入辅助：按代码或公司名称查公开目录，返回带资产类别的候选。
+ * 供「添加持仓」表单和搜索接口使用；文件导入的批量核对仍走同步管线的入库核验。
+ */
+export async function searchCatalog(query, options = {}) {
+  const found = await resolveSecurity(String(query || '').trim(), options)
+  if (!found) return []
+  return [candidateOf({
+    symbol: found.symbol, market: found.market, name: found.name || '',
+    fullName: null, securityType: found.securityType || null,
+    fundType: null, sector: null, provider: 'eastmoney',
+  })]
 }
 
 /** 前端「待确认标的」列表：带每条的持仓数量，方便展示影响面。 */

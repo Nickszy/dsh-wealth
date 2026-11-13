@@ -71,6 +71,68 @@ test('an unreachable catalog degrades to a pending entry without failing the syn
  assert.equal(r.ledger.holdings.length, 1, 'the position is still imported')
 })
 
+test('re-verify reads the ledger again after the lookup, so concurrent changes survive', async () => {
+ const f = setup({ catalogFetch: async () => {
+  // 查询期间另一笔写入新增了账户：核验只写回那一条标的，不得用旧副本覆盖账本。
+  const grown = f.db(); grown.accounts.push({ id: 'NEW', name: '并发新增', currency: 'CNY' }); f.setDb(grown)
+  await new Promise(r => setTimeout(r, 0))
+  // 六位 CN 代码走天天基金搜索接口：沪市股票档。
+  return { ok: true, status: 200, json: async () => ({ Datas: [{ CODE: '600519', NAME: '贵州茅台', CATEGORYDESC: '沪市', FundBaseInfo: null }] }) }
+ } })
+ const db = f.db(); db.instruments.push({ id: 'INS_V', symbol: '600519', name: '600519', market: 'CN', assetClass: 'stock', currency: 'CNY', verification: { status: 'pending' } }); f.setDb(db)
+ const r = await f.service.verifyInstrument('INS_V')
+ assert.equal(r.status, 'verified')
+ const after = f.db()
+ assert.equal(after.accounts.some(a => a.id === 'NEW'), true, 'the account added during the lookup survives')
+ const ins = after.instruments.find(i => i.id === 'INS_V')
+ assert.equal(ins.name, '贵州茅台')
+ await assert.rejects(f.service.verifyInstrument('INS_MISSING'), /不存在/)
+})
+
+test('a confirmed identity is reused on the next sync via its recorded alias', async () => {
+ const fundRow = () => row('000001', { name: '000001', market: 'CN', assetClass: 'fund', currency: 'CNY' })
+ const f = setup({ fetchSnapshot: async () => snapshot([fundRow()]) }) // 目录断网：快照身份落成待确认
+ const src = f.add()
+ await f.service.sync(src.id)
+ const pendingId = f.db().instruments[0].id
+ assert.equal(f.db().instruments[0].verification.status, 'pending')
+ // 用户确认：来源报的其实是平安银行（股票档）——基金身份与股票身份分开，只能靠别名找回。
+ const db = f.db(); applyOp(db, 'instrument.confirm', { id: pendingId, confirm: true, assetClass: 'stock', name: '平安银行' }); f.setDb(db)
+ assert.deepEqual(db.instruments[0].confirmedAliases, ['CN|000001|F'], 'the old identity is recorded as an alias')
+ // 下一次同步（同一份快照）：按别名找到已确认条目，不再新建待确认、持仓照挂。
+ const r = await f.service.sync(src.id)
+ assert.equal(r.ledger.instruments.length, 1)
+ assert.equal(r.ledger.instruments[0].id, pendingId)
+ assert.equal(r.ledger.instruments[0].assetClass, 'stock')
+ assert.equal(r.ledger.holdings[0].instrumentId, pendingId)
+ assert.equal(r.ledger.holdings[0].qty, 100)
+})
+
+test('legacy cash-classified money funds upgrade on ingest and prune once redeemed', async () => {
+ const f = setup({ fetchSnapshot: async () => snapshot([row('000001', { name: '货基', market: 'CN', assetClass: 'fund', currency: 'CNY' })], { coverage: { stock: 'full', fund: 'full' } }) })
+ const src = f.add()
+ const db = f.db()
+ // 旧版二进制写下的记录：货币基金存成 CN/六位/cash。
+ db.instruments.push({ id: 'LEGACY', symbol: '000001', name: '货基', market: 'CN', assetClass: 'cash', currency: 'CNY' })
+ db.holdings.push({ id: 'OLD', accountId: 'a', instrumentId: 'LEGACY', qty: 1000, avgCost: 1, currency: 'CNY', syncSourceId: src.id })
+ f.setDb(db)
+ const r = await f.service.sync(src.id)
+ assert.equal(r.source.lastStatus, 'ok')
+ const ins = r.ledger.instruments.find(i => i.id === 'LEGACY')
+ assert.equal(ins.assetClass, 'fund', 'legacy entry upgraded in place')
+ assert.equal(r.ledger.holdings.length, 1)
+ assert.equal(r.ledger.holdings[0].instrumentId, 'LEGACY', 'the holding hangs off the upgraded entry')
+ // 已升级的旧条目在完整空快照下可剪枝（基金段 full）。
+ const g = setup({ fetchSnapshot: async () => snapshot([], { coverage: { stock: 'full', fund: 'full' } }) })
+ const gsrc = g.add()
+ const gdb = g.db()
+ gdb.instruments.push({ id: 'LEGACY', symbol: '000001', name: '货基', market: 'CN', assetClass: 'fund', currency: 'CNY' })
+ gdb.holdings.push({ id: 'OLD', accountId: 'a', instrumentId: 'LEGACY', qty: 1000, avgCost: 1, currency: 'CNY', syncSourceId: gsrc.id })
+ g.setDb(gdb)
+ const r2 = await g.service.sync(gsrc.id)
+ assert.equal(r2.ledger.holdings.length, 0, 'redeemed legacy holding is prunable once the class is fund')
+})
+
 test('sync keeps a hand price, stores the broker price separately, and applies external quotes',async()=>{
  const f=setup({refreshQuotes:async db=>{ for(const h of db.holdings){ h.quotePrice=321; h.quoteAt='2026-11-09T08:00:00Z'; h.quoteSource='tencent' } return {updated:db.holdings.length} }})
  const src=f.add()

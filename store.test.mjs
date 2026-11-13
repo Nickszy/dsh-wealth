@@ -7,7 +7,7 @@ import { join } from 'node:path'
 // Isolate all persistence tests from the user's real ledger before importing the store.
 const directory = mkdtempSync(join(tmpdir(), 'dsh-ledger-test-'))
 process.env.DSH_PORTFOLIO_DIR = directory
-const { applyOp, summarize, load, save, DATA_FILE } = await import('./store.mjs')
+const { applyOp, summarize, load, save, findInstrumentByIdentity, DATA_FILE } = await import('./store.mjs')
 test.after(() => rmSync(directory, { recursive: true, force: true }))
 
 function fixture() {
@@ -446,6 +446,33 @@ test('instrument.confirm merges into an existing instrument when the chosen iden
   assert.equal(db.instruments[0].verification.status, 'verified')
   assert.deepEqual(db.instruments[0].sourceCodes, { tencent: 'hk02549' }, 'source codes follow the merged entry')
   assert.equal(db.holdings.find((h) => h.id === 'H2').instrumentId, 'KEEP')
+})
+
+test('holding.upsert with an id refuses to spill an edit onto a same-code sibling holding', () => {
+  const db = fixture()
+  const stock = applyOp(db, 'holding.upsert', { holding: { accountId: 'a', symbol: '000001', market: 'CN', assetClass: 'stock', qty: 100, avgCost: 10, currency: 'CNY' } }).holding
+  const fund = applyOp(db, 'holding.upsert', { holding: { accountId: 'a', symbol: '000001', market: 'CN', assetClass: 'fund', qty: 3, avgCost: 1.2, currency: 'CNY' } }).holding
+  // 编辑请求带原持仓 id，但身份解析到了另一只同代码标的：必须拒绝，而不是把基金改成 100 份。
+  bad(db, 'holding.upsert', { holding: { id: stock.id, accountId: 'a', symbol: '000001', market: 'CN', assetClass: 'fund', qty: 100, avgCost: 10, currency: 'CNY' } })
+  assert.equal(db.holdings.find((h) => h.id === fund.id).qty, 3, 'the fund holding is untouched')
+  assert.equal(db.holdings.find((h) => h.id === stock.id).qty, 100)
+})
+
+test('instrument.confirm records the old identity as an alias that identity lookups can reuse', () => {
+  const db = fixture()
+  db.instruments.push({ id: 'INS_P', symbol: '000001', name: '000001', market: 'CN', assetClass: 'fund', currency: 'CNY', verification: { status: 'pending' } })
+  // 券商把场外基金报成六位代码，用户确认它其实是平安银行（CN 股票）：
+  // 基金身份与股票身份是分开的，下一次同步按旧身份只能靠别名找回。
+  const result = applyOp(db, 'instrument.confirm', { id: 'INS_P', confirm: true, assetClass: 'stock', name: '平安银行' })
+  assert.deepEqual(result.instrument.confirmedAliases, ['CN|000001|F'], 'the pre-confirmation identity is kept as an alias')
+  // 同步入库路径（matchAliases）按旧身份命中；手工路径不受别名影响。
+  assert.equal(findInstrumentByIdentity(db, { symbol: '000001', market: 'CN', assetClass: 'fund', matchAliases: true }).id, 'INS_P')
+  assert.equal(findInstrumentByIdentity(db, { symbol: '000001', market: 'CN', assetClass: 'fund' }), undefined, 'without matchAliases the fund identity does not hit the stock entry')
+  assert.equal(findInstrumentByIdentity(db, { symbol: '000001', market: 'CN', assetClass: 'stock' }).id, 'INS_P', 'manual stock entries still resolve normally')
+  // 合并时别名随迁到保留方。
+  db.instruments.push({ id: 'INS_Q', symbol: '000001', name: '待确认二', market: 'CN', assetClass: 'fund', currency: 'CNY', confirmedAliases: ['CN|000001|F'] })
+  applyOp(db, 'instrument.merge', { keepId: 'INS_P', dropId: 'INS_Q' })
+  assert.ok(db.instruments.find((i) => i.id === 'INS_P').confirmedAliases.includes('CN|000001|F'))
 })
 
 test('budget.set upserts per category, validates and deletes', () => {
