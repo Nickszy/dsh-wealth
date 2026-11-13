@@ -183,8 +183,8 @@ const CANNED = [
 // 演示行情：只有这两只有公开行情的标的能被「⟳ 更新行情」刷出价——正好演示
 // 「确认身份之后，行情才补得上；估值提示随之消失」。其余持仓沿用生成时的价格。
 const DEMO_QUOTES = {
-  sz000001: { price: 12.05, changePct: 0.42, name: '平安银行', currency: 'CNY', source: 'sz' },
-  hk02549: { price: 35.6, changePct: 1.15, name: '卡罗特', currency: 'HKD', source: 'hk' },
+  sz000001: { price: 12.05, changePct: 0.42, name: '平安银行', currency: 'CNY', source: 'tencent' },
+  hk02549: { price: 35.6, changePct: 1.15, name: '卡罗特', currency: 'HKD', source: 'tencent' },
 }
 
 window.fetch = async (path, opts) => {
