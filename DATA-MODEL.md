@@ -40,7 +40,11 @@
 portfolioId（同花顺 fund_key/custid）、thsBookType、brokerAccountId（券商通道）、
 mcpEndpoint。同一来源账户可以对应多个模型账户的情况被 fingerprint 判重阻止（v0.4 起不变）。
 
-## 2. Instrument 标的
+## 2. Instrument 标的（本地产品表）
+
+`ledger.instruments` 就是本地证券目录/产品表：每只证券一条，凭 `id` 被持仓、交易与流水引用；
+行情（`quotes.mjs`）只更新表上的名称与持仓报价，不另建数据源。入库时先查这张表，命中即复用，
+未命中才查公开目录建档（见下「入库核验」）。
 
 ```jsonc
 {
@@ -49,17 +53,51 @@ mcpEndpoint。同一来源账户可以对应多个模型账户的情况被 finge
   "sourceCodes": {                  // 各来源原始写法，仅留档/排查，不参与身份匹配
     "longbridge": "700.HK", "futu": "HK.00700", "tencent": "hk00700"
   },
-  "name": "腾讯控股",
+  "name": "腾讯控股",               // 简称（展示名）
+  "fullName": "腾讯控股有限公司",    // 可选，全称 ≤80 字（基金为「XX证券投资基金」，来自 f10 或用户）
   "market": "HK",                  // CN | HK | US | SG | FUND | CASH | OTHER（canonicalMarket 归一）
   "assetClass": "stock",           // stock | fund | etf | cash | bond | crypto | other（固定枚举）
   "currency": "HKD",               // 计价/交易币种，ISO 4217
+  "securityType": "港股",           // 可选，分类 ≤24 字：A股 / 港股 / 美股 / 基金 · 混合型-灵活 …
   "sector": "通信服务",             // 可选，行业：自由文本 ≤24 字，仅来自用户或可靠资料，空=未分类
   "style": "value",                // 可选，风格：growth | value | blend | other（model.mjs 归一）
+  "verification": {                // 身份核验状态（见下），手工建档的旧标的可没有此字段
+    "status": "verified",          // verified | pending
+    "source": "eastmoney",         // eastmoney | user
+    "at": "2026-11-13T09:41:27.080Z",
+    "securityType": "港股",        // 核验时公开目录给出的分类（留档）
+    "reason": "…",                 // pending 时说明原因
+    "candidates": [ { "symbol": "00700", "market": "HK", "name": "腾讯控股", "securityType": "港股", "provider": "eastmoney" } ]
+  },
   "note": "", "createdAt": "…"
 }
 ```
 
-分类规则：`sector`/`style` 是可选的人工 / AI 标注，不在任何导入路径中自动推断；摘要层把缺失值聚合为「未分类」（summary.sectors / summary.styles），快照按日保存这两个维度，供行业与风格集中度分析。AI 助手仅在用户明确说明或标的行业众所周知时才填写，不确定必须询问。
+分类规则：`sector`/`style` 是可选的人工 / AI 标注，摘要层把缺失值聚合为「未分类」（summary.sectors / summary.styles），快照按日保存这两个维度，供行业与风格集中度分析。AI 助手仅在用户明确说明或标的行业众所周知时才填写，不确定必须询问。
+
+`securityType` / `fullName` / `sector` 在公开目录核验成功（`verification.status = "verified"`）时**只填空位**，绝不覆盖用户已填的值；`name` 只替换「占位名」（名称为空或等于代码），来源或用户给出的真实名称保留。
+
+### 入库核验（catalog.mjs）
+
+同步快照入库时按顺序解析身份，网络阶段与写账本严格分离：
+
+1. **纯网络预核验**（`resolveCatalogForSnapshot`，`readLedger` 之前）：对快照里每个不同身份
+   （代码 + 市场 + 基金位）查一次公开目录——六位代码走天天基金搜索接口（区分基金档/股票档，
+   基金档带 `FTYPE` 分类与 f10 基金全称），港股/美股走东财搜索接口核对市场与类型，
+   行业取东财 push2 的 `f127`；每个引用最多 10 秒超时，失败只记在该引用的结果里。
+2. **同步写表**（`applyCatalogResolutions`，与 `mergeSnapshot`、落盘同处无 `await` 的临界区）：
+   本地命中 → 复用；未命中且公开目录唯一定位 → 建「已核验」条目并补齐简称/全称/分类/行业；
+   查询失败或候选与快照声明的市场/类型冲突 → 建「待确认」条目（`verification.status = "pending"`）
+   并附 `candidates`，持仓照常入库，绝不阻断同步。
+3. 读账本到落盘之间禁止 `await`：两个来源可以并行同步，跨网络等 待会让双方各自基于旧账本合并、后写者覆盖前写者。
+
+`instrument.confirm {id, …, confirm:true}` 由用户（界面「待确认标的」面板）或 AI 钉死身份：
+写入所选代码/市场/类别/分类，`verification` 转为 `verified` 并清空候选；若确认后的身份与已有标的
+相同，自动把本条并入那条（`instrument.merge` 的同一套迁移：持仓、交易、归档流水、`sourceCodes`）。
+`POST /portfolio/api/instruments/verify {id}` 用于重新查询公开目录（「重新查询」按钮）。
+
+前端只按已确认的 `instrumentId` 合并汇总：`verification.status = "pending"` 的标的在持仓页
+单独成行并标「待确认」，不与同代码的已确认标的合并。
 
 映射规则（适配器负责，不得再各自发明）：
 - 长桥 `700.HK` → market HK；`SH/SZ` 后缀 → **CN**（长桥原义是交易所，我们归一为市场）；

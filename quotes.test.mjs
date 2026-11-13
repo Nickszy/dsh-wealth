@@ -56,6 +56,28 @@ test('fetchQuotes reports network and HTTP failures as warnings without throwing
   assert.deepEqual(missing.warnings, ['QUOTE_MISSING:sh600519'])
 })
 
+test('quote refresh fills placeholder catalog names but never overwrites real ones', async () => {
+  const db = {
+    baseCurrency: 'CNY', fx: { CNY: 1 },
+    instruments: [
+      { id: 'I1', symbol: '600519', name: '600519', market: 'CN', assetClass: 'stock', currency: 'CNY' },
+      { id: 'I2', symbol: '000888', name: '黄山旅游', market: 'CN', assetClass: 'stock', currency: 'CNY' },
+    ],
+    holdings: [
+      { id: 'H1', accountId: 'A', instrumentId: 'I1', qty: 100, avgCost: 1500, manualPrice: null, quotePrice: null, currency: 'CNY' },
+      { id: 'H2', accountId: 'A', instrumentId: 'I2', qty: 100, avgCost: 10, manualPrice: null, quotePrice: null, currency: 'CNY' },
+    ],
+  }
+  const payload = [
+    // 行情响应是 GBK 编码，测试桩统一用 ASCII 名称避免编码器差异。
+    line('sh600519', 'MOUTAI-A', '1688.00'),
+    line('sh000888', 'HUANGSHAN-B', '0.90'),
+  ].join(';')
+  await refreshQuotes(db, { fetch: async () => ({ ok: true, status: 200, arrayBuffer: async () => new TextEncoder().encode(payload).buffer }) })
+  assert.equal(db.instruments[0].name, 'MOUTAI-A', 'code-as-name placeholder is filled from the quote')
+  assert.equal(db.instruments[1].name, '黄山旅游', 'an existing real name is never overwritten by the quote feed')
+})
+
 test('refreshQuotes fills quotePrice below manual overrides and reports changes', async () => {
   const db = {
     baseCurrency: 'CNY', fx: { CNY: 1, HKD: 0.92 },

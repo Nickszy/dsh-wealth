@@ -1504,6 +1504,9 @@ window.__ModuleLoader__.load({
       const [form, setForm] = React.useState(null), [editing, setEditing] = React.useState(false), [msg, setMsg] = React.useState(''), [acctFilter, setAcctFilter] = React.useState('')
       const [group, setGroup] = React.useState('class')
       const [quoting, setQuoting] = React.useState(false)
+      // 入库时没核对上身份的标的（verification.status === 'pending'）：逐条确认或重新查询。
+      const [verifying, setVerifying] = React.useState('')
+      const [pick, setPick] = React.useState({})
       const refreshQuotes = async () => {
         setQuoting(true); setMsg('')
         try {
@@ -1515,6 +1518,36 @@ window.__ModuleLoader__.load({
           if (reload) await reload()
         } catch (e) { setMsg(e.message) }
         finally { setQuoting(false) }
+      }
+      const pendingIns = db.instruments.filter(i => i.verification?.status === 'pending')
+      const pendingCount = (ins) => db.holdings.filter(h => h.instrumentId === ins.id).length
+      const candidateLabel = (c) => [c.name || '未命名', displayCodeOf({ symbol: c.symbol, market: c.market }), c.securityType].filter(Boolean).join(' · ')
+      // 确认身份：采用候选 = 钉死代码/市场/类别/分类；不传候选 = 保留现状只标已确认。
+      // 确认后的身份若与已有标的相同，后端会自动并账（result.mergedInto）。
+      const confirmIdentity = async (ins, candidate) => {
+        const r = await call('instrument.confirm', {
+          id: ins.id, confirm: true,
+          ...(candidate ? {
+            symbol: candidate.symbol, market: candidate.market,
+            ...(candidate.name ? { name: candidate.name } : {}),
+            ...(candidate.market === 'FUND' ? { assetClass: 'fund' } : {}),
+            ...(candidate.securityType ? { securityType: candidate.securityType } : {}),
+          } : {}),
+        })
+        if (!r.ok) { setMsg(r.error?.message || '确认失败'); return }
+        setMsg(r.result?.mergedInto ? '已确认身份，并已并入同一证券的已有标的。' : '已确认标的身份。')
+        if (reload) await reload()
+      }
+      const reverify = async (ins) => {
+        setVerifying(ins.id); setMsg('')
+        try {
+          const r = await fetch('/portfolio/api/instruments/verify', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: ins.id }) })
+          const d = await r.json().catch(() => null)
+          if (!r.ok || !d?.ok) throw new Error(d?.error?.message || '核验失败')
+          setMsg(d.status === 'verified' ? '已从公开目录核验并补齐名称与分类。' : '公开目录仍未给出确定身份，可手动选择候选。')
+          if (reload) await reload()
+        } catch (e) { setMsg(e.message) }
+        finally { setVerifying('') }
       }
       const open = (f, isEdit) => { setForm(f); setEditing(!!isEdit); setMsg('') }
       const submit = async () => {
@@ -1559,7 +1592,9 @@ window.__ModuleLoader__.load({
         const byKey = new Map()
         for (const ho of list) {
           const ins = insMap.get(ho.instrumentId)
-          const key = ins ? identityKeyOf(ins) : 'id:' + ho.instrumentId
+          // 待确认标的不与已确认的同代码标的合并：身份没定之前按条目独立展示，避免把
+          // 两只不同证券的数量和市值加到一起。确认后才回到统一代码合并。
+          const key = !ins ? 'id:' + ho.instrumentId : ins.verification?.status === 'pending' ? 'pending:' + ins.id : identityKeyOf(ins)
           let e = byKey.get(key)
           if (!e) { e = { key, holdings: [], ins }; byKey.set(key, e); entries.push(e) }
           e.holdings.push(ho)
@@ -1610,7 +1645,36 @@ window.__ModuleLoader__.load({
         g.rows.push(v)
       }
       const totalMv = groups.reduce((s, g) => s + g.mv, 0)
+      // 「待确认标的」面板：入库时公开目录没核对上的证券。确认前不参与统一代码合并，
+      // 这里给出候选（名称 / 代码 / 类型），支持重新查询或保留现状。
+      const pendingPanel = pendingIns.length ? h('div', { style: { ...T.card(t), marginBottom: 12, borderColor: t.terra } },
+        h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' } },
+          h('strong', null, '待确认标的 · ' + pendingIns.length),
+          h('span', { style: { fontSize: 11, color: t.sub } }, '同步时没能从公开目录核对身份；确认后会按标准代码参与合并与分类汇总。')),
+        pendingIns.map((ins) => {
+          const candidates = ins.verification?.candidates || []
+          const chosen = pick[ins.id] ?? 0
+          return h('div', { key: ins.id, style: { borderTop: '1px solid ' + t.border, marginTop: 10, paddingTop: 10 } },
+            h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', alignItems: 'flex-start' } },
+              h('span', null,
+                h('strong', null, ins.name + ' '),
+                h('small', { style: { color: t.sub } }, displayCodeOf(ins)),
+                h('small', { style: { display: 'block', color: t.terra, fontSize: 11, marginTop: 2 } },
+                  (ins.verification?.reason || '身份待确认') + ' · 影响 ' + pendingCount(ins) + ' 条持仓')),
+              h('span', { style: { display: 'flex', gap: 6 } },
+                h('button', { style: { ...T.btn(t, false), padding: '3px 9px' }, disabled: busy || verifying === ins.id, onClick: () => reverify(ins) }, verifying === ins.id ? '查询中…' : '重新查询'),
+                h('button', { style: { ...T.btn(t, false), padding: '3px 9px' }, disabled: busy || verifying === ins.id, title: '保留当前代码与类别，只标记为已确认', onClick: () => confirmIdentity(ins, null) }, '保留现状'))),
+            candidates.length
+              ? h('div', { style: { marginTop: 8, display: 'flex', flexDirection: 'column', gap: 5 } },
+                candidates.map((c, i) => h('label', { key: i, style: { display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, cursor: 'pointer' } },
+                  h('input', { type: 'radio', name: 'confirm-' + ins.id, checked: chosen === i, onChange: () => setPick({ ...pick, [ins.id]: i }) }),
+                  h('span', null, candidateLabel(c)))),
+                h('button', { style: { ...T.btn(t, true), padding: '4px 12px', alignSelf: 'flex-start', marginTop: 3 }, disabled: busy, onClick: () => confirmIdentity(ins, candidates[chosen]) }, '采用所选候选'))
+              : h('div', { style: { fontSize: 11.5, color: t.sub, marginTop: 6 } },
+                '公开目录没有给出候选。若确认当前代码就是对的，点「保留现状」；否则在账户里修正代码后重新同步。'))
+        })) : null
       return h('div', null,
+        pendingPanel,
         h('div', { style: T.card(t) },
           h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' } },
             h('strong', null, (accountId ? '账户持仓' : '全部持仓') + ' · ' + views.length + (merged && views.length !== list.length ? '（合并自 ' + list.length + ' 条）' : '')),
@@ -1638,8 +1702,9 @@ window.__ModuleLoader__.load({
                 const pct = v.pct == null ? null : v.pct
                 const pctText = pct == null ? '—' : (pct > 0 ? '+' : '') + pct.toFixed(2) + '%'
                 const qtyText = v.accIds.length > 1 ? String(Number(v.qty.toFixed(6))) : String(ho.qty)
+                const pendingTag = ins?.verification?.status === 'pending' ? h('small', { style: { display: 'inline-block', color: t.terra, border: '1px solid ' + t.terra, borderRadius: 999, padding: '0 6px', fontSize: 10, marginLeft: 6, lineHeight: '15px' }, title: ins.verification.reason || '身份待确认' }, '待确认') : null
                 return h('tr', { key: v.key },
-                  T.td(h('span', null, (ins ? ins.name + ' ' + displayCodeOf(ins) : ho.instrumentId), ins?.sector ? h('small', { style: { display: 'block', color: t.sub } }, ins.sector + (ins.style ? ' · ' + styleLabel(ins.style) : '')) : null), t),
+                  T.td(h('span', null, (ins ? ins.name + ' ' + displayCodeOf(ins) : ho.instrumentId), pendingTag, ins?.sector ? h('small', { style: { display: 'block', color: t.sub } }, ins.sector + (ins.style ? ' · ' + styleLabel(ins.style) : '')) : null), t),
                   T.td(qtyText, t),
                   T.td(v.accIds.length > 1 || v.mixedCurrency
                     ? (v.avgCost == null

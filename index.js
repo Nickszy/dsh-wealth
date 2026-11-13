@@ -732,6 +732,22 @@ export function apply(ctx, config = {}) {
           }
           return
         }
+        // 待确认标的重新核验：联网查公开目录，吻合则补齐维度并转「已核验」，
+        // 不吻合则刷新候选。确认动作本身走 api/op 的 instrument.confirm。
+        if (path === 'api/instruments/verify') {
+          if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
+          const body = JSON.parse(await readBody(req))
+          if (typeof body.id !== 'string' || !body.id.trim()) throw new OpError('bad-request', '缺少标的 id')
+          const { instrument, status } = await sync.verifyInstrument(body.id)
+          const db = load()
+          send(res, 200, { ok: true, instrument, status, ledger: db, summary: summarize(db), analysis: analyze(db) })
+          return
+        }
+        if (path === 'api/instruments/pending') {
+          if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
+          send(res, 200, { ok: true, instruments: sync.pendingInstruments() })
+          return
+        }
         if (path === 'api/quotes/refresh') {
           if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
           const db = load()

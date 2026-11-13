@@ -209,6 +209,16 @@ export function refreshQuotes(db, { fetch, timeoutMs } = {}) {
     const warnings = [...stocks.warnings, ...funds.warnings]
     let updated = 0
     const applied = []
+    // 行情顺带更新产品表：只用行情里的名称补「占位名」（名称等于代码或为空），
+    // 绝不覆盖用户或来源已经给出的名称。
+    for (const holding of db.holdings || []) {
+      const instrument = insMap.get(holding.instrumentId)
+      if (!instrument) continue
+      const key = (quoteKey(instrument) || fundQuoteKey(instrument) || '').toLowerCase()
+      const quote = key ? quotes.get(key) : null
+      if (!quote?.name) continue
+      if (!instrument.name || instrument.name === instrument.symbol) instrument.name = quote.name
+    }
     for (const [key, quote] of quotes) {
       for (const holding of byKey.get(key) || []) {
         const previous = holding.quotePrice

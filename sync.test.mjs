@@ -14,7 +14,8 @@ function setup(extra={}) {
  const config={read:()=>structuredClone(records),write:all=>{records=structuredClone(all)}}
  const entries={}
  const credentials={get:id=>structuredClone(entries[id]||{}),set:(id,_kind,value)=>{entries[id]={...(entries[id]||{}),...value}},remove:id=>{delete entries[id]},configured:id=>Object.keys(entries[id]||{}).length>0}
- const service=createSyncService({get:()=>null},{config,credentials,load:()=>structuredClone(ledger),save:db=>{writes++;ledger=structuredClone({...db,updatedAt:new Date(clock).toISOString()})},now:()=>clock,fetchSnapshot:async()=>snapshot(),...extra})
+ const service=createSyncService({get:()=>null},{config,credentials,load:()=>structuredClone(ledger),save:db=>{writes++;ledger=structuredClone({...db,updatedAt:new Date(clock).toISOString()})},now:()=>clock,fetchSnapshot:async()=>snapshot(),// 目录核验默认断网：把新标的降级为「待确认」，不影响同步结果断言。
+ catalogFetch:extra.catalogFetch ?? (async()=>{throw new Error('catalog offline')}),...extra})
  const source={name:'连接',connector:'custom',transport:'http',accountId:'a',url:'http://127.0.0.1:3333/snapshot',intervalMinutes:0,enabled:true}
  return {service,source,config,credentials,db:()=>structuredClone(ledger),setDb:db=>{ledger=db},writes:()=>writes,advance:n=>{clock+=n},add:over=>service.saveSource({...source,...over}).sources.at(-1)}
 }
@@ -41,6 +42,33 @@ test('successful repeated refresh updates managed holdings, not duplicates, and 
  assert.equal(r.ledger.holdings.length,1);assert.equal(r.ledger.holdings[0].syncSourceId,src.id);assert.equal(r.source.lastStatus,'ok');assert.equal(r.imported,1)
  r=await f.service.sync(src.id);assert.equal(r.ledger.holdings.length,1);assert.equal(f.writes(),2)
  assert.equal(f.service.list().sources[0].lastError,null)
+})
+
+test('a new security is verified into the local catalog before the holding is merged', async () => {
+ const catalog = async (url) => {
+  if (String(url).includes('fundsuggest')) return { ok: true, status: 200, json: async () => ({ Datas: [{ CODE: '600519', NAME: '贵州茅台', CATEGORYDESC: '沪市', FundBaseInfo: null }] }) }
+  if (String(url).includes('push2')) return { ok: true, status: 200, json: async () => ({ data: { f127: '白酒Ⅱ' } }) }
+  throw new Error('unexpected catalog fetch ' + url)
+ }
+ const f = setup({ fetchSnapshot: async () => snapshot([row('600519', { name: '茅台', market: 'CN', assetClass: 'stock', currency: 'CNY' })]), catalogFetch: catalog })
+ const src = f.add()
+ const r = await f.service.sync(src.id)
+ const [instrument] = r.ledger.instruments
+ assert.equal(instrument.verification.status, 'verified', 'ingest confirms the identity against the public catalog')
+ assert.equal(instrument.securityType, 'A股')
+ assert.equal(instrument.sector, '白酒Ⅱ')
+ assert.equal(instrument.name, '茅台', 'a name supplied by the source is kept')
+ assert.equal(r.ledger.holdings[0].instrumentId, instrument.id, 'the holding attaches to the catalog entry')
+})
+
+test('an unreachable catalog degrades to a pending entry without failing the sync', async () => {
+ const f = setup({ fetchSnapshot: async () => snapshot([row('600519', { market: 'CN', assetClass: 'stock', currency: 'CNY' })]) })
+ const src = f.add()
+ const r = await f.service.sync(src.id)
+ assert.equal(r.source.lastStatus, 'ok')
+ assert.equal(r.ledger.instruments[0].verification.status, 'pending')
+ assert.match(r.ledger.instruments[0].verification.reason, /核验查询失败/)
+ assert.equal(r.ledger.holdings.length, 1, 'the position is still imported')
 })
 
 test('sync keeps a hand price, stores the broker price separately, and applies external quotes',async()=>{
@@ -520,6 +548,7 @@ test('tick runs different connectors in parallel',async()=>{
  await new Promise(r=>setTimeout(r,0))
  assert.equal(pending.length,2);assert.equal(maxActive,2) // 跨连接器并行：两个来源同时进行中
  pending.forEach(p=>p.resolve());await work
+ // 目录核验默认断网 → 同花顺的 600000 落成「待确认」，但持仓照常入库：两只都在。
  assert.equal(f.db().holdings.length,2)
 })
 // ---- Configurable schedules: daily HH:MM (default 21:00) or fixed interval ----

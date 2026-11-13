@@ -108,16 +108,13 @@ function findHolding(db, accountId, instrumentId) {
   return db.holdings.find((h) => h.accountId === accountId && h.instrumentId === instrumentId)
 }
 
-// Resolve an instrument by id, or by symbol+market (creating it if allowed).
-function resolveInstrument(db, ref, { create = true } = {}) {
-  if (!ref) throw new OpError('bad-request', '缺少标的')
-  if (ref.instrumentId) {
-    const got = findInstrument(db, ref.instrumentId)
-    if (!got) throw new OpError('not-found', '标的不存在: ' + ref.instrumentId)
-    return got
-  }
+// 按「统一代码 + 基金位」做纯查找（不创建）：catalog.mjs 的入库核验与
+// resolveInstrument 共用同一套身份判定，保证两条路径不会对同一只证券得出不同结论。
+export function findInstrumentByIdentity(db, ref) {
+  if (!ref) return undefined
+  if (ref.instrumentId) return findInstrument(db, ref.instrumentId)
   const rawSymbol = String(ref.symbol || '').trim()
-  if (!rawSymbol) throw new OpError('bad-request', '缺少标的代码 symbol')
+  if (!rawSymbol) return undefined
   // 统一交易代码：同一只证券在各来源的写法（2549.HK / HK.02549 / 02549、600519.SH / SH.600519、
   // AAPL.US / US.AAPL）收敛为一种，否则历史行情与估值会按不同身份各查一次，产生重复持仓。
   const normalized = normalizeSymbol(rawSymbol, ref.market || '')
@@ -130,7 +127,7 @@ function resolveInstrument(db, ref, { create = true } = {}) {
   const compareFund = /^\d{6}$/.test(symbol) && (market === 'FUND' || market === 'CN' || rawMarket === '')
   const wantFund = isFundLike({ market, assetClass: ref.assetClass })
   const fundMarket = (m) => canonicalMarket(m) === 'FUND' || canonicalMarket(m) === 'CN'
-  const matches = (i) => {
+  return db.instruments.find((i) => {
     const n = normalizeSymbol(i.symbol, i.market)
     if (n.symbol !== symbol) return false
     const iFund = isFundLike(i)
@@ -138,21 +135,25 @@ function resolveInstrument(db, ref, { create = true } = {}) {
     // 两个方向都视为同一只基金，否则先后导入顺序不同会各建一条。
     if (compareFund && wantFund && iFund) return rawMarket === '' || fundMarket(i.market)
     return (rawMarket === '' || n.market === market) && (!compareFund || iFund === wantFund)
-  }
-  const rememberSourceCode = (instrument) => {
-    const source = String(ref.source || '').trim().toLowerCase()
-    const code = String(ref.sourceCode || '').trim()
-    if (!source || !code || !/^[a-z0-9_-]{1,24}$/.test(source)) return instrument
-    instrument.sourceCodes = { ...(instrument.sourceCodes || {}), [source]: code.slice(0, 80) }
-    return instrument
-  }
-  const existing = db.instruments.find(matches)
-  if (existing) return rememberSourceCode(existing)
-  if (!create) throw new OpError('not-found', '标的不存在: ' + symbol)
+  })
+}
+
+// Resolve an instrument by id, or by symbol+market (creating it if allowed).
+function resolveInstrument(db, ref, { create = true } = {}) {
+  if (!ref) throw new OpError('bad-request', '缺少标的')
+  const rawSymbol = String(ref.symbol || '').trim()
+  if (!ref.instrumentId && !rawSymbol) throw new OpError('bad-request', '缺少标的代码 symbol')
+  const existing = findInstrumentByIdentity(db, ref)
+  if (existing) return rememberSourceCode(ref, existing)
+  if (ref.instrumentId && !existing) throw new OpError('not-found', '标的不存在: ' + ref.instrumentId)
+  if (!create) throw new OpError('not-found', '标的不存在: ' + rawSymbol)
+  const normalized = normalizeSymbol(rawSymbol, ref.market || '')
+  const market = normalized.market
+  const symbol = normalized.symbol || rawSymbol
   const instrument = {
     id: uid('INS'),
     symbol,
-    name: String(ref.name || symbol).trim(),
+    name: String(ref.name || rawSymbol).trim(),
     market: canonicalMarket(market || 'CN'),
     assetClass: assetClass(ref.assetClass || guessAssetClass(symbol)),
     currency: normCurrency(ref.currency, defaultCurrencyOfMarket(market)),
@@ -160,7 +161,41 @@ function resolveInstrument(db, ref, { create = true } = {}) {
     createdAt: nowISO(),
   }
   db.instruments.push(instrument)
-  return rememberSourceCode(instrument)
+  return rememberSourceCode(ref, instrument)
+}
+
+function rememberSourceCode(ref, instrument) {
+  const source = String((ref && ref.source) || '').trim().toLowerCase()
+  const code = String((ref && ref.sourceCode) || '').trim()
+  if (!source || !code || !/^[a-z0-9_-]{1,24}$/.test(source)) return instrument
+  instrument.sourceCodes = { ...(instrument.sourceCodes || {}), [source]: code.slice(0, 80) }
+  return instrument
+}
+
+// 把 drop 的全部持仓、交易、归档流水迁移到 keep 后删除 drop。
+// 同一账户同币种持仓撞车时拒绝（可能重复导入，需人工核对），避免数量被覆盖。
+// instrument.merge 与 instrument.confirm（确认后撞身份自动并账）共用。
+function mergeInstrumentInto(db, keep, drop) {
+  const moved = db.holdings.filter((h) => h.instrumentId === drop.id)
+  for (const holding of moved) {
+    const clash = db.holdings.find((h) => h.accountId === holding.accountId && h.instrumentId === keep.id && h.currency === holding.currency)
+    if (clash) throw new OpError('bad-request', '账户「' + holding.accountId + '」同时持有两个重复标的，请先人工核对再合并')
+  }
+  for (const holding of moved) holding.instrumentId = keep.id
+  // 交易与归档流水也引用 instrumentId；只迁移持仓会把它们留成悬空引用。
+  const movedTrades = (db.trades || []).filter((t) => t.instrumentId === drop.id)
+  for (const trade of movedTrades) trade.instrumentId = keep.id
+  const movedEvents = (db.historyEvents || []).filter((e) => e.instrumentId === drop.id)
+  for (const event of movedEvents) event.instrumentId = keep.id
+  db.instruments = db.instruments.filter((i) => i.id !== drop.id)
+  if (!keep.name && drop.name) keep.name = drop.name
+  if (!keep.sector && drop.sector) keep.sector = drop.sector
+  if (!keep.style && drop.style) keep.style = drop.style
+  if (!keep.fullName && drop.fullName) keep.fullName = drop.fullName
+  if (!keep.securityType && drop.securityType) keep.securityType = drop.securityType
+  if (drop.sourceCodes) keep.sourceCodes = { ...drop.sourceCodes, ...(keep.sourceCodes || {}) }
+  keep.updatedAt = nowISO()
+  return { movedHoldings: moved.length, movedTrades: movedTrades.length, movedEvents: movedEvents.length }
 }
 
 function guessAssetClass(symbol, given) {
@@ -263,6 +298,14 @@ export function applyOp(db, op, payload = {}) {
           const value = String(p[key]).trim()
           if (!value && key !== 'note') throw new OpError('bad-request', key + ' 不能为空')
           changes[key] = key === 'market' ? value.toUpperCase() : value
+        }
+      }
+      // 产品表维度：全称与分类（A股/港股/基金·混合型…）。null 表示清除，留空值视为清除。
+      for (const [key, max] of [['fullName', 80], ['securityType', 24]]) {
+        if (p[key] !== undefined) {
+          const value = p[key] === null ? '' : String(p[key]).trim()
+          if (value.length > max) throw new OpError('bad-request', key + ' 过长（≤' + max + ' 字）')
+          changes[key] = value || null
         }
       }
       // 各数据源的原始代码（longbridge: 700.HK / tencent: hk00700 …），只做展示与排查，不参与身份匹配。
@@ -467,23 +510,68 @@ export function applyOp(db, op, payload = {}) {
       const drop = findInstrument(db, String(p.dropId || ''))
       if (!keep || !drop) throw new OpError('not-found', '标的不存在')
       if (keep.id === drop.id) throw new OpError('bad-request', 'keepId 与 dropId 不能相同')
-      const moved = db.holdings.filter((h) => h.instrumentId === drop.id)
-      for (const holding of moved) {
-        const clash = db.holdings.find((h) => h.accountId === holding.accountId && h.instrumentId === keep.id && h.currency === holding.currency)
-        if (clash) throw new OpError('bad-request', '账户「' + holding.accountId + '」同时持有两个重复标的，请先人工核对再合并')
+      const moved = mergeInstrumentInto(db, keep, drop)
+      return { instrument: keep, ...moved, removed: drop.id }
+    }
+
+    // 入库核验的用户确认：把「待确认」标的（或任何标的）的身份钉死为用户选择的
+    // 代码/市场/类别，并记为已核验；若确认后的身份与另一条标的撞车，自动把本条
+    // 并入那条（持仓、流水、来源代码随之迁移），避免确认动作本身制造重复。
+    case 'instrument.confirm': {
+      const p = payload
+      const instrument = findInstrument(db, String(p.id || ''))
+      if (!instrument) throw new OpError('not-found', '标的不存在: ' + p.id)
+      if (p.confirm !== true) throw new OpError('bad-request', '确认标的身份会影响全部持仓与流水，必须先向用户确认，并在 op 上携带 confirm:true')
+      const changes = {}
+      if (p.symbol !== undefined) {
+        const symbol = normalizeSymbol(String(p.symbol), p.market !== undefined ? p.market : instrument.market).symbol
+        if (!symbol) throw new OpError('bad-request', 'symbol 不能为空')
+        changes.symbol = symbol
       }
-      for (const holding of moved) holding.instrumentId = keep.id
-      // 交易与归档流水也引用 instrumentId；只迁移持仓会把它们留成悬空引用。
-      const movedTrades = (db.trades || []).filter((t) => t.instrumentId === drop.id)
-      for (const trade of movedTrades) trade.instrumentId = keep.id
-      const movedEvents = (db.historyEvents || []).filter((e) => e.instrumentId === drop.id)
-      for (const event of movedEvents) event.instrumentId = keep.id
-      db.instruments = db.instruments.filter((i) => i.id !== drop.id)
-      if (!keep.name && drop.name) keep.name = drop.name
-      if (!keep.sector && drop.sector) keep.sector = drop.sector
-      if (!keep.style && drop.style) keep.style = drop.style
-      if (drop.sourceCodes) keep.sourceCodes = { ...drop.sourceCodes, ...(keep.sourceCodes || {}) }
-      return { instrument: keep, movedHoldings: moved.length, movedTrades: movedTrades.length, movedEvents: movedEvents.length, removed: drop.id }
+      if (p.market !== undefined) changes.market = canonicalMarket(String(p.market))
+      if (p.assetClass !== undefined) changes.assetClass = assetClass(p.assetClass)
+      if (p.name !== undefined) {
+        const name = String(p.name).trim()
+        if (!name) throw new OpError('bad-request', 'name 不能为空')
+        changes.name = name
+      }
+      if (p.fullName !== undefined) {
+        const fullName = p.fullName === null ? '' : String(p.fullName).trim()
+        if (fullName.length > 80) throw new OpError('bad-request', 'fullName 过长（≤80 字）')
+        changes.fullName = fullName || null
+      }
+      if (p.securityType !== undefined) {
+        const securityType = p.securityType === null ? '' : String(p.securityType).trim()
+        if (securityType.length > 24) throw new OpError('bad-request', 'securityType 过长（≤24 字）')
+        changes.securityType = securityType || null
+      }
+      const symbol = changes.symbol ?? instrument.symbol
+      const market = canonicalMarket(changes.market ?? instrument.market)
+      const compareFund = /^\d{6}$/.test(symbol) && ['CN', 'FUND'].includes(market)
+      const wantFund = isFundLike({ market, assetClass: changes.assetClass ?? instrument.assetClass })
+      // 撞身份的已有标的：确认 = 两只其实是同一只，把待确认那条并进去。
+      const clash = db.instruments.find((i) => {
+        if (i.id === instrument.id) return false
+        const n = normalizeSymbol(i.symbol, i.market)
+        if (n.symbol !== symbol || n.market !== market) return false
+        return !compareFund || isFundLike(i) === wantFund
+      })
+      if (clash) {
+        // 元数据按「只填空位」补到保留方，再迁移持仓与流水。
+        for (const [key, value] of Object.entries(changes)) {
+          if (key === 'symbol' || key === 'market') continue
+          if (value != null && value !== '' && !clash[key]) clash[key] = value
+        }
+        if (!clash.verification || clash.verification.status !== 'verified') {
+          clash.verification = { status: 'verified', source: String(p.source || 'user'), at: nowISO() }
+        }
+        const moved = mergeInstrumentInto(db, clash, instrument)
+        return { instrument: clash, mergedInto: clash.id, ...moved, removed: instrument.id }
+      }
+      Object.assign(instrument, changes)
+      instrument.verification = { status: 'verified', source: String(p.source || 'user'), at: nowISO() }
+      instrument.updatedAt = nowISO()
+      return { instrument }
     }
 
     // 月度生活预算：每个分类一条；monthly 为 null 表示删除该分类预算。

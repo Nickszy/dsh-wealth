@@ -217,3 +217,61 @@ test('merged rows flag mixed currencies and holdings without a price', () => {
   assert.ok(text.includes('另有 1 条无价'), 'partially valued merge discloses the unpriced rows')
   assert.ok(text.includes('苹果 AAPL.US'), 'display code is used in the table')
 })
+
+// 入库核验：待确认标的有独立面板，且绝不与已确认的同代码标的合并成一行。
+const pendingFixture = () => ({
+  ledger: {
+    baseCurrency: 'CNY', fx: { CNY: 1, HKD: 0.9 },
+    accounts: [{ id: 'a1', name: 'A' }, { id: 'a2', name: 'B' }],
+    instruments: [
+      { id: 'i1', symbol: '00700', name: '腾讯控股', market: 'HK', assetClass: 'stock', currency: 'HKD' },
+      { id: 'i2', symbol: '00700', name: '00700', market: 'HK', assetClass: 'stock', currency: 'HKD', verification: { status: 'pending', reason: '核验查询失败：catalog offline', candidates: [{ symbol: '00700', market: 'HK', name: '腾讯控股', securityType: '港股', provider: 'eastmoney' }] } },
+    ],
+    holdings: [
+      { id: 'h1', accountId: 'a1', instrumentId: 'i1', qty: 100, avgCost: 300, currency: 'HKD', manualPrice: null, quotePrice: 400, quoteChangePct: 1.2 },
+      { id: 'h2', accountId: 'a2', instrumentId: 'i2', qty: 200, avgCost: 310, currency: 'HKD', manualPrice: null, quotePrice: 400, quoteChangePct: 1.2 },
+    ],
+  },
+})
+
+function findButtons(tree, label) {
+  const hits = []
+  walk(tree, (node) => { if (node.type === 'button' && textOf(node).includes(label)) hits.push(node) })
+  return hits
+}
+
+test('pending instruments get a confirmation panel and stay split from confirmed same-code rows', () => {
+  const Holdings = makeHoldings()
+  const calls = []
+  const tree = Holdings({ t: theme, state: pendingFixture(), call: async (op, payload) => { calls.push({ op, payload }); return { ok: true, result: {} } }, busy: false })
+  const text = textOf(tree)
+  assert.ok(text.includes('待确认标的 · 1'), 'the pending panel renders')
+  assert.ok(text.includes('核验查询失败'), 'the pending reason is shown')
+  assert.ok(text.includes('影响 1 条持仓'), 'impact is disclosed')
+  assert.ok(text.includes('腾讯控股 · 00700.HK · 港股'), 'candidates render with name, code and type')
+  // 同一代码的两条持仓（一条已确认、一条待确认）不得合并成一行。
+  const rows = []
+  walk(tree, (node) => { if (node.type === 'tr' && (textOf(node).includes('100') || textOf(node).includes('200'))) rows.push(node) })
+  const mergedRows = rows.filter((node) => textOf(node).includes('300') && textOf(node).includes('310'))
+  assert.equal(mergedRows.length, 0, 'confirmed and pending same-code rows must not share one merged row')
+  const tags = []
+  walk(tree, (node) => { if (node.type === 'small' && textOf(node) === '待确认') tags.push(node) })
+  assert.equal(tags.length, 1, 'the pending row carries the 待确认 tag')
+})
+
+test('adopting a candidate confirms via instrument.confirm; keep-as-is sends no identity fields', async () => {
+  const Holdings = makeHoldings()
+  const calls = []
+  const tree = Holdings({ t: theme, state: pendingFixture(), call: async (op, payload) => { calls.push({ op, payload }); return { ok: true, result: {} } }, busy: false })
+  const adopt = findButtons(tree, '采用所选候选')
+  assert.equal(adopt.length, 1)
+  await adopt[0].props.onClick()
+  assert.deepEqual(calls[0], {
+    op: 'instrument.confirm',
+    payload: { id: 'i2', confirm: true, symbol: '00700', market: 'HK', name: '腾讯控股', securityType: '港股' },
+  }, 'adoption pins the candidate identity with confirm:true')
+  const keep = findButtons(tree, '保留现状')
+  assert.equal(keep.length, 1)
+  await keep[0].props.onClick()
+  assert.deepEqual(calls[1], { op: 'instrument.confirm', payload: { id: 'i2', confirm: true } }, 'keep-as-is only marks the entry verified')
+})

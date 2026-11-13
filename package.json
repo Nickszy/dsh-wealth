@@ -48,6 +48,7 @@
     "fosun-client.mjs",
     "HISTORY-DESIGN.md",
     "chat.mjs",
+    "catalog.mjs",
     "sync.mjs",
     "connectors.mjs",
     "snapshot-schema.mjs",

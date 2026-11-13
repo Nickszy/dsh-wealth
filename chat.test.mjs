@@ -203,6 +203,31 @@ test('the assistant can archive flows, classify instruments and delete behind ex
   assert.throws(() => applyChatOps(db, { revision: db.updatedAt, ops: [{ op: 'instrument.upsert', instrumentId: 'INS_1', style: '动量' }] }), badRequest)
 })
 
+test('the assistant can confirm a pending instrument identity, but only behind explicit confirmation', () => {
+  const db = ledger()
+  db.instruments.push({ id: 'INS_2', symbol: '600519', name: '600519', market: 'CN', assetClass: 'fund', currency: 'CNY', verification: { status: 'pending', reason: '核验查询失败', candidates: [{ symbol: '600519', market: 'CN', name: '贵州茅台', securityType: 'A股' }] } })
+  db.holdings.push({ id: 'POS_2', accountId: 'ACC_1', instrumentId: 'INS_2', qty: 100, avgCost: 1600, manualPrice: null, currency: 'CNY' })
+  // 确认身份会改变标的归类并可能触发并账：没有 confirm:true 一律拒绝。
+  assert.throws(() => applyChatOps(db, { revision: db.updatedAt, ops: [{ op: 'instrument.confirm', id: 'INS_2', assetClass: 'stock' }] }), badRequest)
+  assert.throws(() => applyChatOps(db, { revision: db.updatedAt, ops: [{ op: 'instrument.confirm', confirm: true, assetClass: 'stock' }] }), badRequest)
+  const { ledger: updated, result } = applyChatOps(db, {
+    revision: db.updatedAt,
+    ops: [{ op: 'instrument.confirm', id: 'INS_2', confirm: true, assetClass: 'stock', securityType: 'A股', name: '贵州茅台' }],
+  })
+  const confirmed = updated.instruments.find((i) => i.id === 'INS_2')
+  assert.equal(confirmed.assetClass, 'stock')
+  assert.equal(confirmed.securityType, 'A股')
+  assert.equal(confirmed.verification.status, 'verified')
+  assert.equal(result.results[0].instrument.id, 'INS_2')
+  // 确认后的身份撞上已有标的：自动并账，持仓随之迁移。
+  db.instruments.push({ id: 'INS_3', symbol: '000001', name: '平安银行', market: 'CN', assetClass: 'stock', currency: 'CNY' })
+  db.instruments.push({ id: 'INS_4', symbol: '000001', name: '待确认', market: 'CN', assetClass: 'stock', currency: 'CNY', verification: { status: 'pending' } })
+  db.holdings.push({ id: 'POS_3', accountId: 'ACC_1', instrumentId: 'INS_4', qty: 5, avgCost: 10, manualPrice: null, currency: 'CNY' })
+  const { ledger: merged } = applyChatOps(db, { revision: db.updatedAt, ops: [{ op: 'instrument.confirm', id: 'INS_4', confirm: true }] })
+  assert.equal(merged.instruments.length, 3, 'confirmed duplicate merges into the existing entry')
+  assert.equal(merged.holdings.find((h) => h.id === 'POS_3').instrumentId, 'INS_3')
+})
+
 test('no model, failed streams and invalid input fail without fabricated answers or mutations', async () => {
   const db = ledger(); const before = structuredClone(db)
   await assert.rejects(chatTurn({ get: () => undefined }, { message: 'hello' }, db), badRequest)

@@ -407,6 +407,47 @@ test('instrument.merge repoints holdings across accounts and refuses same-accoun
   assert.throws(() => applyOp(db, 'instrument.merge', { keepId: 'IA', dropId: 'IB2' }), (e) => e.code === 'bad-request')
 })
 
+test('instrument.confirm pins a pending identity, needs confirm:true and fills catalog dimensions', () => {
+  const db = fixture()
+  db.instruments.push({
+    id: 'IX', symbol: '600519', name: '贵州茅台', market: 'CN', assetClass: 'fund', currency: 'CNY',
+    verification: { status: 'pending', reason: '公开目录候选与快照声明的市场或类别不一致', candidates: [{ symbol: '600519', market: 'CN', name: '贵州茅台', securityType: 'A股' }] },
+  })
+  // 确认身份会影响全部持仓与流水：必须显式同意。
+  bad(db, 'instrument.confirm', { id: 'IX', assetClass: 'stock' })
+  bad(db, 'instrument.confirm', { id: 'IX', confirm: true, assetClass: 'unknown' })
+  const result = applyOp(db, 'instrument.confirm', { id: 'IX', confirm: true, assetClass: 'stock', securityType: 'A股', fullName: '贵州茅台酒股份有限公司' })
+  const confirmed = result.instrument
+  assert.equal(confirmed.assetClass, 'stock')
+  assert.equal(confirmed.securityType, 'A股')
+  assert.equal(confirmed.fullName, '贵州茅台酒股份有限公司')
+  assert.equal(confirmed.verification.status, 'verified')
+  assert.equal(confirmed.verification.source, 'user')
+  assert.equal(confirmed.verification.candidates, undefined, 'confirmation clears the pending candidates')
+})
+
+test('instrument.confirm merges into an existing instrument when the chosen identity collides', () => {
+  const db = fixture()
+  db.instruments.push(
+    { id: 'KEEP', symbol: '02549', name: '卡罗特', market: 'HK', assetClass: 'stock', currency: 'HKD' },
+    { id: 'PEND', symbol: '2549', name: 'CAROTE', market: 'HK', assetClass: 'stock', currency: 'HKD', verification: { status: 'pending' }, sourceCodes: { tencent: 'hk02549' } },
+  )
+  db.holdings.push(
+    { id: 'H1', accountId: 'a', instrumentId: 'KEEP', qty: 100, currency: 'HKD' },
+    { id: 'H2', accountId: 'empty', instrumentId: 'PEND', qty: 50, currency: 'HKD' },
+  )
+  db.trades.push({ id: 'T1', accountId: 'empty', instrumentId: 'PEND', side: 'buy', qty: 50, price: 9, currency: 'HKD', date: '2026-01-02' })
+  const result = applyOp(db, 'instrument.confirm', { id: 'PEND', confirm: true, symbol: '02549', market: 'HK' })
+  assert.equal(result.mergedInto, 'KEEP')
+  assert.equal(result.movedHoldings, 1)
+  assert.equal(result.movedTrades, 1)
+  assert.equal(db.instruments.length, 1)
+  assert.equal(db.instruments[0].id, 'KEEP')
+  assert.equal(db.instruments[0].verification.status, 'verified')
+  assert.deepEqual(db.instruments[0].sourceCodes, { tencent: 'hk02549' }, 'source codes follow the merged entry')
+  assert.equal(db.holdings.find((h) => h.id === 'H2').instrumentId, 'KEEP')
+})
+
 test('budget.set upserts per category, validates and deletes', () => {
   const db = fixture()
   const first = applyOp(db, 'budget.set', { category: 'food', monthly: 2000 })
