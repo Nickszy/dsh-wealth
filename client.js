@@ -1608,7 +1608,9 @@ window.__ModuleLoader__.load({
         }
         setForm(null)
       }
-      const list = db.holdings.filter(ho => accountId ? ho.accountId === accountId : (!acctFilter || ho.accountId === acctFilter))
+      // 信用卡 / 借款账户是负债，账户页按负债展示；全部持仓视图里不当作资产列出。
+      const creditIds = new Set(db.accounts.filter(a => a.type === 'credit').map(a => a.id))
+      const list = db.holdings.filter(ho => (accountId || acctFilter) ? ho.accountId === (accountId || acctFilter) : !creditIds.has(ho.accountId))
       // 与 quotes.mjs valuationPrice 一致：和券商快照相同的 manualPrice 是同步写入的昨收，不是手填。
       const usedPrice = (ho) => {
         const copied = ho.manualPrice != null && ho.sourcePrice != null && Number(ho.manualPrice) === Number(ho.sourcePrice)
@@ -1632,6 +1634,8 @@ window.__ModuleLoader__.load({
       const single = !!(accountId || acctFilter)
       const merged = !single && group !== 'account'
       const readOnly = !single
+      // 被隐藏的负债条数（只在全部视图里隐藏；选中该账户仍可查看与编辑）。
+      const hiddenCredit = !single ? db.holdings.filter(ho => creditIds.has(ho.accountId)).length : 0
       const entries = []
       if (merged) {
         const byKey = new Map()
@@ -1749,12 +1753,15 @@ window.__ModuleLoader__.load({
               onClick: () => setClassTab(v),
               style: { ...T.btn(t, tab === v), padding: '4px 12px', minHeight: 28, fontSize: 12 },
             }, label + ' · ' + n))) : null,
-          readOnly ? h('div', { style: { fontSize: 11, color: t.sub, margin: '-2px 0 10px' } }, merged ? '同一代码的持仓已合并计算，此视图只读；编辑 / 删除请进入对应账户。' : '此视图只读；编辑 / 删除请进入对应账户。') : null,
+          readOnly || hiddenCredit ? h('div', { style: { fontSize: 11, color: t.sub, margin: '-2px 0 10px' } },
+            [merged ? '同一代码的持仓已合并计算，此视图只读；编辑 / 删除请进入对应账户。' : readOnly ? '此视图只读；编辑 / 删除请进入对应账户。' : '',
+              hiddenCredit ? '另有 ' + hiddenCredit + ' 条信用卡 / 借款负债在账户页展示，不计入持仓。' : ''].filter(Boolean).join(' ')) : null,
           h('table', { style: { width: '100%', borderCollapse: 'collapse' } },
-            h('thead', null, h('tr', null, T.th('标的', t), T.th('数量', t), T.th('成本', t), T.th('现价', t), T.th('涨跌幅', t), T.th('币种', t), T.th('市值(本位币)', t), T.th('操作', t))),
+            // 只读视图整行没有任何操作，这一列直接省掉；编辑 / 删除在单账户视图里。
+            h('thead', null, h('tr', null, [T.th('标的', t), T.th('数量', t), T.th('成本', t), T.th('现价', t), T.th('涨跌幅', t), T.th('币种', t), T.th('市值(本位币)', t), ...(readOnly ? [] : [T.th('操作', t)])])),
             h('tbody', null, views.length ? groups.map((g) => [
               // 选中品种 tab 后只剩一个分组，表头就不必再重复一遍类别名。
-              tab && groups.length === 1 ? null : h('tr', { key: 'g:' + g.key }, T.td(h('span', { style: { fontWeight: 650, fontSize: 12 } }, g.key, h('small', { style: { display: 'block', color: t.sub, fontWeight: 400 } }, g.rows.length + ' 项 · ' + fmtMoney(g.mv, db.baseCurrency) + (totalMv ? ' · ' + (g.mv / totalMv * 100).toFixed(1) + '%' : ''))), t, { colSpan: 8 })),
+              tab && groups.length === 1 ? null : h('tr', { key: 'g:' + g.key }, T.td(h('span', { style: { fontWeight: 650, fontSize: 12 } }, g.key, h('small', { style: { display: 'block', color: t.sub, fontWeight: 400 } }, g.rows.length + ' 项 · ' + fmtMoney(g.mv, db.baseCurrency) + (totalMv ? ' · ' + (g.mv / totalMv * 100).toFixed(1) + '%' : ''))), t, { colSpan: readOnly ? 7 : 8 })),
               g.rows.map((v) => {
                 const ho = v.holdings[0], ins = v.ins
                 // 估值链：手填价 > 行情价 > 券商快照价 > 平均成本；全空时市值为「—」，绝不按 0 计。
@@ -1785,9 +1792,7 @@ window.__ModuleLoader__.load({
                   T.td(pctText, t, { color: pct == null || pct === 0 ? t.sub : pct > 0 ? t.green : t.red, fontWeight: 650, fontVariantNumeric: 'tabular-nums' }),
                   T.td(h('span', null, v.currency, v.mixedCurrency ? h('small', { style: { display: 'block', color: t.sub, fontSize: 10 } }, '多币种') : null), t),
                   T.td(h('span', null, fmtMoney(mv, db.baseCurrency), v.unpriced ? h('small', { style: { display: 'block', color: t.terra || t.sub, fontSize: 10 }, title: '这些持仓没有可用价格，未计入本行市值' }, '另有 ' + v.unpriced + ' 条无价') : null), t),
-                  readOnly
-                    ? T.td(h('span', { style: { color: t.sub, fontSize: 11 } }, '只读 · 到账户中编辑'), t)
-                    : T.td(h('span', null,
+                  readOnly ? null : T.td(h('span', null,
                     h('button', { style: { ...T.btn(t, false), padding: '3px 8px', marginRight: 6 }, disabled: busy, onClick: () => open({ id: ho.id, accountId: ho.accountId, symbol: ins?.symbol || '', name: ins?.name || '', market: ins?.market || 'CN', assetClass: ins?.assetClass || 'stock', sector: ins?.sector || '', style: ins?.style || '', qty: String(ho.qty), avgCost: String(ho.avgCost ?? ''), currency: ho.currency || '', manualPrice: hand == null ? '' : String(hand) }, true) }, '编辑'),
                     h('button', { style: { ...T.btn(t, false), padding: '3px 8px', borderColor: t.red, color: t.red }, disabled: busy, onClick: () => { if (window.confirm('删除该持仓？')) call('holding.remove', { id: ho.id }) } }, '删除')), t))
               }),

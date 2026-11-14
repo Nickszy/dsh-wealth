@@ -164,10 +164,14 @@ test('all-accounts view merges same-code holdings into one read-only row', () =>
   assert.ok(text.includes('2800'), 'quantities are summed')
   assert.ok(text.includes('合并自 2 条'), 'header discloses the merge')
   assert.ok(text.includes('58.1'), 'unit cost is quantity-weighted: (1900*54.06+900*66.64)/2800 = 58.1036')
-  assert.ok(text.includes('只读 · 到账户中编辑'), 'merged rows expose no edit actions')
+  assert.ok(!text.includes('操作'), 'the read-only view drops the action column entirely')
+  assert.ok(text.includes('编辑 / 删除请进入对应账户'), 'the hint sentence still says where to edit')
   const actionButtons = []
   walk(tree, (node) => { if (node.type === 'button' && ['编辑', '删除'].some((t2) => textOf(node).includes(t2))) actionButtons.push(node) })
-  assert.equal(actionButtons.length, 0, 'no edit/delete buttons in merged view (the hint sentence mentions them)')
+  assert.equal(actionButtons.length, 0, 'no edit/delete buttons in the read-only view')
+  // 单账户视图保留「操作」列：编辑 / 删除只发生在具体账户里。
+  const single = Holdings({ t: theme, state: mergedFixture(), call: async () => ({ ok: true }), busy: false, accountId: 'a1' })
+  assert.ok(textOf(single).includes('操作'), 'the single-account view keeps the action column')
 })
 
 test('metadata updates follow the saved holding, not the first matching code', () => {
@@ -350,4 +354,30 @@ test('holdings split into per-class tabs: stock, ETF, fund and cash stay apart',
   const fundTab = tabs.find((b) => textOf(b).startsWith('基金'))
   fundTab.props.onClick()
   assert.ok(sets.includes('fund'), 'clicking a tab switches the class filter')
+})
+
+test('credit-card liabilities stay out of the all-holdings view', () => {
+  const state = {
+    ledger: {
+      baseCurrency: 'CNY', fx: { CNY: 1 },
+      accounts: [{ id: 'a1', name: '银河', type: 'broker' }, { id: 'card', name: '招商信用卡', type: 'credit' }],
+      instruments: [
+        { id: 'S', symbol: '600519', name: '贵州茅台', market: 'CN', assetClass: 'stock', currency: 'CNY' },
+        { id: 'C', symbol: 'CREDIT.BALANCE', name: '本期账单', market: 'CASH', assetClass: 'cash', currency: 'CNY' },
+      ],
+      holdings: [
+        { id: 'h1', accountId: 'a1', instrumentId: 'S', qty: 1, avgCost: 1500, currency: 'CNY', manualPrice: null, quotePrice: 1688 },
+        { id: 'h2', accountId: 'card', instrumentId: 'C', qty: 8640, avgCost: 1, currency: 'CNY', manualPrice: 1, quotePrice: null },
+      ],
+    },
+  }
+  const { Holdings } = makeHoldings()
+  const text = textOf(Holdings({ t: theme, state, call: async () => ({ ok: true }), busy: false }))
+  assert.ok(!text.includes('本期账单'), 'the credit balance is not listed as a holding')
+  assert.ok(!text.includes('CREDIT.BALANCE'), 'not even its display code leaks into the table')
+  assert.ok(text.includes('另有 1 条信用卡 / 借款负债在账户页展示'), 'the hidden liability is disclosed with a count')
+  // 选中信用卡账户本身仍能看到这条负债行（金额、余额在那里维护）。
+  const single = textOf(Holdings({ t: theme, state, call: async () => ({ ok: true }), busy: false, accountId: 'card' }))
+  assert.ok(single.includes('本期账单'), 'entering the credit account still shows its balance row')
+  assert.ok(single.includes('8640'), 'with the amount editable in place')
 })
