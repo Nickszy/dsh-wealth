@@ -62,7 +62,9 @@ hold(fund.id, '000051', 'CN', '华夏沪深300ETF联接A', 'fund', 'CNY', 26000,
 hold(fund.id, '000198', 'CN', '天弘余额宝货币', 'fund', 'CNY', 30000, 1, 1)
 hold(qieman.id, 'QMANA', 'CN', '盈米宝', 'cash', 'CNY', 18000, 1, 1)
 hold(qieman.id, '161725', 'CN', '招商中证白酒指数(LOF)A', 'fund', 'CNY', 9000, 1.05, 0.98, '食品饮料', '价值')
-hold(card.id, 'CREDIT.BALANCE', 'CASH', '本期账单', 'cash', 'CNY', 8640, 1, 1)
+// 信用卡账单也是「人民币余额」：按币种现金行记账（CASH 市场 + 币种.CASH），
+// 和账户里的现金行同一套模型，显示成 CASH:CNY 而不是一个自造的代码。
+hold(card.id, 'CNY.CASH', 'CASH', '人民币账单', 'cash', 'CNY', 8640, 1, 1)
 hold(life.id, 'CNY.CASH', 'CASH', '零钱', 'cash', 'CNY', 2350, 1, 1)
 
 // ---- archived flows (investments) -----------------------------------------

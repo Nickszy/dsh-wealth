@@ -325,7 +325,7 @@ test('editing a holding binds its id so an edit cannot spill onto a same-code si
   assert.equal(form.assetClass, 'stock', 'identity fields come from the original row, not a sibling')
 })
 
-test('holdings split into per-class tabs: stock, ETF, fund and cash stay apart', async () => {
+test('holdings split into per-class tabs with ETFs counted as stocks', async () => {
   const state = {
     ledger: {
       baseCurrency: 'CNY', fx: { CNY: 1 },
@@ -349,10 +349,17 @@ test('holdings split into per-class tabs: stock, ETF, fund and cash stay apart',
   const tabs = []
   walk(tree, (node) => { if (node.type === 'button' && node.props.role === 'tab') tabs.push(node) })
   const labels = tabs.map((b) => textOf(b))
-  assert.deepEqual(labels, ['全部 · 4', '股票 · 1', 'ETF · 1', '基金 · 1', '现金 · 1'], 'one tab per class that exists, with counts')
+  assert.deepEqual(labels, ['全部 · 4', '股票 · 2', '基金 · 1', '现金 · 1'], 'ETFs count under 股票; no separate ETF tab')
   assert.ok(tabs[0].props['aria-selected'], 'the all view is selected by default')
-  const fundTab = tabs.find((b) => textOf(b).startsWith('基金'))
-  fundTab.props.onClick()
+  // 默认按资产类别分组时，ETF 和股票同属一个分组（测试桩里 assetLabel 直通，键是原始 class）。
+  const classGroups = []
+  walk(tree, (node) => { if (node.type === 'tr' && textOf(node).includes(' 项 · ')) classGroups.push(textOf(node)) })
+  assert.ok(classGroups.some((g) => g.startsWith('stock') && g.includes('2 项')), 'stocks and ETFs share one stock group')
+  assert.ok(!classGroups.some((g) => g.startsWith('etf')), 'no ETF group is rendered')
+  const stockTab = tabs.find((b) => textOf(b).startsWith('股票'))
+  stockTab.props.onClick()
+  assert.ok(sets.includes('stock'), 'clicking the stock tab filters to stocks + ETFs')
+  tabs.find((b) => textOf(b).startsWith('基金')).props.onClick()
   assert.ok(sets.includes('fund'), 'clicking a tab switches the class filter')
 })
 
@@ -363,7 +370,7 @@ test('credit-card liabilities stay out of the all-holdings view', () => {
       accounts: [{ id: 'a1', name: '银河', type: 'broker' }, { id: 'card', name: '招商信用卡', type: 'credit' }],
       instruments: [
         { id: 'S', symbol: '600519', name: '贵州茅台', market: 'CN', assetClass: 'stock', currency: 'CNY' },
-        { id: 'C', symbol: 'CREDIT.BALANCE', name: '本期账单', market: 'CASH', assetClass: 'cash', currency: 'CNY' },
+        { id: 'C', symbol: 'CNY.CASH', name: '人民币账单', market: 'CASH', assetClass: 'cash', currency: 'CNY' },
       ],
       holdings: [
         { id: 'h1', accountId: 'a1', instrumentId: 'S', qty: 1, avgCost: 1500, currency: 'CNY', manualPrice: null, quotePrice: 1688 },
@@ -373,11 +380,11 @@ test('credit-card liabilities stay out of the all-holdings view', () => {
   }
   const { Holdings } = makeHoldings()
   const text = textOf(Holdings({ t: theme, state, call: async () => ({ ok: true }), busy: false }))
-  assert.ok(!text.includes('本期账单'), 'the credit balance is not listed as a holding')
-  assert.ok(!text.includes('CREDIT.BALANCE'), 'not even its display code leaks into the table')
+  assert.ok(!text.includes('人民币账单'), 'the credit balance is not listed as a holding')
   assert.ok(text.includes('另有 1 条信用卡 / 借款负债在账户页展示'), 'the hidden liability is disclosed with a count')
-  // 选中信用卡账户本身仍能看到这条负债行（金额、余额在那里维护）。
+  // 选中信用卡账户本身仍能看到这条负债行（余额在那里维护），并按币种现金行展示。
   const single = textOf(Holdings({ t: theme, state, call: async () => ({ ok: true }), busy: false, accountId: 'card' }))
-  assert.ok(single.includes('本期账单'), 'entering the credit account still shows its balance row')
+  assert.ok(single.includes('人民币账单'), 'entering the credit account still shows its balance row')
+  assert.ok(single.includes('CASH:CNY'), 'the balance reads as a CNY cash line, not a made-up code')
   assert.ok(single.includes('8640'), 'with the amount editable in place')
 })

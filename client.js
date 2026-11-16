@@ -1504,10 +1504,13 @@ window.__ModuleLoader__.load({
       const blank = () => ({ id: '', accountId: accountId || db.accounts[0]?.id || '', symbol: '', name: '', market: 'CN', assetClass: 'stock', sector: '', style: '', qty: '', avgCost: '', currency: '', manualPrice: '' })
       const [form, setForm] = React.useState(null), [editing, setEditing] = React.useState(false), [msg, setMsg] = React.useState(''), [acctFilter, setAcctFilter] = React.useState('')
       const [group, setGroup] = React.useState('class')
-      // 品种 tab：现金 / 股票 / ETF / 基金分开展示，不再混在一张表里（'' = 全部）。
+      // 品种 tab：现金 / 股票 / 基金分开展示，不再混在一张表里（'' = 全部）。
       const [classTab, setClassTab] = React.useState('')
+      // 场内 ETF 和股票一样是交易所品种：持仓页把它们归在同一栏，不再单列 ETF。
+      const classKeyOf = (cls) => { const c = String(cls || 'other').toLowerCase(); return c === 'etf' ? 'stock' : c }
+      const classLabelOf = (cls) => assetLabel(classKeyOf(cls))
       // tab 顺序：先证券后现金；数据里没有的类别不占位置。
-      const CLASS_TABS = [['stock', '股票'], ['etf', 'ETF'], ['fund', '基金'], ['cash', '现金'], ['bond', '债券'], ['crypto', '加密资产'], ['other', '其他']]
+      const CLASS_TABS = [['stock', '股票'], ['fund', '基金'], ['cash', '现金'], ['bond', '债券'], ['crypto', '加密资产'], ['other', '其他']]
       const [quoting, setQuoting] = React.useState(false)
       // 入库时没核对上身份的标的（verification.status === 'pending'）：逐条确认或重新查询。
       const [verifying, setVerifying] = React.useState('')
@@ -1622,7 +1625,7 @@ window.__ModuleLoader__.load({
       const styleLabel = key => ({ growth: '成长', value: '价值', blend: '均衡', other: '其他' })[key] || '未分类'
       const groupKey = ho => {
         const ins = insMap.get(ho.instrumentId)
-        if (group === 'class') return assetLabel(ins?.assetClass)
+        if (group === 'class') return classLabelOf(ins?.assetClass)
         if (group === 'account' && !accountId) return accMap.get(ho.accountId)?.name || ho.accountId
         if (group === 'sector') return (ins?.sector || '').trim() || '未分类'
         if (group === 'style') return ins?.style ? styleLabel(ins.style) : '未分类'
@@ -1685,7 +1688,7 @@ window.__ModuleLoader__.load({
         }
       }
       // 品种 tab：只展示存在的类别，计数按合并后的行算（与「全部持仓 · N」同口径）。
-      const classOf = (e) => String(e.ins?.assetClass || 'other').toLowerCase()
+      const classOf = (e) => classKeyOf(e.ins?.assetClass)
       const classCounts = new Map()
       for (const e of entries) classCounts.set(classOf(e), (classCounts.get(classOf(e)) || 0) + 1)
       const tabs = [['', '全部', entries.length], ...CLASS_TABS.filter(([k]) => classCounts.has(k)).map(([k, label]) => [k, label, classCounts.get(k)])]
@@ -1737,7 +1740,7 @@ window.__ModuleLoader__.load({
         pendingPanel,
         h('div', { style: T.card(t) },
           h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' } },
-            h('strong', null, (accountId ? '账户持仓' : '全部持仓') + (tab ? ' · ' + assetLabel(tab) : '') + ' · ' + views.length
+            h('strong', null, (accountId ? '账户持仓' : '全部持仓') + (tab ? ' · ' + classLabelOf(tab) : '') + ' · ' + views.length
               + (merged && views.length !== shownHoldings ? '（合并自 ' + shownHoldings + ' 条）' : '')),
             h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
               accountId ? null : h('select', { value: acctFilter, onChange: (e) => setAcctFilter(e.target.value), 'aria-label': '按账户筛选', style: { ...T.input(t), minHeight: 30, width: 180, fontSize: 12 } },
